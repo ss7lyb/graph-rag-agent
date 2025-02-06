@@ -33,12 +33,14 @@ class EntityRelationExtractor:
         # 创建处理链
         self.chain = self.chat_prompt | self.llm
         
-    def process_chunks(self, file_contents: List[Tuple]) -> List[Tuple]:
+    def process_chunks(self, file_contents: List[Tuple], progress_callback=None) -> List[Tuple]:
         """处理所有文件的所有chunks"""
         t0 = time.time()
+        chunk_index = 0
+        
         for file_content in file_contents:
             results = []
-            for chunk in file_content[2]:
+            for chunk in file_content[2]:  # 假设chunks在索引2的位置
                 t1 = time.time()
                 
                 # 处理单个chunk
@@ -46,15 +48,16 @@ class EntityRelationExtractor:
                 result = self._process_single_chunk(input_text)
                 results.append(result)
                 
+                # 更新进度
+                if progress_callback:
+                    progress_callback(chunk_index)
+                chunk_index += 1
+                
                 # 打印处理信息
                 t2 = time.time()
-                print(f"Chunk processing time: {t2-t1} seconds")
-                print(f"Input text: {input_text}\n")
-                print(f"Result: {result}\n")
                 
-            print(f"File processing time: {t2-t0} seconds\n\n")
             file_content.append(results)
-            
+                
         return file_contents
     
     def _process_single_chunk(self, input_text: str) -> str:

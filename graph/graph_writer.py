@@ -11,11 +11,8 @@ class GraphWriter:
         
     def convert_to_graph_document(self, chunk_id: str, input_text: str, result: str) -> GraphDocument:
         """将提取的实体关系文本转换为GraphDocument对象"""
-        # 编译正则表达式模式
         node_pattern = re.compile(r'\("entity" : "(.+?)" : "(.+?)" : "(.+?)"\)')
-        relationship_pattern = re.compile(
-            r'\("relationship" : "(.+?)" : "(.+?)" : "(.+?)" : "(.+?)" : (.+?)\)'
-        )
+        relationship_pattern = re.compile(r'\("relationship" : "(.+?)" : "(.+?)" : "(.+?)" : "(.+?)" : (.+?)\)')
 
         nodes = {}
         relationships = []
@@ -48,7 +45,6 @@ class GraphWriter:
                     properties={'description': 'No additional data'}
                 )
                 
-            # 创建关系
             relationships.append(
                 Relationship(
                     source=nodes[source_id],

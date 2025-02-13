@@ -1,4 +1,4 @@
-system_template="""
+system_template_build_graph="""
 -目标- 
 给定相关的文本文档和实体类型列表，从文本中识别出这些类型的所有实体以及所识别实体之间的所有关系。 
 -步骤- 
@@ -90,7 +90,7 @@ Output:
 #############################
 """
 
-human_template="""
+human_template_build_graph="""
 -真实数据- 
 ###################### 
 实体类型：{entity_types}

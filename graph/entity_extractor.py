@@ -40,7 +40,7 @@ class EntityRelationExtractor:
         
         for file_content in file_contents:
             results = []
-            for chunk in file_content[2]:  # 假设chunks在索引2的位置
+            for chunk in file_content[2]:
                 t1 = time.time()
                 
                 # 处理单个chunk

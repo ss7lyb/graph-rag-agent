@@ -198,32 +198,3 @@ class SLLPADetector(BaseCommunityDetector):
         """)
         
         return {'saved_communities': result[0]['total_count']}
-
-# 测试代码
-if __name__ == "__main__":
-    import os
-    
-    # 创建GDS连接
-    gds = GraphDataScience(
-        os.environ["NEO4J_URI"],
-        auth=(os.environ["NEO4J_USERNAME"], os.environ["NEO4J_PASSWORD"])
-    )
-    graph = Neo4jGraph()
-    
-    # 测试Leiden算法
-    print("测试Leiden算法:")
-    leiden_detector = LeidenDetector(gds, graph)
-    try:
-        leiden_results = leiden_detector.process()
-        print("Leiden算法执行结果:", leiden_results)
-    except Exception as e:
-        print(f"Leiden算法执行出错: {str(e)}")
-    
-    # 测试SLLPA算法
-    print("\n测试SLLPA算法:")
-    sllpa_detector = SLLPADetector(gds, graph)
-    try:
-        sllpa_results = sllpa_detector.process()
-        print("SLLPA算法执行结果:", sllpa_results)
-    except Exception as e:
-        print(f"SLLPA算法执行出错: {str(e)}")

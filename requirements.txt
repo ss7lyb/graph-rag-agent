@@ -89,6 +89,7 @@ google-generativeai==0.7.2
 google-resumable-media==2.7.2
 googleapis-common-protos==1.62.0
 gradio_client==0.8.0
+graphdatascience==1.13
 greenlet==3.0.3
 groq==0.18.0
 grpc-google-iam-v1==0.14.0
@@ -168,6 +169,7 @@ mdurl==0.1.2
 mistune==3.1.1
 mpmath==1.3.0
 multidict==6.0.4
+multimethod==1.12
 mypy-extensions==1.0.0
 nbclient==0.10.2
 nbconvert==7.16.6
@@ -217,6 +219,7 @@ protobuf==4.25.1
 psutil==5.9.7
 ptyprocess==0.7.0
 pure_eval==0.2.3
+pyarrow==18.1.0
 pyasn1==0.5.1
 pyasn1-modules==0.3.0
 pycparser==2.21
@@ -280,9 +283,10 @@ starlette==0.32.0.post1
 stringcase==1.2.0
 sympy==1.13.3
 taskgroup==0.0.0a4
-tenacity==8.2.3
+tenacity==9.0.0
 termcolor==2.5.0
 terminado==0.18.1
+textdistance==4.6.3
 tiktoken==0.8.0
 tinycss2==1.4.0
 tokenizers==0.21.0

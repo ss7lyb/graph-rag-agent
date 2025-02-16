@@ -23,10 +23,16 @@ from langgraph.graph import END, StateGraph, START
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 import pprint
+from langchain_community.graphs import Neo4jGraph
+from langchain_core.tools import tool
+from tqdm import tqdm
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from model.get_models import get_llm_model, get_embeddings_model
 from search.local_search import LocalSearch
-from config.prompt import LC_SYSTEM_PROMPT, contextualize_q_system_prompt
+from config.prompt import LC_SYSTEM_PROMPT, contextualize_q_system_prompt, MAP_SYSTEM_PROMPT, REDUCE_SYSTEM_PROMPT
 from config.settings import response_type
 
 llm = get_llm_model()
@@ -122,8 +128,65 @@ lc_search_tool = create_retriever_tool(
     "检索网络小说《悟空传》中各章节的人物与故事情节。",
 )
 
-# 工具列表中暂时只有一个工具局部检索器
-tools = [lc_search_tool]
+level =0
+
+# 全局检索器
+@tool
+def global_retriever(query: str) -> str:
+    """回答有关网络小说《悟空传》的全局性问题。"""
+    # 上面这段工具功能描述是必须的，否则调用工具会出错。
+    
+    # 检索MAP阶段生成中间结果的prompt与chain
+    map_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                MAP_SYSTEM_PROMPT,
+            ),
+            (
+                "human",
+                """
+                ---数据表格--- 
+                {context_data}
+                
+                
+                用户的问题是：
+                {question}
+                """,
+            ),
+        ]
+    )
+    map_chain = map_prompt | llm | StrOutputParser()
+
+    # 连接Neo4j
+    graph = Neo4jGraph(
+        url=os.getenv('NEO4J_URI'),
+        username=os.getenv('NEO4J_USERNAME'),
+        password=os.getenv('NEO4J_PASSWORD'),
+        refresh_schema=False,
+    )
+    # 检索指定层级的社区
+    community_data = graph.query(
+        """
+        MATCH (c:__Community__)
+        WHERE c.level = $level
+        RETURN {communityId:c.id, full_content:c.full_content} AS output
+        """,
+        params={"level": level},
+    )
+    # 用LLM从每个检索到的社区摘要生成中间结果
+    intermediate_results = []
+    for community in tqdm(community_data, desc="Processing communities"):
+        intermediate_response = map_chain.invoke(
+            {"question": query, "context_data": community["output"]}
+        )
+        intermediate_results.append(intermediate_response)
+        
+    # 返回一个ToolMessage，包含每个社区对问题总结的要点，直接返回字典列表即可。
+    return intermediate_results
+
+# 工具列表有2个工具，局部检索器和全局检索器，LLM会根据工具的描述决定用哪一个。
+tools = [lc_search_tool, global_retriever]
 
 # 调试时如果要查看每个节点输入输出的状态，可以用这个函数插入打印的语句
 def my_add_messages(left,right):
@@ -140,9 +203,16 @@ class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
 
 # Nodes and Edges --------------------------------------------------------------
-### Edges
+### Edges ----------------------------------------------------------------------
 
-def grade_documents(state) -> Literal["generate", "rewrite"]:
+# 分流边
+# 这个自定义的LangGraph边对工具调用的结果进行分流处理。
+# 如果是全局检索，转到reduce结点生成回复。
+# 如果是局部检索并且检索结果与问题相关，转到generate结点生成回复。
+# 如果是局部检索并且检索结果与问题不相关，转到rewrite结点重构问题。
+# 局部检索的结果是否与问题相关，提交给LLM去判断。
+# 画流程图时要用到Literal。
+def grade_documents(state) -> Literal["generate", "rewrite", "reduce"]:
     """
     Determines whether the retrieved documents are relevant to the question.
 
@@ -152,6 +222,15 @@ def grade_documents(state) -> Literal["generate", "rewrite"]:
     Returns:
         str: A decision for whether the documents are relevant or not
     """
+
+    messages = state["messages"]
+    # 倒数第2条消息是LLM发出工具调用请求的AIMessage。
+    retrieve_message = messages[-2]
+    
+    # 如果是全局查询直接转去reduce结点。
+    if retrieve_message.additional_kwargs["tool_calls"][0]["function"]["name"]== 'global_retriever':
+        print("---Global retrieve---")
+        return "reduce"
 
     print("---CHECK RELEVANCE---")
 
@@ -170,21 +249,20 @@ def grade_documents(state) -> Literal["generate", "rewrite"]:
     
     # Chain
     chain = prompt | llm
-
-    messages = state["messages"]
+    # 最后一条消息是检索器返回的结果。
     last_message = messages[-1]
-
     # 在对话历史中，问题消息是倒数第3条。
     question = messages[-3].content
     
     docs = last_message.content
 
     scored_result = chain.invoke({"question": question, "context": docs})
-
+    # LLM会给出检索结果与问题是否相关的判断, yes或no
     score = scored_result.content
-
-    if score == "yes":
+    # 保险起见要转为小写！！！
+    if score.lower() == "yes":
         print("---DECISION: DOCS RELEVANT---")
+        print(score)
         return "generate"
 
     else:
@@ -306,6 +384,59 @@ def generate(state):
     # 明确返回一条AIMessage。
     return {"messages": [AIMessage(content = response)]}
 
+# 全局查询回复生成结点。
+def reduce(state):
+    """
+    Generate answer for global retrieve
+
+    Args:
+        state (messages): The current state
+
+    Returns:
+         dict: The updated state with re-phrased question
+    """
+    print("---REDUCE---")
+    messages = state["messages"]
+    
+    # 在对话历史中，问题消息是倒数第3条。
+    question = messages[-3].content
+    # 检索结果在最后一条消息中。
+    last_message = messages[-1]
+    docs = last_message.content
+
+    # Reduce阶段生成最终结果的prompt与chain
+    reduce_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                REDUCE_SYSTEM_PROMPT,
+            ),
+            (
+                "human",
+                """
+                ---分析报告--- 
+                {report_data}
+
+
+                用户的问题是：
+                {question}
+                """,
+            ),
+        ]
+    )
+    reduce_chain = reduce_prompt | llm | StrOutputParser()
+
+    # 再用LLM从每个社区摘要生成的中间结果生成最终的答复
+    response = reduce_chain.invoke(
+        {
+            "report_data": docs,
+            "question": question,
+            "response_type": response_type,
+        }
+    )
+    # 明确返回一条AIMessage。
+    return {"messages": [AIMessage(content = response)]}
+
 # Graph ------------------------------------------------------------------------
 # 管理对话历史
 memory = MemorySaver()
@@ -315,35 +446,46 @@ workflow = StateGraph(AgentState)
 
 # Define the nodes we will cycle between
 workflow.add_node("agent", agent)  # agent
-retrieve = ToolNode([lc_search_tool])
+retrieve = ToolNode(tools)
 workflow.add_node("retrieve", retrieve)  # retrieval
 workflow.add_node("rewrite", rewrite)  # Re-writing the question
 workflow.add_node(
     "generate", generate
 )  # Generating a response after we know the documents are relevant
 # Call agent node to decide to retrieve or not
+# 增加一个全局查询的reduce结点
+workflow.add_node(
+    "reduce", reduce
+)
+
+# 定义结点之间的连接
+# 从agent结点开始
 workflow.add_edge(START, "agent")
 
 # Decide whether to retrieve
 workflow.add_conditional_edges(
     "agent",
     # Assess agent decision
-    tools_condition,
+    tools_condition,          # tools_condition()的输出是"tools"或END
     {
         # Translate the condition outputs to nodes in our graph
-        "tools": "retrieve",
-        END: END,
+        "tools": "retrieve",  # 转到retrieve结点，执行局部检索或全局检索
+        END: END,             # 直接结束
     },
 )
 
-# Edges taken after the `action` node is called.
+# 检索结点执行结束后调边grade_documents，决定流转到哪个结点: generate、rewrite、reduce。
 workflow.add_conditional_edges(
     "retrieve",
     # Assess agent decision
     grade_documents,
 )
+# 如果是局部查询生成，直接结束
 workflow.add_edge("generate", END)
+# 如果是重构问题，转到agent结点重新开始。
 workflow.add_edge("rewrite", "agent")
+# 增加一条全局查询到结束的边
+workflow.add_edge("reduce", END)
 
 # Compile
 # Finally, we compile it!
@@ -354,7 +496,7 @@ graph = workflow.compile(checkpointer=memory)
 # 画流程图
 png_data = graph.get_graph().draw_mermaid_png()
 # 指定将要保存的文件名
-file_path = './assets/lc_workflow.png'
+file_path = './assets/workflow.png'
 # 打开一个文件用于写入二进制数据
 with open(file_path, 'wb') as f:
     f.write(png_data)
@@ -381,8 +523,10 @@ ask_agent("你好，想问一些问题。",graph,config)
 print(get_answer(config))
 ask_agent("孙悟空和佛祖之间有什么故事？",graph,config)
 print(get_answer(config))
+ask_agent("悟空传》的主要人物有哪些？",graph,config)
+print(get_answer(config))
 ask_agent("他们最后的结局是什么？",graph,config)
 print(get_answer(config))
 
-chat_history = memory.get(config)["channel_values"]["messages"]
-print(chat_history)
+# chat_history = memory.get(config)["channel_values"]["messages"]
+# print(chat_history)

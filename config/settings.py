@@ -18,3 +18,6 @@ FILES_DIR = BASE_DIR / 'files'
 # 文本分块
 CHUNK_SIZE=300
 OVERLAP=50
+
+# 回答方式
+response_type="多个段落"

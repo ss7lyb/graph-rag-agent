@@ -124,6 +124,29 @@ class LocalSearch:
         } AS text, 1.0 AS score, {} AS metadata
         """
     
+    def as_retriever(self, **kwargs):
+        """返回检索器实例，用于链式调用"""
+        # 生成包含所有检索参数的查询
+        final_query = self.retrieval_query.replace("$topChunks", str(self.top_chunks))\
+            .replace("$topCommunities", str(self.top_communities))\
+            .replace("$topOutsideRels", str(self.top_outside_rels))\
+            .replace("$topInsideRels", str(self.top_inside_rels))
+        
+        # 初始化向量存储
+        vector_store = Neo4jVector.from_existing_index(
+            self.embeddings,
+            url=self.neo4j_uri,
+            username=self.neo4j_username,
+            password=self.neo4j_password,
+            index_name=self.index_name,
+            retrieval_query=final_query
+        )
+        
+        # 返回检索器
+        return vector_store.as_retriever(
+            search_kwargs={"k": self.top_entities}
+        )
+        
     def search(self, query: str) -> str:
         """
         执行本地搜索
@@ -180,7 +203,7 @@ class LocalSearch:
             "response_type": self.response_type
         })
 
-        print(docs[0].page_content) # 检索的数据源
+        # print(docs[0].page_content) # 数据源
         
         return response
         

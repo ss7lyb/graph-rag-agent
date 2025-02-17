@@ -1,7 +1,3 @@
-import sys
-from pathlib import Path
-# 将项目根目录添加到Python路径
-sys.path.append(str(Path(__file__).resolve().parent.parent))
 import hanlp
 from typing import List, Tuple
 from config.settings import CHUNK_SIZE, OVERLAP, FILES_DIR

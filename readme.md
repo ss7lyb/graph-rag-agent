@@ -1,5 +1,18 @@
 # GraphRAG Agent构建
 
+环境构建：
+
+```bash
+conda create -n graphrag python==3.10
+pip install -r requirements.txt
+```
+
+项目初始化：
+
+```bash
+pip install -e .
+```
+
 构建完整的知识图谱：
 
 ```bash
@@ -19,3 +32,4 @@ python search_test.py
 - [build_graph](https://github.com/1517005260/graph-rag-agent/blob/8de857a36022eaf48ec3882e99e8c9de469be155/extract_entity.py)
 - [build_index](https://github.com/1517005260/graph-rag-agent/blob/a0193a09f8918afb507ac65701ef05541665f67b/build_index.py)
 - [search](https://github.com/1517005260/graph-rag-agent/blob/f746b3d7f8ef38c451ce291d25a32bd0cfc6e6b2/search.py)
+- [agent](https://github.com/1517005260/graph-rag-agent/blob/b260c0b9a535d8edb0c2b0523e2a7fa8b2818ea4/agent.py)

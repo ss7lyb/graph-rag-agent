@@ -161,14 +161,20 @@ class LocalSearch:
         prompt = ChatPromptTemplate.from_messages([
             ("system", LC_SYSTEM_PROMPT),
             ("human", """
-            ---分析报告--- 
-            请注意，下面提供的分析报告按**重要性降序排列**。
-            
-            {report_data}
-            
-            用户的问题是：
-            {question}
-            """)
+                ---分析报告--- 
+                请注意，下面提供的分析报告按**重要性降序排列**。
+
+                {context}
+
+                用户的问题是：
+                {input}
+
+                请按以下格式输出回答：
+                1. 使用三级标题(###)标记主题
+                2. 主要内容用清晰的段落展示
+                3. 最后必须用"#### 引用数据"标记引用部分，列出用到的数据来源
+                """
+             )
         ])
         
         # 创建搜索链

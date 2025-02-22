@@ -145,16 +145,21 @@ class GraphAgent:
         docs = messages[-1].content
 
         prompt = ChatPromptTemplate.from_messages([
-            ("system", LC_SYSTEM_PROMPT),
-            ("human", """
-                ---分析报告--- 
-                请注意，下面提供的分析报告按**重要性降序排列**。
-                
-                {context}
-                
-                用户的问题是：
-                {question}
-                """),
+        ("system", LC_SYSTEM_PROMPT),
+        ("human", """
+            ---分析报告--- 
+            请注意，下面提供的分析报告按**重要性降序排列**。
+            
+            {context}
+            
+            用户的问题是：
+            {question}
+            
+            请严格按照以下格式输出回答：
+            1. 使用三级标题(###)标记主题
+            2. 主要内容用清晰的段落展示
+            3. 最后必须用"#### 引用数据"标记引用部分，列出用到的数据来源
+            """),
         ])
 
         rag_chain = prompt | self.llm | StrOutputParser()
@@ -248,26 +253,26 @@ if __name__ == "__main__":
     agent = GraphAgent()
     
     # 调试模式
-    result = agent.ask_with_trace("你好，想问一些问题。")
-    print("Answer:", result["answer"])
-    print("\nExecution trace:")
-    pprint.pprint(result["execution_log"])
+    # result = agent.ask_with_trace("你好，想问一些问题。")
+    # print("Answer:", result["answer"])
+    # print("\nExecution trace:")
+    # pprint.pprint(result["execution_log"])
     
-    queries = [
-        "描述一下悟空第一次见到菩提祖师的场景？",
-        "《悟空传》的主要人物有哪些？",
-        "他们最后的结局是什么？"
-    ]
+    # queries = [
+    #     "描述一下悟空第一次见到菩提祖师的场景？",
+    #     "《悟空传》的主要人物有哪些？",
+    #     "他们最后的结局是什么？"
+    # ]
     
-    for query in queries:
-        result = agent.ask_with_trace(query)
-        print(f"\nQuestion: {query}")
-        print("Answer:", result["answer"])
-        print("\nExecution trace:")
-        pprint.pprint(result["execution_log"])
+    # for query in queries:
+    #     result = agent.ask_with_trace(query)
+    #     print(f"\nQuestion: {query}")
+    #     print("Answer:", result["answer"])
+    #     print("\nExecution trace:")
+    #     pprint.pprint(result["execution_log"])
 
     # 仅回答
-    # print(agent.ask("你好，想问一些问题。"))
-    # print(agent.ask("描述一下悟空第一次见到菩提祖师的场景？"))
-    # print(agent.ask("《悟空传》的主要人物有哪些？"))
-    # print(agent.ask("他们最后的结局是什么？"))
+    print(agent.ask("你好，想问一些问题。"))
+    print(agent.ask("描述一下悟空第一次见到菩提祖师的场景？"))
+    print(agent.ask("《悟空传》的主要人物有哪些？"))
+    print(agent.ask("他们最后的结局是什么？"))

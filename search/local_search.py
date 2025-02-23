@@ -204,8 +204,8 @@ class LocalSearch:
         
         # 使用LLM生成响应
         response = chain.invoke({
-            "report_data": docs[0].page_content,
-            "question": query,
+            "context": docs[0].page_content,
+            "input": query,
             "response_type": self.response_type
         })
 

@@ -119,7 +119,9 @@ class LeidenDetector(BaseCommunityDetector):
         return {
             'componentCount': wcc['componentCount'],
             'componentDistribution': wcc['componentDistribution'],
-            'communityCount': result.get('communityCount', 0)
+            'communityCount': result.get('communityCount', 0),
+            'modularity': result.get('modularity', 0),
+            'ranLevels': result.get('ranLevels', 0)
         }
     
     def save_communities(self) -> Dict[str, int]:
@@ -129,32 +131,33 @@ class LeidenDetector(BaseCommunityDetector):
             "CREATE CONSTRAINT IF NOT EXISTS FOR (c:__Community__) REQUIRE c.id IS UNIQUE;"
         )
         
-        # 保存社区结构并返回统计信息
-        result = self.graph.query("""
+        # 首先创建和连接第0层社区
+        base_result = self.graph.query("""
         MATCH (e:`__Entity__`)
-        UNWIND range(0, size(e.communities) - 1 , 1) AS index
-        CALL {
-          WITH e, index
-          WHERE index = 0
-          MERGE (c:`__Community__` {id: toString(index) + '-' + toString(e.communities[index])})
-          ON CREATE SET c.level = index
-          MERGE (e)-[:IN_COMMUNITY]->(c)
-          RETURN count(*) AS count_0
-        }
-        CALL {
-          WITH e, index
-          WHERE index > 0
-          MERGE (current:`__Community__` {id: toString(index) + '-' + toString(e.communities[index])})
-          ON CREATE SET current.level = index
-          MERGE (previous:`__Community__` {id: toString(index - 1) + '-' + toString(e.communities[index - 1])})
-          ON CREATE SET previous.level = index - 1
-          MERGE (previous)-[:IN_COMMUNITY]->(current)
-          RETURN count(*) AS count_1
-        }
-        RETURN count(*) as total_count
+        WHERE e.communities IS NOT NULL AND size(e.communities) > 0
+        MERGE (c:`__Community__` {id: '0-' + toString(e.communities[0])})
+        ON CREATE SET c.level = 0
+        MERGE (e)-[:IN_COMMUNITY]->(c)
+        RETURN count(*) as base_count
         """)
         
-        return {'saved_communities': result[0]['total_count']}
+        # 然后创建和连接更高层级的社区
+        higher_result = self.graph.query("""
+        MATCH (e:`__Entity__`)
+        WHERE e.communities IS NOT NULL AND size(e.communities) > 1
+        UNWIND range(1, size(e.communities) - 1) AS index
+        MERGE (current:`__Community__` {id: toString(index) + '-' + toString(e.communities[index])})
+        ON CREATE SET current.level = index
+        WITH e, index, current
+        MATCH (previous:`__Community__` {id: toString(index - 1) + '-' + toString(e.communities[index - 1])})
+        MERGE (previous)-[:IN_COMMUNITY]->(current)
+        RETURN count(*) as higher_count
+        """)
+        
+        total_count = (base_result[0]['base_count'] if base_result else 0) + \
+                     (higher_result[0]['higher_count'] if higher_result else 0)
+        
+        return {'saved_communities': total_count}
 
 class SLLPADetector(BaseCommunityDetector):
     """使用SLLPA算法进行社区检测的实现"""

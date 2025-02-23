@@ -144,24 +144,26 @@ class LeidenSummarizer(BaseSummarizer):
     
     def collect_community_info(self) -> List[Dict]:
         """收集Leiden算法生成的社区信息"""
-        # Leiden算法生成的社区具有层级结构，需要按层级collect
         return self.graph.query("""
-        // 找到所有最底层(level=0)的社区
-        MATCH (c:`__Community__`)<-[:IN_COMMUNITY*]-(e:__Entity__)
-        WHERE c.level = 0  // 只选择最底层社区
-        WITH c, collect(e) AS nodes
-        WHERE size(nodes) > 1  // 只选择包含多个节点的社区
-        CALL apoc.path.subgraphAll(nodes[0], {
-            whitelistNodes:nodes
-        })
-        YIELD relationships
+        // 找到最底层(level=0)的社区
+        MATCH (c:`__Community__` {level: 0})
+        MATCH (c)<-[:IN_COMMUNITY]-(e:__Entity__)
+        WITH c, collect(e) as nodes
+        WHERE size(nodes) > 1
+        // 获取实体间的关系
+        MATCH (n1:__Entity__)
+        WHERE n1 IN nodes
+        MATCH (n2:__Entity__)
+        WHERE n2 IN nodes AND id(n1) < id(n2)
+        MATCH (n1)-[r]->(n2)
+        WITH c, nodes, collect(distinct r) as rels
         RETURN c.id AS communityId,
                [n in nodes | {
                    id: n.id, 
                    description: n.description, 
                    type: [el in labels(n) WHERE el <> '__Entity__'][0]
                }] AS nodes,
-               [r in relationships | {
+               [r in rels | {
                    start: startNode(r).id, 
                    type: type(r), 
                    end: endNode(r).id, 

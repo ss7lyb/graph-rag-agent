@@ -9,7 +9,7 @@ relationship_types=["师徒", "师兄弟", "对抗", "对话", "态度", "故事
 similarity_threshold = 0.9
 
 # 社区算法：sllpa or leiden
-community_algorithm = 'sllpa'
+community_algorithm = 'leiden'
 
 # 构建路径
 BASE_DIR = Path(__file__).resolve().parent.parent

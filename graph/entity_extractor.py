@@ -14,7 +14,7 @@ from langchain.prompts import (
 class EntityRelationExtractor:
     def __init__(self, llm, system_template, human_template, 
                  entity_types: List[str], relationship_types: List[str],
-                 cache_dir="./cache", max_workers=4, batch_size=5):
+                 cache_dir="./cache/graph", max_workers=4, batch_size=5):
         self.llm = llm
         self.entity_types = entity_types
         self.relationship_types = relationship_types

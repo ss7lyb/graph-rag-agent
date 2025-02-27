@@ -190,9 +190,9 @@ if __name__ == "__main__":
     try:
         # 测试基本问答
         print(agent.ask("你好，想问一些问题。"))
-        print(agent.ask("描述一下悟空第一次见到菩提祖师的场景？"))
         print(agent.ask("《悟空传》的主要人物有哪些？"))
-        print(agent.ask("他们最后的结局是什么？"))
+        print(agent.ask("孙悟空跟女妖之间有什么故事？"))
+        print(agent.ask("他最后的选择是什么？"))
     finally:
         # 确保资源被正确关闭
         agent.close()

@@ -5,7 +5,7 @@ from model.get_models import get_llm_model, get_embeddings_model
 llm = get_llm_model()
 embeddings = get_embeddings_model()
 
-question = "孙悟空对如来佛祖是一种什么样的心态？"
+question = "孙悟空跟女妖之间有什么故事？"
 
 # 普通使用
 lc = LocalSearch(llm, embeddings)

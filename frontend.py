@@ -101,7 +101,7 @@ def main():
     
     with st.sidebar:
         st.title("GraphRAG 设置")
-        st.toggle("开启调试模式", value=False, key="debug_mode", help="开启后可以查看系统的调试信息")
+        st.toggle("开启调试模式", value=False, key="debug_mode", help="开启后可以查看agent的执行轨迹")
         
         st.markdown("---")
         st.markdown("""
@@ -110,16 +110,12 @@ def main():
         
         #### 示例问题:
         1. 人物相关:
-           - "《悟空传》的主要人物有哪些？"
-           - "描述一下孙悟空和如来佛祖"
+           - 《悟空传》的主要人物有哪些？
+           - 唐僧和会说话的树讨论了什么？
         
-        2. 具体情节:
-           - "描述一下悟空第一次见到菩提祖师的场景"
-           - "唐僧和会说话的树讨论了什么？"
-        
-        3. 连续对话:
-           - 系统会记住对话上下文
-           - 你可以自然地问后续问题
+        2. 具体情节与上下文对话:
+           - 孙悟空跟女妖之间有什么故事？
+           - 他最后的选择是什么？
         """)
     
     if st.session_state.debug_mode:

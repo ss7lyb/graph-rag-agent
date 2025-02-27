@@ -88,7 +88,7 @@ google-generativeai==0.7.2
 google-resumable-media==2.7.2
 googleapis-common-protos==1.62.0
 gradio_client==0.8.0
--e git+ssh://git@github.com/1517005260/graph-rag-agent.git@b0ec1771f7c3ce349e74a00a79660cbe3c1a25d9#egg=graph_rag_agent
+-e git+ssh://git@github.com/1517005260/graph-rag-agent.git@c6480b6c280be75aa4c4da908842d90b8e38883e#egg=graph_rag_agent
 graphdatascience==1.12
 greenlet==3.0.3
 groq==0.18.0

@@ -1,5 +1,20 @@
 # GraphRAG 实现与 Agent 构建
 
+one-api下载：
+
+```bash
+docker run --name one-api -d --restart always -p 13000:3000 -e TZ=Asia/Shanghai -v /home/ubuntu/data/one-api:/data justsong/one-api
+```
+
+neo4j下载：
+
+```bash
+docker compose up -d
+
+# 用户名：neo4j
+# 密码：12345678
+```
+
 环境构建：
 
 ```bash

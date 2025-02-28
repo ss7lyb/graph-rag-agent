@@ -21,7 +21,7 @@ from search.tool.global_search_tool import GlobalSearchTool
 class QueryCache:
     """简单的查询缓存实现"""
     
-    def __init__(self, max_size=100, cache_dir="./cache/agent"):
+    def __init__(self, max_size=100, cache_dir="./cache/graph_agent"):
         self.cache = {}
         self.max_size = max_size
         self.cache_dir = cache_dir

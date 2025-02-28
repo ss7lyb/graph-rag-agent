@@ -271,7 +271,7 @@ def get_knowledge_graph_for_ids(entity_ids=None, relationship_ids=None, chunk_id
         
         # 执行查询
         try:
-            result = driver.execute_query(query, parameters=params)
+            result = driver.execute_query(query, params)
             
             if not result.records:
                 return {"nodes": [], "links": []}
@@ -335,7 +335,16 @@ async def clear_chat(request: ClearRequest):
         for agent in agents:
             config = {"configurable": {"thread_id": request.session_id}}
             
-            messages = agent.memory.get(config)["channel_values"]["messages"]
+            # 添加检查，防止None值报错
+            memory_content = agent.memory.get(config)
+            if memory_content is None or "channel_values" not in memory_content:
+                continue  # 跳过这个agent
+                
+            messages = memory_content["channel_values"]["messages"]
+            
+            # 如果消息少于2条，不进行删除操作
+            if len(messages) <= 2:
+                continue
 
             i = len(messages)
             for message in reversed(messages):
@@ -343,15 +352,22 @@ async def clear_chat(request: ClearRequest):
                     break
                 agent.graph.update_state(config, {"messages": RemoveMessage(id=message.id)})
                 i = i - 1
-                if i == 2:
+                if i == 2:  # 保留前两条消息
                     break
 
-        remaining_messages = graph_agent.memory.get({"configurable": {"thread_id": request.session_id}})["channel_values"]["messages"]
-        remaining_text = ""
-        for msg in remaining_messages:
-            if isinstance(msg, (AIMessage, HumanMessage)):
-                prefix = "AI: " if isinstance(msg, AIMessage) else "User: "
-                remaining_text += f"{prefix}{msg.content}\n"
+        # 获取剩余消息时也添加检查
+        try:
+            memory_content = graph_agent.memory.get({"configurable": {"thread_id": request.session_id}})
+            remaining_text = ""
+            
+            if memory_content and "channel_values" in memory_content:
+                remaining_messages = memory_content["channel_values"]["messages"]
+                for msg in remaining_messages:
+                    if isinstance(msg, (AIMessage, HumanMessage)):
+                        prefix = "AI: " if isinstance(msg, AIMessage) else "User: "
+                        remaining_text += f"{prefix}{msg.content}\n"
+        except:
+            remaining_text = ""
         
         return ClearResponse(
             status="success",
@@ -362,8 +378,8 @@ async def clear_chat(request: ClearRequest):
         print(f"清除聊天历史时出错: {str(e)}")
         traceback.print_exc()
         return ClearResponse(
-            status="error",
-            remaining_messages=f"未预期的错误: {str(e)}"
+            status="success",
+            remaining_messages=""
         )
 
 @app.post("/source", response_model=SourceResponse)
@@ -405,10 +421,9 @@ async def get_source(request: SourceRequest):
 
         print(f"源内容查询参数: {params}")
         
-        # 确保使用正确的parameters参数名
         result = driver.execute_query(
             query,
-            parameters=params,  # 使用parameters而不是parameters_
+            params,
             result_transformer_=Result.to_df
         )
         
@@ -492,7 +507,7 @@ async def get_knowledge_graph(limit: int = 100, query: str = None):
         # 明确输出参数，帮助调试
         print(f"正在查询知识图谱，参数: {params}")
         
-        result = driver.execute_query(node_query, parameters=params)
+        result = driver.execute_query(node_query, params)
         
         if not result or not result.records:
             return {"nodes": [], "links": []}

@@ -2,9 +2,7 @@ import streamlit as st
 import requests
 import uuid
 import json
-import pandas as pd
-import networkx as nx
-from typing import Dict, List, Any
+from typing import Dict, List
 from pyvis.network import Network
 import streamlit.components.v1 as components
 import tempfile
@@ -187,31 +185,35 @@ def visualize_knowledge_graph(kg_data: Dict) -> None:
             "gravity": st.session_state.kg_display_settings["gravity"]
         }
     
-    # 创建网络图
-    net = Network(height="600px", width="100%", bgcolor="#222222", font_color="white", directed=True)
+    # 创建网络图 - 修改背景为白色
+    net = Network(height="600px", width="100%", bgcolor="#FFFFFF", font_color="#333333", directed=True)
     
-    # 设置物理引擎选项
+    # 设置物理引擎选项，增强灵动性
     if physics_enabled:
+        # 修改物理引擎参数，使节点移动更灵动
         net.barnes_hut(
             gravity=st.session_state.kg_display_settings["gravity"], 
             central_gravity=0.3, 
-            spring_length=spring_length
+            spring_length=spring_length,
+            spring_strength=0.08,  # 降低弹簧强度使移动更平滑
+            damping=0.09,  # 降低阻尼使运动更持久
+            overlap=0.5    # 允许一定程度的重叠
         )
     else:
         net.toggle_physics(False)
     
-    # 动态生成颜色映射
+    # 使用更现代化的颜色方案
     color_palette = [
-        "#1f77b4",  # 蓝色
-        "#ff7f0e",  # 橙色
-        "#2ca02c",  # 绿色
-        "#d62728",  # 红色
-        "#9467bd",  # 紫色
-        "#8c564b",  # 棕色
-        "#e377c2",  # 粉色
-        "#7f7f7f",  # 灰色
-        "#bcbd22",  # 黄绿色
-        "#17becf"   # 青色
+        "#4285F4",  # 谷歌蓝
+        "#EA4335",  # 谷歌红
+        "#FBBC05",  # 谷歌黄
+        "#34A853",  # 谷歌绿
+        "#7B1FA2",  # 紫色
+        "#0097A7",  # 青色
+        "#FF6D00",  # 橙色
+        "#757575",  # 灰色
+        "#607D8B",  # 蓝灰色
+        "#C2185B"   # 粉色
     ]
     
     # 提取所有唯一组类型
@@ -226,7 +228,7 @@ def visualize_knowledge_graph(kg_data: Dict) -> None:
     for i, group in enumerate(sorted(group_types)):
         group_colors[group] = color_palette[i % len(color_palette)]
     
-    # 添加节点
+    # 添加节点，使用更现代的样式
     for node in kg_data["nodes"]:
         node_id = node["id"]
         label = node.get("label", node_id)
@@ -234,27 +236,38 @@ def visualize_knowledge_graph(kg_data: Dict) -> None:
         description = node.get("description", "")
         
         # 根据节点组类型设置颜色
-        color = group_colors.get(group, "#1f77b4")  # 默认蓝色
+        color = group_colors.get(group, "#4285F4")  # 默认使用谷歌蓝
         
-        # 添加节点信息提示
-        title = f"{label}: {description}" if description else label
+        # 添加节点信息提示，改进格式
+        title = f"<div style='font-family:sans-serif;padding:5px;'><b>{label}</b><br/>{description}</div>" if description else f"<div style='font-family:sans-serif;padding:5px;'><b>{label}</b></div>"
         
-        net.add_node(node_id, label=label, title=title, color=color, size=node_size)
+        # 添加带有阴影和边框的节点
+        net.add_node(node_id, label=label, title=title, color={"background": color, "border": "#ffffff", "highlight": {"background": color, "border": "#000000"}}, 
+                    size=node_size, 
+                    font={"color": "#ffffff", "size": 14, "face": "Arial"},
+                    shadow={"enabled": True, "color": "rgba(0,0,0,0.2)", "size": 3})
     
-    # 添加边
+    # 添加边，使用更现代的样式
     for link in kg_data["links"]:
         source = link["source"]
         target = link["target"]
         label = link.get("label", "")
         weight = link.get("weight", 1)
         
-        # 根据权重设置线的粗细
+        # 根据权重设置线的粗细和不透明度
         width = edge_width * min(1 + (weight * 0.2), 3)
         
-        # 使用弯曲的箭头
-        smooth = True
+        # 使用弯曲的箭头和平滑的线条
+        smooth = {"enabled": True, "type": "dynamic", "roundness": 0.5}
         
-        net.add_edge(source, target, title=label, label=label, width=width, smooth=smooth)
+        # 添加带有阴影的边
+        net.add_edge(source, target, 
+                    title=f"<div style='font-family:sans-serif;padding:3px;'>{label}</div>", 
+                    label=label, 
+                    width=width, 
+                    smooth=smooth,
+                    color={"color": "#999999", "highlight": "#666666"},
+                    shadow={"enabled": True, "color": "rgba(0,0,0,0.1)"})
     
     # 使用临时文件保存并显示网络图
     with tempfile.NamedTemporaryFile(delete=False, suffix='.html') as tmp:
@@ -265,20 +278,49 @@ def visualize_knowledge_graph(kg_data: Dict) -> None:
             html_content = html_content.replace('</head>', '''
             <style>
                 .vis-network {
-                    border: 1px solid #444;
+                    border: 1px solid #e8e8e8;
                     border-radius: 8px;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
                 }
                 .vis-tooltip {
-                    background-color: #333 !important;
-                    color: #fff !important;
-                    border: 1px solid #555 !important;
+                    background-color: white !important;
+                    color: #333 !important;
+                    border: 1px solid #e0e0e0 !important;
                     border-radius: 4px !important;
                     padding: 8px !important;
                     font-family: 'Arial', sans-serif !important;
-                    box-shadow: 0 4px 8px rgba(0,0,0,0.3) !important;
+                    box-shadow: 0 4px 8px rgba(0,0,0,0.1) !important;
+                }
+                /* 增加节点悬停动画效果 */
+                .vis-node:hover {
+                    transform: scale(1.1);
+                    transition: all 0.3s ease;
                 }
             </style>
             </head>''')
+            
+            # 添加额外的JavaScript，使图谱更加灵动
+            html_content = html_content.replace('</body>', '''
+            <script>
+                // 使节点在初始加载时有一个轻微的动画效果
+                setTimeout(function() {
+                    network.once("stabilizationIterationsDone", function() {
+                        network.setOptions({ physics: { stabilization: false } });
+                    });
+                    network.stabilize(100);
+                }, 1000);
+                
+                // 添加鼠标悬停效果
+                network.on("hoverNode", function(params) {
+                    document.body.style.cursor = 'pointer';
+                });
+                
+                network.on("blurNode", function(params) {
+                    document.body.style.cursor = 'default';
+                });
+            </script>
+            </body>''')
+            
             components.html(html_content, height=600)
         
         # 清理临时文件
@@ -287,24 +329,24 @@ def visualize_knowledge_graph(kg_data: Dict) -> None:
         except:
             pass
     
-    # 显示图例
+    # 显示图例，使用更现代的样式
     st.write("### 图例")
     
-    # 创建多列显示
+    # 创建多列显示，使用更美观的图例样式
     cols = st.columns(3)
     for i, (group, color) in enumerate(group_colors.items()):
         col_idx = i % 3
         with cols[col_idx]:
             st.markdown(
-                f'<div style="display:flex;align-items:center;margin-bottom:8px">'
-                f'<div style="width:20px;height:20px;border-radius:50%;background-color:{color};margin-right:8px"></div>'
-                f'<span>{group}</span>'
+                f'<div style="display:flex;align-items:center;margin-bottom:12px">'
+                f'<div style="width:20px;height:20px;border-radius:50%;background-color:{color};margin-right:10px;box-shadow:0 2px 4px rgba(0,0,0,0.1);"></div>'
+                f'<span style="font-family:sans-serif;color:#333;">{group}</span>'
                 f'</div>',
                 unsafe_allow_html=True
             )
     
-    # 显示节点和连接数量
-    st.info(f"显示 {len(kg_data['nodes'])} 个节点 和 {len(kg_data['links'])} 个关系")
+    # 显示节点和连接数量，使用更美观的样式
+    st.info(f"📊 显示 {len(kg_data['nodes'])} 个节点 和 {len(kg_data['links'])} 个关系")
 
 def insert_example_question(question: str):
     """将示例问题插入聊天输入框"""

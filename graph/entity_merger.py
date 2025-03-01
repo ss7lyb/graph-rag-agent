@@ -15,7 +15,7 @@ from config.prompt import system_template_build_index, user_template_build_index
 
 from dotenv import load_dotenv
 
-load_dotenv('../.env')
+load_dotenv()
 
 class EntityMerger:
     """

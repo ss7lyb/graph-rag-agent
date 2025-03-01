@@ -7,7 +7,7 @@ from model.get_models import get_embeddings_model, get_llm_model
 
 from dotenv import load_dotenv
 
-load_dotenv('../.env')
+load_dotenv()
 
 class EntityIndexManager:
     """

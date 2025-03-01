@@ -16,7 +16,7 @@ import os
 from model.get_models import get_llm_model
 from config.prompt import LC_SYSTEM_PROMPT
 from config.settings import response_type
-from search.tool.hybrid_tool import EnhancedSearchTool
+from search.tool.hybrid_tool import HybridSearchTool
 
 class QueryCache:
     """简单的查询缓存实现"""
@@ -94,7 +94,7 @@ class GraphAgent:
         self.query_cache = QueryCache()
         
         # 初始化增强型搜索工具
-        self.search_tool = EnhancedSearchTool()
+        self.search_tool = HybridSearchTool()
         self.tools = [
             self.search_tool.get_tool(),
             self.search_tool.get_global_tool(),

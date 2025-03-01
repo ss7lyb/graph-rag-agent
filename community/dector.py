@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from graphdatascience import GraphDataScience
 from langchain_community.graphs import Neo4jGraph
-from typing import Tuple, Any, Dict, Optional
+from typing import Tuple, Any, Dict
 from contextlib import contextmanager
 import time
 import os

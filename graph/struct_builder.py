@@ -7,7 +7,7 @@ from langchain_core.documents import Document
 
 from dotenv import load_dotenv
 
-load_dotenv('../.env')
+load_dotenv()
 
 class GraphStructureBuilder:
     def __init__(self, batch_size=100):

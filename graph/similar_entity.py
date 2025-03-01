@@ -9,7 +9,7 @@ from config.settings import similarity_threshold
 
 from dotenv import load_dotenv
 
-load_dotenv('../.env')
+load_dotenv()
 
 @dataclass
 class GDSConfig:

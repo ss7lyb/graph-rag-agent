@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
+from typing import List, Dict
 from langchain_community.graphs import Neo4jGraph
 from langchain.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser

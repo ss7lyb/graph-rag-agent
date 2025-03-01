@@ -14,7 +14,7 @@ from model.get_models import get_llm_model, get_embeddings_model
 from config.prompt import LC_SYSTEM_PROMPT
 from config.settings import lc_description, gl_description, response_type
 
-class EnhancedSearchCache:
+class HybridSearchCache:
     """改进的搜索缓存，支持双级关键词"""
     def __init__(self, max_size: int = 200, cache_dir: str = "./cache/search"):
         self.cache = {}
@@ -88,7 +88,7 @@ class EnhancedSearchCache:
         except Exception as e:
             print(f"写入缓存文件时出错: {e}")
 
-class EnhancedSearchTool:
+class HybridSearchTool:
     """
     增强型搜索工具，实现类似LightRAG的双级检索策略
     结合了局部细节检索和全局主题检索
@@ -101,7 +101,7 @@ class EnhancedSearchTool:
         self.embeddings = get_embeddings_model()
         
         # 缓存设置
-        self.cache = EnhancedSearchCache()
+        self.cache = HybridSearchCache()
         
         # Neo4j连接设置
         self._setup_neo4j()
@@ -622,22 +622,3 @@ class EnhancedSearchTool:
         """关闭资源连接"""
         if hasattr(self, 'driver'):
             self.driver.close()
-
-# 使用示例
-if __name__ == "__main__":
-    search_tool = EnhancedSearchTool()
-    
-    # 测试直接搜索
-    result = search_tool.search("《悟空传》的主要人物有谁？他们的结局是什么?")
-    print(result)
-    
-    # 测试带关键词的搜索
-    result = search_tool.search({
-        "query": "孙悟空和如来佛之间的关系是什么？",
-        "low_level_keywords": ["孙悟空", "如来佛", "五行山"],
-        "high_level_keywords": ["对抗", "关系"]
-    })
-    print(result)
-    
-    # 关闭连接
-    search_tool.close()

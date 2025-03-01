@@ -1,12 +1,11 @@
 import os
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict
 import uvicorn
 from neo4j import GraphDatabase, Result
 from dotenv import load_dotenv
 import traceback
-import json
 import re
 
 load_dotenv()
@@ -108,12 +107,14 @@ def extract_kg_from_message(message: str) -> Dict:
             # 从引用部分提取数据
             reference_text = reference_sections[0]
             
-            # 尝试提取JSON数据对象
-            data_match = re.search(r"\{\'data\':\s*\{(.*?)\}\}", reference_text, re.DOTALL)
+            # 改进正则表达式，更加灵活地匹配JSON对象
+            data_match = re.search(r"\{'data':\s*{(.*?)}\}", reference_text, re.DOTALL) or \
+                        re.search(r"{'data':\s*{(.*?)}\}", reference_text, re.DOTALL)
+                        
             if data_match:
                 data_str = "{" + data_match.group(1) + "}"
-                # 清理数据，使其成为有效的JSON
-                cleaned_data = data_str.replace("'", '"')
+                # 更好地清理数据，处理单引号和双引号混用情况
+                cleaned_data = data_str.replace("'", '"').replace('"[', '[').replace(']"', ']')
                 
                 try:
                     # 尝试作为JSON解析
@@ -130,28 +131,29 @@ def extract_kg_from_message(message: str) -> Dict:
                     rel_ids = [str(r) for r in rel_ids]
                     
                 except json.JSONDecodeError:
-                    # 如果JSON解析失败，使用正则表达式提取
+                    # 如果JSON解析失败，使用改进的正则表达式提取
                     print("JSON解析失败，尝试使用正则表达式提取数据")
                     
-                    # 提取实体IDs
-                    entities_match = re.search(r"Entities':\s*\[([^\]]*)\]", reference_text)
+                    # 提取实体IDs - 改进正则匹配模式
+                    entities_match = re.search(r"'Entities':\s*\[(.*?)\]", reference_text, re.DOTALL)
                     if entities_match:
-                        entity_ids = [id.strip() for id in entities_match.group(1).split(',') if id.strip()]
+                        entity_str = entities_match.group(1).strip()
+                        entity_ids = [id.strip() for id in re.findall(r'(\d+|\'[^\']+\')', entity_str) if id.strip()]
                     
-                    # 提取关系IDs (Relationships 或 Reports)
-                    rels_match = re.search(r"Relationships':\s*\[([^\]]*)\]", reference_text)
-                    if not rels_match:
-                        rels_match = re.search(r"Reports':\s*\[([^\]]*)\]", reference_text)
+                    # 提取关系IDs - 同样改进模式
+                    rels_match = re.search(r"'Relationships':\s*\[(.*?)\]", reference_text, re.DOTALL) or \
+                                re.search(r"'Reports':\s*\[(.*?)\]", reference_text, re.DOTALL)
                     
                     if rels_match:
-                        rel_ids = [id.strip() for id in rels_match.group(1).split(',') if id.strip()]
+                        rel_str = rels_match.group(1).strip()
+                        rel_ids = [id.strip() for id in re.findall(r'(\d+|\'[^\']+\')', rel_str) if id.strip()]
                     
-                    # 提取Chunk IDs
-                    chunks_match = re.search(r"Chunks':\s*\[([^\]]*)\]", reference_text)
+                    # 提取Chunk IDs - 使用更精确的模式
+                    chunks_match = re.search(r"'Chunks':\s*\[(.*?)\]", reference_text, re.DOTALL)
                     if chunks_match:
-                        chunks_str = chunks_match.group(1)
+                        chunks_str = chunks_match.group(1).strip()
                         # 处理带引号的ID
-                        chunk_ids = re.findall(r"'([^']*)'", chunks_str)
+                        chunk_ids = re.findall(r"'([^']*)'", chunks_str) or re.findall(r'"([^"]*)"', chunks_str)
                         if not chunk_ids:
                             # 处理不带引号的ID
                             chunk_ids = [id.strip() for id in chunks_str.split(',') if id.strip()]

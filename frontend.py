@@ -239,7 +239,7 @@ def visualize_knowledge_graph(kg_data: Dict) -> None:
         color = group_colors.get(group, "#4285F4")  # 默认使用谷歌蓝
         
         # 添加节点信息提示，改进格式
-        title = f"<div style='font-family:sans-serif;padding:5px;'><b>{label}</b><br/>{description}</div>" if description else f"<div style='font-family:sans-serif;padding:5px;'><b>{label}</b></div>"
+        title = f"{label}" + (f": {description}" if description else "")
         
         # 添加带有阴影和边框的节点
         net.add_node(node_id, label=label, title=title, color={"background": color, "border": "#ffffff", "highlight": {"background": color, "border": "#000000"}}, 
@@ -260,9 +260,11 @@ def visualize_knowledge_graph(kg_data: Dict) -> None:
         # 使用弯曲的箭头和平滑的线条
         smooth = {"enabled": True, "type": "dynamic", "roundness": 0.5}
         
+        title = label
+        
         # 添加带有阴影的边
         net.add_edge(source, target, 
-                    title=f"<div style='font-family:sans-serif;padding:3px;'>{label}</div>", 
+                    title=title, 
                     label=label, 
                     width=width, 
                     smooth=smooth,

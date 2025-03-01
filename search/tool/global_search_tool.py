@@ -11,7 +11,7 @@ from model.get_models import get_llm_model
 from config.prompt import MAP_SYSTEM_PROMPT
 from config.settings import gl_description
 
-load_dotenv('../../.env')
+load_dotenv()
 
 class GlobalSearchCache:
     """全局搜索缓存"""

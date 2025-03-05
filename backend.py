@@ -4,7 +4,6 @@ from typing import Optional, List, Dict
 import uvicorn
 from neo4j import Result
 import traceback
-import re
 import threading
 import time
 import functools
@@ -155,10 +154,11 @@ def format_execution_log(log: List[Dict]) -> List[Dict]:
         formatted_log.append(formatted_entry)
     return formatted_log
 
-def extract_kg_from_message(message: str) -> Dict:
-    """从消息中提取知识图谱实体和关系数据"""
+def extract_kg_from_message(message: str, query: str = None) -> Dict:
+    """从消息中提取知识图谱实体和关系数据，并基于查询进行过滤"""
     try:
         # 首先尝试找到引用数据部分 - 通常在"#### 引用数据"之后
+        import re
         reference_sections = re.findall(r'####\s+引用数据\s*(.*?)(?=###|\Z)', message, re.DOTALL)
         
         entity_ids = []
@@ -223,9 +223,18 @@ def extract_kg_from_message(message: str) -> Dict:
         # 打印提取的数据
         print(f"提取的数据: entity_ids={entity_ids}, rel_ids={rel_ids}, chunk_ids={chunk_ids}")
         
-        # 查询相关的实体和关系
+        # 查询相关的实体和关系，使用查询文本进行过滤
         if entity_ids or rel_ids or chunk_ids:
-            return get_knowledge_graph_for_ids(entity_ids, rel_ids, chunk_ids)
+            # 如果提供了查询，提取关键词用于过滤
+            query_keywords = None
+            if query:
+                import re
+                # 提取有意义的关键词，排除常见连接词和疑问词
+                keywords = re.findall(r'\b\w+\b', query.lower())
+                query_keywords = [k for k in keywords if len(k) > 2 and k not in ['什么', '之间', '发生', '关系', '的', '和', '有', '是']]
+                print(f"提取的查询关键词: {query_keywords}")
+            
+            return get_knowledge_graph_for_ids(entity_ids, rel_ids, chunk_ids, query_keywords=query_keywords, max_distance=1)
         
         # 如果没有提取到任何有效数据，返回空的知识图谱
         return {"nodes": [], "links": []}
@@ -235,8 +244,8 @@ def extract_kg_from_message(message: str) -> Dict:
         traceback.print_exc()
         return {"nodes": [], "links": []}
 
-def get_knowledge_graph_for_ids(entity_ids=None, relationship_ids=None, chunk_ids=None, expand_hops=1):
-    """根据ID获取知识图谱数据"""
+def get_knowledge_graph_for_ids(entity_ids=None, relationship_ids=None, chunk_ids=None, query_keywords=None, max_distance=1):
+    """根据ID获取知识图谱数据，并可选基于查询关键词进行过滤"""
     # 确保所有参数都有默认值，避免None
     entity_ids = entity_ids or []
     relationship_ids = relationship_ids or []
@@ -265,7 +274,9 @@ def get_knowledge_graph_for_ids(entity_ids=None, relationship_ids=None, chunk_id
         params = {
             "entity_ids": numeric_ids,
             "entity_id_strings": string_ids,
-            "chunk_ids": chunk_ids
+            "chunk_ids": chunk_ids,
+            "query_keywords": query_keywords,
+            "max_distance": max_distance
         }
         
         # 输出参数供调试
@@ -294,28 +305,45 @@ def get_knowledge_graph_for_ids(entity_ids=None, relationship_ids=None, chunk_id
         // 合并所有实体
         WITH entities_set + entity_nodes + chunk_related_entities AS base_entities
         
-        // 扩展周边实体（通过关系连接的）
+        // 有条件地扩展周边实体（只搜索一跳关系内的实体）
         CALL {
             WITH base_entities
             MATCH (e)-[r]-(neighbor:__Entity__)
             WHERE e IN base_entities
+            // 如果提供了关键词，根据关键词过滤
+            AND (size($query_keywords) = 0 OR 
+                 ANY(keyword IN $query_keywords WHERE 
+                     toLower(neighbor.id) CONTAINS toLower(keyword) OR 
+                     toLower(neighbor.description) CONTAINS toLower(keyword) OR
+                     toLower(type(r)) CONTAINS toLower(keyword)))
+            // 控制最大扩展距离
             RETURN collect(DISTINCT neighbor) AS neighbors
         }
         
-        // 合并实体列表
-        WITH base_entities + neighbors AS all_entities
+        // 合并所有实体，应用关键词过滤
+        WITH base_entities + neighbors AS all_entities,
+             $query_keywords AS keywords
+        
+        // 如果提供了关键词，根据关键词过滤实体
+        WITH CASE 
+            WHEN size(keywords) > 0 THEN [e IN all_entities WHERE 
+                ANY(keyword IN keywords WHERE 
+                    toLower(e.id) CONTAINS toLower(keyword) OR 
+                    toLower(e.description) CONTAINS toLower(keyword))]
+            ELSE all_entities
+        END AS filtered_entities
         
         // 再次收集所有实体间的关系
         CALL {
-            WITH all_entities
+            WITH filtered_entities
             MATCH (e1:__Entity__)-[r]-(e2:__Entity__)
-            WHERE e1 IN all_entities AND e2 IN all_entities
+            WHERE e1 IN filtered_entities AND e2 IN filtered_entities
             RETURN collect(DISTINCT r) AS all_rels
         }
         
         // 返回结果
         RETURN 
-        [n IN all_entities | {
+        [n IN filtered_entities | {
             id: n.id, 
             label: n.id, 
             description: n.description,
@@ -677,12 +705,13 @@ async def get_knowledge_graph(limit: int = 100, query: str = None):
         return {"error": str(e), "nodes": [], "links": []}
 
 @app.get("/knowledge_graph_from_message")
-async def get_knowledge_graph_from_message(message: str = None):
+async def get_knowledge_graph_from_message(message: str = None, query: str = None):
     """
     从消息文本中提取知识图谱数据，使用动态类型
     
     参数:
         message: AI回复消息文本
+        query: 用户查询文本，用于过滤相关节点
         
     返回:
         包含节点和链接的知识图谱数据
@@ -691,7 +720,7 @@ async def get_knowledge_graph_from_message(message: str = None):
         return {"nodes": [], "links": []}
         
     try:
-        return extract_kg_from_message(message)
+        return extract_kg_from_message(message, query)
             
     except Exception as e:
         print(f"从消息提取知识图谱失败: {str(e)}")

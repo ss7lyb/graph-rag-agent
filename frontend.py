@@ -153,12 +153,16 @@ def get_knowledge_graph(limit: int = 100, query: str = None) -> Dict:
         st.error(f"获取知识图谱时出错: {str(e)}")
         return {"nodes": [], "links": []}
 
-def get_knowledge_graph_from_message(message: str) -> Dict:
+def get_knowledge_graph_from_message(message: str, query: str = None) -> Dict:
     """从AI响应中提取知识图谱数据"""
     try:
+        params = {"message": message}
+        if query:
+            params["query"] = query
+            
         response = requests.get(
             f"{API_URL}/knowledge_graph_from_message",
-            params={"message": message},
+            params=params,
             timeout=30
         )
         return response.json()
@@ -806,7 +810,13 @@ def display_chat_interface():
                         if i == len(st.session_state.messages) - 1:
                             if st.button("提取知识图谱", key=f"extract_kg_{i}"):
                                 with st.spinner("提取知识图谱数据..."):
-                                    kg_data = get_knowledge_graph_from_message(msg["content"])
+                                    # 获取对应的用户查询
+                                    user_query = ""
+                                    if i > 0 and st.session_state.messages[i-1]["role"] == "user":
+                                        user_query = st.session_state.messages[i-1]["content"]
+                                        
+                                    # 使用用户查询来过滤知识图谱
+                                    kg_data = get_knowledge_graph_from_message(msg["content"], user_query)
                                     if kg_data and len(kg_data.get("nodes", [])) > 0:
                                         st.session_state.kg_data = kg_data
                                         st.session_state.current_tab = "知识图谱"  # 自动切换到知识图谱标签
@@ -848,9 +858,9 @@ def display_chat_interface():
                                 # 优先使用后端返回的kg_data
                                 kg_data = response.get("kg_data")
                                 
-                                # 如果后端没有返回kg_data，尝试从回答中提取
+                                # 如果后端没有返回kg_data，尝试从回答中提取，并传递用户查询
                                 if not kg_data or len(kg_data.get("nodes", [])) == 0:
-                                    kg_data = get_knowledge_graph_from_message(response["answer"])
+                                    kg_data = get_knowledge_graph_from_message(response["answer"], prompt)  # 传递当前查询
                                 
                                 if kg_data and len(kg_data.get("nodes", [])) > 0:
                                     st.session_state.kg_data = kg_data

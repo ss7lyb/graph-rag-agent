@@ -7,6 +7,9 @@ from neo4j import GraphDatabase, Result
 from dotenv import load_dotenv
 import traceback
 import re
+import threading
+import time
+import functools
 
 load_dotenv()
 
@@ -15,11 +18,64 @@ shutup.please()
 
 from langchain_core.messages import RemoveMessage, AIMessage, HumanMessage, ToolMessage
 from agent.graph_agent import GraphAgent
-from agent.hybrid_agent import GraphAgent as HybridAgent
+from agent.hybrid_agent import HybridAgent
 
 app = FastAPI()
-graph_agent = GraphAgent()
-hybrid_agent = HybridAgent()
+
+# 创建线程锁和时间戳字典用于并发控制
+feedback_locks = {}
+operation_timestamps = {}
+chat_locks = {}
+chat_timestamps = {}
+
+# 创建一个装饰器来测量API端点的性能
+def measure_performance(endpoint_name):
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            start_time = time.time()
+            
+            try:
+                result = await func(*args, **kwargs)
+                
+                # 记录性能
+                duration = time.time() - start_time
+                print(f"API性能 - {endpoint_name}: {duration:.4f}s")
+                
+                # 可以添加到日志或指标系统
+                # ...
+                
+                return result
+            except Exception as e:
+                # 记录异常和性能
+                duration = time.time() - start_time
+                print(f"API异常 - {endpoint_name}: {str(e)} ({duration:.4f}s)")
+                raise
+                
+        return wrapper
+    return decorator
+
+# 创建一个字典来存储所有可用的Agent
+agents = {
+    "graph_agent": GraphAgent(),
+    "hybrid_agent": HybridAgent(),
+}
+
+# 在应用关闭时清理资源
+@app.on_event("shutdown")
+def shutdown_event():
+    """应用关闭时清理资源"""
+    for agent_name, agent in agents.items():
+        try:
+            agent.close()
+            print(f"已关闭 {agent_name} 资源")
+        except Exception as e:
+            print(f"关闭 {agent_name} 资源时出错: {e}")
+    
+    # 关闭Neo4j连接
+    if driver:
+        driver.close()
+        print("已关闭Neo4j连接")
 
 # Initialize Neo4j driver
 driver = GraphDatabase.driver(
@@ -51,6 +107,17 @@ class ClearRequest(BaseModel):
 class ClearResponse(BaseModel):
     status: str
     remaining_messages: Optional[str] = None
+
+class FeedbackRequest(BaseModel):
+    message_id: str
+    query: str
+    is_positive: bool
+    thread_id: str
+    agent_type: Optional[str] = "graph_agent"
+
+class FeedbackResponse(BaseModel):
+    status: str
+    action: str
 
 def format_messages_for_response(messages: List[Dict]) -> str:
     """将消息格式化为字符串"""
@@ -295,11 +362,72 @@ def get_knowledge_graph_for_ids(entity_ids=None, relationship_ids=None, chunk_id
         return {"nodes": [], "links": []}
 
 @app.post("/chat", response_model=ChatResponse)
+@measure_performance("chat")
 async def chat(request: ChatRequest):
-    """处理聊天请求"""
+    """处理聊天请求 - 增加并发控制和性能优化"""
+    # 生成锁的键
+    lock_key = f"{request.session_id}_chat"
+    
+    # 确保每个会话ID有自己的锁
+    if lock_key not in chat_locks:
+        chat_locks[lock_key] = threading.Lock()
+        chat_timestamps[lock_key] = time.time()
+    
+    # 非阻塞方式尝试获取锁
+    lock_acquired = chat_locks[lock_key].acquire(blocking=False)
+    if not lock_acquired:
+        # 如果无法获取锁，说明有另一个请求正在处理
+        raise HTTPException(
+            status_code=429, 
+            detail="当前有其他请求正在处理，请稍后再试"
+        )
+    
     try:
-        # 根据agent_type选择相应的agent
-        selected_agent = graph_agent if request.agent_type == "graph_agent" else hybrid_agent
+        # 更新操作时间戳
+        chat_timestamps[lock_key] = time.time()
+        
+        # 检查请求的agent_type是否存在
+        if request.agent_type not in agents:
+            raise HTTPException(status_code=400, detail=f"未知的agent类型: {request.agent_type}")
+            
+        # 获取指定的agent
+        selected_agent = agents[request.agent_type]
+        
+        # 性能优化：首先尝试快速路径 - 跳过完整处理
+        try:
+            start_fast = time.time()
+            fast_result = selected_agent.check_fast_cache(request.message, request.session_id)
+            
+            if fast_result:
+                print(f"API快速路径命中: {time.time() - start_fast:.4f}s")
+                
+                # 在调试模式下，需要提供额外信息
+                if request.debug:
+                    # 提供模拟的执行日志
+                    mock_log = [{
+                        "node": "fast_cache_hit", 
+                        "timestamp": time.time(), 
+                        "input": request.message, 
+                        "output": "高质量缓存命中，跳过完整处理"
+                    }]
+                    
+                    # 尝试提取图谱数据
+                    try:
+                        kg_data = extract_kg_from_message(fast_result)
+                    except:
+                        kg_data = {"nodes": [], "links": []}
+                        
+                    return ChatResponse(
+                        answer=fast_result,
+                        execution_log=format_execution_log(mock_log),
+                        kg_data=kg_data
+                    )
+                else:
+                    # 标准模式直接返回答案
+                    return ChatResponse(answer=fast_result)
+        except Exception as e:
+            # 快速路径失败，继续常规流程
+            print(f"快速路径检查失败: {e}")
         
         if request.debug:
             # 在Debug模式下使用ask_with_trace，并返回知识图谱数据
@@ -327,14 +455,34 @@ async def chat(request: ChatRequest):
         print(f"处理聊天请求时出错: {str(e)}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # 释放锁
+        chat_locks[lock_key].release()
+        
+        # 清理过期的锁
+        current_time = time.time()
+        expired_keys = []
+        for k in chat_timestamps:
+            if current_time - chat_timestamps[k] > 300:  # 5分钟后清除
+                expired_keys.append(k)
+        
+        for k in expired_keys:
+            if k in chat_locks:
+                # 确保锁是可以被安全删除的
+                try:
+                    if not chat_locks[k].locked():
+                        del chat_locks[k]
+                except:
+                    pass
+            if k in chat_timestamps:
+                del chat_timestamps[k]
 
 @app.post("/clear", response_model=ClearResponse)
 async def clear_chat(request: ClearRequest):
     """清除聊天历史"""
     try:
-        # 清除两个agent的历史
-        agents = [graph_agent, hybrid_agent]
-        for agent in agents:
+        # 清除所有agent的历史
+        for agent_name, agent in agents.items():
             config = {"configurable": {"thread_id": request.session_id}}
             
             # 添加检查，防止None值报错
@@ -359,6 +507,8 @@ async def clear_chat(request: ClearRequest):
 
         # 获取剩余消息时也添加检查
         try:
+            # 使用graph_agent检查剩余消息
+            graph_agent = agents["graph_agent"]
             memory_content = graph_agent.memory.get({"configurable": {"thread_id": request.session_id}})
             remaining_text = ""
             
@@ -608,6 +758,66 @@ async def get_chunks(limit: int = 10, offset: int = 0):
         print(f"获取文本块失败: {str(e)}")
         traceback.print_exc()
         return {"error": str(e), "chunks": []}
+
+@app.post("/feedback", response_model=FeedbackResponse)
+@measure_performance("feedback")
+async def process_feedback(request: FeedbackRequest):
+    """处理用户对回答的反馈 - 增加并发控制和性能优化"""
+    try:
+        # 生成锁的键
+        lock_key = f"{request.thread_id}_{request.query}"
+        
+        # 确保每个线程ID+查询有自己的锁
+        if lock_key not in feedback_locks:
+            feedback_locks[lock_key] = threading.Lock()
+            operation_timestamps[lock_key] = time.time()
+        
+        # 获取锁，防止并发处理同一个查询
+        with feedback_locks[lock_key]:
+            # 动态获取对应的agent
+            agent_type = request.agent_type if hasattr(request, 'agent_type') else "graph_agent"
+            
+            # 确保agent_type存在
+            if not agent_type or agent_type not in agents:
+                agent_type = "graph_agent"  # 回退到默认agent
+                print(f"未知的agent类型或未提供agent_type，使用默认值: {agent_type}")
+                
+            selected_agent = agents[agent_type]
+            
+            # 根据反馈进行处理 - 直接使用优化版方法
+            if request.is_positive:
+                # 使用优化的反馈标记方法
+                selected_agent.mark_answer_quality(request.query, True, request.thread_id)
+                action = "缓存已被标记为高质量"
+            else:
+                # 负面反馈 - 从缓存中移除该回答
+                selected_agent.clear_cache_for_query(request.query, request.thread_id)
+                action = "缓存已被清除"
+                
+            # 更新操作时间戳
+            operation_timestamps[lock_key] = time.time()
+                
+            # 清理过期的锁
+            current_time = time.time()
+            expired_keys = []
+            for k in operation_timestamps:
+                if current_time - operation_timestamps[k] > 300:  # 5分钟后清除
+                    expired_keys.append(k)
+            
+            for k in expired_keys:
+                if k in feedback_locks:
+                    del feedback_locks[k]
+                if k in operation_timestamps:
+                    del operation_timestamps[k]
+            
+            return FeedbackResponse(
+                status="success",
+                action=action
+            )
+    except Exception as e:
+        print(f"处理反馈时出错: {str(e)}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 # 启动服务器
 if __name__ == "__main__":

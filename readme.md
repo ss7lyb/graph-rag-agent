@@ -22,6 +22,32 @@ conda create -n graphrag python==3.10
 pip install -r requirements.txt
 ```
 
+.env文件配置：
+
+```env
+OPENAI_API_KEY = '本地one-api的令牌'
+OPENAI_BASE_URL = 'http://localhost:13000/v1'
+
+OPENAI_EMBEDDINGS_MODEL = '嵌入模型名称'
+OPENAI_LLM_MODEL = 'LLM模型名称'
+
+TEMPERATURE = 0  # 温度
+MAX_TOKENS = 2000  # 最大Token
+
+VERBOSE = True # 是否打开调试模式
+
+# neo4j配置
+NEO4J_URI='neo4j://localhost:7687'
+NEO4J_USERNAME='neo4j'
+NEO4J_PASSWORD='12345678'
+
+# langsmith配置
+LANGSMITH_TRACING=true  # 是否启用
+LANGSMITH_ENDPOINT="https://api.smith.langchain.com"
+LANGSMITH_API_KEY="api-key"
+LANGSMITH_PROJECT="项目名称"
+```
+
 项目初始化：
 
 ```bash
@@ -38,16 +64,6 @@ python build/main.py
 
 ```bash
 python search_test.py
-```
-
-agent测试：
-
-```bash
-# local search 与 global search
-python agent/graph_agent.py 
-
-# 混合搜索
-python agent/hybrid_agent.py
 ```
 
 前后端项目启动：

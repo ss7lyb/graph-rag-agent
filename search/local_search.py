@@ -1,12 +1,11 @@
-import os
 from typing import Dict, Any
 import pandas as pd
-from neo4j import GraphDatabase, Result
+from neo4j import Result
 from langchain_community.vectorstores import Neo4jVector
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from config.prompt import LC_SYSTEM_PROMPT
-from dotenv import load_dotenv
+from config.neo4jdb import get_db_manager
 
 class LocalSearch:
     """
@@ -20,32 +19,14 @@ class LocalSearch:
     """
     
     def __init__(self, llm, embeddings, response_type: str = "多个段落"):
-        """
-        初始化本地搜索器
-        
-        参数:
-            llm: 大语言模型实例
-            embeddings: 嵌入模型实例
-            response_type: 响应类型，默认为"多个段落"
-        """
-        # 加载环境变量
-        load_dotenv('../.env')
         
         # 保存模型实例和配置
         self.llm = llm
         self.embeddings = embeddings
         self.response_type = response_type
         
-        # Neo4j数据库配置
-        self.neo4j_uri = os.getenv('NEO4J_URI')
-        self.neo4j_username = os.getenv('NEO4J_USERNAME')
-        self.neo4j_password = os.getenv('NEO4J_PASSWORD')
-        
-        # 初始化Neo4j驱动
-        self.driver = GraphDatabase.driver(
-            self.neo4j_uri,
-            auth=(self.neo4j_username, self.neo4j_password)
-        )
+        db_manager = get_db_manager()
+        self.driver = db_manager.get_driver()
         
         # 设置检索参数
         self.top_chunks = 3
@@ -131,13 +112,15 @@ class LocalSearch:
             .replace("$topCommunities", str(self.top_communities))\
             .replace("$topOutsideRels", str(self.top_outside_rels))\
             .replace("$topInsideRels", str(self.top_inside_rels))
+
+        db_manager = get_db_manager()
         
         # 初始化向量存储
         vector_store = Neo4jVector.from_existing_index(
             self.embeddings,
-            url=self.neo4j_uri,
-            username=self.neo4j_username,
-            password=self.neo4j_password,
+            url=db_manager.neo4j_uri,
+            username=db_manager.neo4j_username,
+            password=db_manager.neo4j_password,
             index_name=self.index_name,
             retrieval_query=final_query
         )
@@ -215,7 +198,7 @@ class LocalSearch:
         
     def close(self):
         """关闭Neo4j驱动连接"""
-        self.driver.close()
+        pass
         
     def __enter__(self):
         """上下文管理器入口"""

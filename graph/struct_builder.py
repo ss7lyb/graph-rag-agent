@@ -2,16 +2,15 @@ import hashlib
 import time
 import concurrent.futures
 from typing import List
-from langchain_community.graphs import Neo4jGraph
 from langchain_core.documents import Document
-
-from dotenv import load_dotenv
-
-load_dotenv()
+from config.neo4jdb import get_db_manager
 
 class GraphStructureBuilder:
     def __init__(self, batch_size=100):
-        self.graph = Neo4jGraph(refresh_schema=True)
+        db_manager = get_db_manager()
+        self.graph = db_manager.graph
+        self.graph.refresh_schema()
+        
         self.batch_size = batch_size
             
     def clear_database(self):

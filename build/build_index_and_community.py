@@ -1,7 +1,6 @@
 import os
 import time
 import psutil
-from dotenv import load_dotenv
 from typing import Dict, Any
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
@@ -16,7 +15,8 @@ from graph.entity_merger import EntityMerger
 from community.dector import LeidenDetector, SLLPADetector
 from community.summary import CommunitySummarizerFactory
 from graphdatascience import GraphDataScience
-from langchain_community.graphs import Neo4jGraph
+
+from config.neo4jdb import get_db_manager
 
 import shutup
 shutup.please()
@@ -36,9 +36,6 @@ class IndexCommunityBuilder:
         """初始化索引和社区构建器"""
         # 初始化终端界面
         self.console = Console()
-        
-        # 加载环境变量
-        load_dotenv()
         
         # 阶段性能统计 - 确保在_initialize_components之前定义
         self.performance_stats = {
@@ -79,7 +76,8 @@ class IndexCommunityBuilder:
                 os.environ["NEO4J_URI"],
                 auth=(os.environ["NEO4J_USERNAME"], os.environ["NEO4J_PASSWORD"])
             )
-            self.graph = Neo4jGraph()
+            db_manager = get_db_manager()
+            self.graph = db_manager.graph
             progress.advance(task)
             
             # 初始化索引管理器 - 动态调整参数

@@ -1,114 +1,26 @@
-import os
-import hashlib
-from typing import List, Dict, Any, Optional
 import time
+import json
+from typing import List, Dict, Any
 import pandas as pd
-from neo4j import GraphDatabase, Result
+from neo4j import Result
 
 from langchain_core.tools import BaseTool
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_community.graphs import Neo4jGraph
 
-from model.get_models import get_llm_model, get_embeddings_model
 from config.prompt import LC_SYSTEM_PROMPT
-from config.settings import lc_description, gl_description, response_type
+from config.settings import gl_description, response_type
+from search.tool.base import BaseSearchTool
 
-class HybridSearchCache:
-    """改进的搜索缓存，支持双级关键词"""
-    def __init__(self, max_size: int = 200, cache_dir: str = "./cache/search"):
-        self.cache = {}
-        self.max_size = max_size
-        self.cache_dir = cache_dir
-        
-        # 确保缓存目录存在
-        if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir)
-        
-        # 加载磁盘缓存
-        self._load_from_disk()
-    
-    def _get_cache_path(self, key: str) -> str:
-        """获取缓存文件路径"""
-        return os.path.join(self.cache_dir, f"{key}.txt")
-    
-    def _load_from_disk(self):
-        """从磁盘加载缓存"""
-        if os.path.exists(self.cache_dir):
-            for filename in os.listdir(self.cache_dir):
-                if filename.endswith(".txt"):
-                    key = filename[:-4]  # 移除.txt后缀
-                    try:
-                        with open(os.path.join(self.cache_dir, filename), 'r', encoding='utf-8') as f:
-                            self.cache[key] = f.read()
-                    except Exception as e:
-                        print(f"加载缓存文件 {filename} 时出错: {e}")
-    
-    def get_key(self, query: str, low_level_keywords: List[str] = None, high_level_keywords: List[str] = None) -> str:
-        """生成缓存键，考虑双级关键词"""
-        key_parts = [query]
-        
-        if low_level_keywords:
-            key_parts.append("low:" + ",".join(sorted(low_level_keywords)))
-            
-        if high_level_keywords:
-            key_parts.append("high:" + ",".join(sorted(high_level_keywords)))
-            
-        key_str = "||".join(key_parts)
-        return hashlib.md5(key_str.encode()).hexdigest()
-    
-    def get(self, query: str, low_level_keywords: List[str] = None, high_level_keywords: List[str] = None) -> Optional[str]:
-        """获取缓存结果"""
-        key = self.get_key(query, low_level_keywords, high_level_keywords)
-        return self.cache.get(key)
-    
-    def set(self, query: str, result: str, low_level_keywords: List[str] = None, high_level_keywords: List[str] = None) -> None:
-        """设置缓存结果"""
-        key = self.get_key(query, low_level_keywords, high_level_keywords)
-        
-        # 如果缓存已满，移除最早的项
-        if len(self.cache) >= self.max_size:
-            oldest_key = next(iter(self.cache))
-            del self.cache[oldest_key]
-            # 删除磁盘上的缓存文件
-            cache_path = self._get_cache_path(oldest_key)
-            if os.path.exists(cache_path):
-                try:
-                    os.remove(cache_path)
-                except Exception as e:
-                    print(f"删除缓存文件 {cache_path} 时出错: {e}")
-        
-        # 更新内存缓存
-        self.cache[key] = result
-        
-        # 写入磁盘缓存
-        try:
-            with open(self._get_cache_path(key), 'w', encoding='utf-8') as f:
-                f.write(result)
-        except Exception as e:
-            print(f"写入缓存文件时出错: {e}")
 
-class HybridSearchTool:
+class HybridSearchTool(BaseSearchTool):
     """
-    增强型搜索工具，实现类似LightRAG的双级检索策略
+    混合搜索工具，实现类似LightRAG的双级检索策略
     结合了局部细节检索和全局主题检索
     """
     
     def __init__(self):
-        """初始化增强型搜索工具"""
-        # 初始化模型
-        self.llm = get_llm_model()
-        self.embeddings = get_embeddings_model()
-        
-        # 缓存设置
-        self.cache = HybridSearchCache()
-        
-        # Neo4j连接设置
-        self._setup_neo4j()
-        
-        # 初始化查询链
-        self._setup_chains()
-        
+        """初始化混合搜索工具"""
         # 检索参数
         self.entity_limit = 15        # 最大检索实体数量
         self.max_hop_distance = 2     # 最大跳数（关系扩展）
@@ -116,34 +28,10 @@ class HybridSearchTool:
         self.batch_size = 10          # 批处理大小
         self.community_level = 0      # 默认社区等级
         
-        # 性能监控
-        self.query_time = 0
-        self.llm_time = 0
-    
-    def _setup_neo4j(self):
-        """设置Neo4j连接"""
-        # 获取环境变量
-        neo4j_uri = os.getenv('NEO4J_URI')
-        neo4j_username = os.getenv('NEO4J_USERNAME')
-        neo4j_password = os.getenv('NEO4J_PASSWORD')
-        
-        # 初始化Neo4j图连接
-        self.graph = Neo4jGraph(
-            url=neo4j_uri,
-            username=neo4j_username,
-            password=neo4j_password,
-            refresh_schema=False,
-        )
-        
-        # 初始化Neo4j驱动，用于直接执行查询
-        self.driver = GraphDatabase.driver(
-            neo4j_uri,
-            auth=(neo4j_username, neo4j_password)
-        )
-        
-        # 不使用Neo4jVector，因为配置不兼容
-        # 我们将使用自定义实现的向量搜索
-        self.vector_store = None
+        # 调用父类构造函数
+        super().__init__(cache_dir="./cache/hybrid_search")
+
+        self._setup_chains()
     
     def _setup_chains(self):
         """设置处理链"""
@@ -198,15 +86,19 @@ class HybridSearchTool:
     
     def extract_keywords(self, query: str) -> Dict[str, List[str]]:
         """从查询中提取双级关键词"""
+        # 检查缓存
+        cached_keywords = self.cache_manager.get(f"keywords:{query}")
+        if cached_keywords:
+            return cached_keywords
+            
         try:
             llm_start = time.time()
             
             # 尝试解析JSON结果
             result = self.keyword_chain.invoke({"query": query})
-            import json
             keywords = json.loads(result)
             
-            self.llm_time += time.time() - llm_start
+            self.performance_metrics["llm_time"] += time.time() - llm_start
             
             # 确保包含必要的键
             if not isinstance(keywords, dict):
@@ -216,6 +108,9 @@ class HybridSearchTool:
             if "high_level" not in keywords:
                 keywords["high_level"] = []
                 
+            # 缓存结果
+            self.cache_manager.set(f"keywords:{query}", keywords)
+            
             return keywords
             
         except Exception as e:
@@ -357,7 +252,7 @@ class HybridSearchTool:
         
         # 如果仍然没有实体，返回空内容
         if not entity_ids:
-            self.query_time += time.time() - query_start
+            self.performance_metrics["query_time"] += time.time() - query_start
             return "没有找到相关的低级内容。"
         
         # 获取实体信息 - 不使用多跳关系以避免复杂查询
@@ -414,7 +309,7 @@ class HybridSearchTool:
             # 获取文本块信息
             chunk_results = self.db_query(chunk_query, {"entity_ids": entity_ids})
             
-            self.query_time += time.time() - query_start
+            self.performance_metrics["query_time"] += time.time() - query_start
             
             # 构建结果
             low_level = []
@@ -451,7 +346,7 @@ class HybridSearchTool:
                 
             return "\n".join(low_level)
         except Exception as e:
-            self.query_time += time.time() - query_start
+            self.performance_metrics["query_time"] += time.time() - query_start
             print(f"实体查询失败: {e}")
             return "查询实体信息时出错。"
     
@@ -493,7 +388,7 @@ class HybridSearchTool:
         try:
             community_results = self.db_query(community_query, params)
             
-            self.query_time += time.time() - query_start
+            self.performance_metrics["query_time"] += time.time() - query_start
             
             # 处理结果
             if community_results.empty:
@@ -508,13 +403,13 @@ class HybridSearchTool:
             
             return "\n".join(high_level)
         except Exception as e:
-            self.query_time += time.time() - query_start
+            self.performance_metrics["query_time"] += time.time() - query_start
             print(f"社区查询失败: {e}")
             return "查询社区信息时出错。"
     
     def search(self, query_input: Any) -> str:
         """
-        执行增强型搜索，结合低级和高级内容
+        执行混合搜索，结合低级和高级内容
         
         参数:
             query_input: 字符串查询或包含查询和关键词的字典
@@ -522,6 +417,8 @@ class HybridSearchTool:
         返回:
             str: 生成的最终答案
         """
+        overall_start = time.time()
+        
         # 解析输入
         if isinstance(query_input, dict) and "query" in query_input:
             query = query_input["query"]
@@ -536,7 +433,15 @@ class HybridSearchTool:
             high_keywords = keywords.get("high_level", [])
         
         # 检查缓存
-        cached_result = self.cache.get(query, low_keywords, high_keywords)
+        cache_key = query
+        if low_keywords or high_keywords:
+            cache_key = self.cache_manager.key_strategy.generate_key(
+                query, 
+                low_level_keywords=low_keywords, 
+                high_level_keywords=high_keywords
+            )
+            
+        cached_result = self.cache_manager.get(cache_key)
         if cached_result:
             return cached_result
         
@@ -558,10 +463,17 @@ class HybridSearchTool:
                 "response_type": response_type
             })
             
-            self.llm_time += time.time() - llm_start
+            self.performance_metrics["llm_time"] += time.time() - llm_start
             
             # 缓存结果
-            self.cache.set(query, result, low_keywords, high_keywords)
+            self.cache_manager.set(
+                query, 
+                result, 
+                low_level_keywords=low_keywords,
+                high_level_keywords=high_keywords
+            )
+            
+            self.performance_metrics["total_time"] = time.time() - overall_start
             
             return result
             
@@ -569,20 +481,6 @@ class HybridSearchTool:
             error_msg = f"搜索过程中出现错误: {str(e)}"
             print(error_msg)
             return error_msg
-    
-    def get_tool(self) -> BaseTool:
-        """获取本地检索工具"""
-        class DualLevelSearchTool(BaseTool):
-            name = "enhanced_search_tool"
-            description = lc_description
-            
-            def _run(self_tool, query: Any) -> str:
-                return self.search(query)
-            
-            def _arun(self_tool, query: Any) -> str:
-                raise NotImplementedError("异步执行未实现")
-                
-        return DualLevelSearchTool()
     
     def get_global_tool(self) -> BaseTool:
         """获取全局搜索工具"""
@@ -619,6 +517,5 @@ class HybridSearchTool:
         return GlobalSearchTool()
     
     def close(self):
-        """关闭资源连接"""
-        if hasattr(self, 'driver'):
-            self.driver.close()
+        """关闭资源"""
+        super().close()

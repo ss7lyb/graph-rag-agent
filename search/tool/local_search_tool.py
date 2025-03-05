@@ -1,57 +1,37 @@
-from typing import List
-import hashlib
+from typing import List, Dict, Any
+import time
 from langsmith import traceable
+from langchain.utils.math import cosine_similarity
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain.tools.retriever import create_retriever_tool
-from langchain.utils.math import cosine_similarity
+from langchain_core.output_parsers import StrOutputParser
 
-from model.get_models import get_llm_model, get_embeddings_model
-from search.local_search import LocalSearch
 from config.prompt import LC_SYSTEM_PROMPT, contextualize_q_system_prompt
-from config.settings import response_type, lc_description
+from config.settings import lc_description
+from search.tool.base import BaseSearchTool
+from search.local_search import LocalSearch
 
-class LocalSearchCache:
-    """本地搜索缓存"""
-    def __init__(self, max_size: int = 100):
-        self.cache = {}
-        self.max_size = max_size
-    
-    def get_key(self, query: str, keywords: List[str] = None):
-        """生成缓存键"""
-        key_str = query
-        if keywords:
-            key_str += "||" + ",".join(sorted(keywords))
-        return hashlib.md5(key_str.encode()).hexdigest()
-    
-    def get(self, query: str, keywords: List[str] = None):
-        """获取缓存结果"""
-        key = self.get_key(query, keywords)
-        return self.cache.get(key)
-    
-    def set(self, query: str, keywords: List[str], result: str):
-        """设置缓存结果"""
-        key = self.get_key(query, keywords)
-        
-        # 如果缓存已满，移除最早的项
-        if len(self.cache) >= self.max_size:
-            oldest_key = next(iter(self.cache))
-            del self.cache[oldest_key]
-        
-        self.cache[key] = result
 
-class LocalSearchTool:
+class LocalSearchTool(BaseSearchTool):
+    """本地搜索工具，基于向量检索实现社区内部的精确查询"""
+    
     def __init__(self):
-        self.llm = get_llm_model()
-        self.embeddings = get_embeddings_model()
+        """初始化本地搜索工具"""
+        # 调用父类构造函数
+        super().__init__(cache_dir="./cache/local_search")
+        
+        # 设置聊天历史
+        self.chat_history = []
+                
         self.local_searcher = LocalSearch(self.llm, self.embeddings)
         self.retriever = self.local_searcher.as_retriever()
-        self.chat_history = []
-        self.cache = LocalSearchCache()
-        self._setup_chains()
 
+        self._setup_chains()
+    
     def _setup_chains(self):
+        """设置处理链"""
         # Context retriever prompt
         contextualize_q_prompt = ChatPromptTemplate.from_messages([
             ("system", contextualize_q_system_prompt),
@@ -94,7 +74,64 @@ class LocalSearchTool:
             self.history_aware_retriever,
             self.question_answer_chain,
         )
-
+        
+        # 关键词提取链
+        self.keyword_prompt = ChatPromptTemplate.from_messages([
+            ("system", """你是一个专门从用户查询中提取搜索关键词的助手。你需要将关键词分为两类：
+                1. 低级关键词：具体实体名称、人物、地点、具体事件等
+                2. 高级关键词：主题、概念、关系类型等
+                
+                返回格式必须是JSON格式：
+                {{
+                    "low_level": ["关键词1", "关键词2", ...], 
+                    "high_level": ["关键词1", "关键词2", ...]
+                }}
+                
+                注意：
+                - 每类提取3-5个关键词即可
+                - 不要添加任何解释或其他文本，只返回JSON
+                - 如果某类无关键词，则返回空列表
+                """),
+            ("human", "{query}")
+        ])
+        
+        self.keyword_chain = self.keyword_prompt | self.llm | StrOutputParser()
+    
+    def extract_keywords(self, query: str) -> Dict[str, List[str]]:
+        """从查询中提取关键词"""
+        # 检查缓存
+        cached_keywords = self.cache_manager.get(f"keywords:{query}")
+        if cached_keywords:
+            return cached_keywords
+            
+        try:
+            llm_start = time.time()
+            
+            # 尝试解析JSON结果
+            result = self.keyword_chain.invoke({"query": query})
+            import json
+            keywords = json.loads(result)
+            
+            self.performance_metrics["llm_time"] = time.time() - llm_start
+            
+            # 确保包含必要的键
+            if not isinstance(keywords, dict):
+                keywords = {}
+            if "low_level" not in keywords:
+                keywords["low_level"] = []
+            if "high_level" not in keywords:
+                keywords["high_level"] = []
+                
+            # 缓存结果
+            self.cache_manager.set(f"keywords:{query}", keywords)
+            
+            return keywords
+            
+        except Exception as e:
+            print(f"关键词提取失败: {e}")
+            # 返回空字典作为默认值
+            return {"low_level": [], "high_level": []}
+    
     def _filter_documents_by_relevance(self, docs, query: str) -> List:
         """根据相关性过滤文档"""
         # 使用向量相似度对文档进行排序
@@ -127,40 +164,67 @@ class LocalSearchTool:
             return docs
 
     @traceable
-    def search(self, question: str, keywords: List = None, chat_history: List = None) -> str:
-        """Enhanced local search with keywords and chat history"""
-        # 提取消息中的关键词，如果有的话
-        if isinstance(question, dict) and "query" in question:
-            if "keywords" in question:
-                keywords = question["keywords"]
-            question = question["query"]
-            
-        # Check cache first
-        cached_result = self.cache.get(question, keywords)
+    def search(self, query_input: Any) -> str:
+        """执行本地搜索"""
+        overall_start = time.time()
+        
+        # 解析输入
+        if isinstance(query_input, dict) and "query" in query_input:
+            query = query_input["query"]
+            keywords = query_input.get("keywords", [])
+        else:
+            query = str(query_input)
+            keywords = []
+        
+        # 检查缓存
+        cache_key = query
+        if keywords:
+            cache_key = f"{query}||{','.join(sorted(keywords))}"
+        
+        cached_result = self.cache_manager.get(cache_key)
         if cached_result:
             return cached_result
-            
-        if chat_history is None:
-            chat_history = self.chat_history
-            
+        
         # 使用标准RAG链
         try:
             ai_msg = self.rag_chain.invoke({
-                "input": question,
-                "response_type": response_type,
-                "chat_history": chat_history,
+                "input": query,
+                "response_type": "多个段落",
+                "chat_history": self.chat_history,
             })
             
+            # 获取结果
             result = ai_msg.get("answer", "抱歉，我无法回答这个问题。")
-            self.cache.set(question, keywords if keywords else [], result)
+            
+            # 缓存结果
+            self.cache_manager.set(cache_key, result)
+            
+            # 记录性能指标
+            self.performance_metrics["total_time"] = time.time() - overall_start
+            
             return result
         except Exception as e:
             print(f"本地搜索失败: {e}")
-            return f"搜索过程中出现问题: {str(e)}"
-
+            error_msg = f"搜索过程中出现问题: {str(e)}"
+            
+            # 记录性能指标
+            self.performance_metrics["total_time"] = time.time() - overall_start
+            
+            return error_msg
+    
     def get_tool(self):
+        """返回LangChain兼容的检索工具"""
         return create_retriever_tool(
             self.retriever,
             "lc_search_tool",
             lc_description,
         )
+    
+    def close(self):
+        """关闭资源"""
+        # 先调用父类方法关闭基础资源
+        super().close()
+        
+        # 关闭本地搜索器
+        if hasattr(self, 'local_searcher'):
+            self.local_searcher.close()

@@ -3,13 +3,9 @@ import time
 from graphdatascience import GraphDataScience
 from typing import Tuple, List, Any, Dict
 from dataclasses import dataclass
-from langchain_community.graphs import Neo4jGraph
 
 from config.settings import similarity_threshold
-
-from dotenv import load_dotenv
-
-load_dotenv()
+from config.neo4jdb import get_db_manager
 
 @dataclass
 class GDSConfig:
@@ -41,12 +37,12 @@ class SimilarEntityDetector:
             config: GDS配置参数，包含连接信息和算法阈值
         """
         self.config = config
-        # 移除了timeout参数
+        db_manager = get_db_manager()
         self.gds = GraphDataScience(
             self.config.uri,
             auth=(self.config.username, self.config.password)
         )
-        self.graph = Neo4jGraph()
+        self.graph = db_manager.graph
         self.projection_name = "entities"
         self.G = None
         

@@ -11,6 +11,7 @@ from config.prompt import LC_SYSTEM_PROMPT, REDUCE_SYSTEM_PROMPT
 from config.settings import response_type
 from search.tool.local_search_tool import LocalSearchTool
 from search.tool.global_search_tool import GlobalSearchTool
+
 from agent.base import BaseAgent
 
 
@@ -22,8 +23,11 @@ class GraphAgent(BaseAgent):
         self.local_tool = LocalSearchTool()
         self.global_tool = GlobalSearchTool()
         
-        # 调用父类构造函数，设置缓存目录
-        super().__init__(cache_dir="./cache/graph_agent")
+        # 设置缓存目录
+        self.cache_dir = "./cache/graph_agent"
+        
+        # 调用父类构造函数
+        super().__init__(cache_dir=self.cache_dir)
 
     def _setup_tools(self) -> List:
         """设置工具"""
@@ -53,7 +57,7 @@ class GraphAgent(BaseAgent):
     def _extract_keywords(self, query: str) -> Dict[str, List[str]]:
         """提取查询关键词"""
         # 检查缓存
-        cached_keywords = self.query_cache.get(f"keywords_{query}")
+        cached_keywords = self.cache_manager.get(f"keywords:{query}")
         if cached_keywords:
             return cached_keywords
             
@@ -90,7 +94,7 @@ class GraphAgent(BaseAgent):
                         keywords["high_level"] = []
                         
                     # 缓存结果
-                    self.query_cache.set(f"keywords_{query}", keywords)
+                    self.cache_manager.set(f"keywords:{query}", keywords)
                     return keywords
                 except:
                     pass
@@ -150,7 +154,7 @@ class GraphAgent(BaseAgent):
         docs = messages[-1].content
 
         # 检查缓存
-        cached_result = self.query_cache.get(f"generate_{question}")
+        cached_result = self.cache_manager.get(f"generate:{question}")
         if cached_result:
             self._log_execution("generate", 
                                {"question": question, "docs_length": len(docs)}, 
@@ -183,7 +187,7 @@ class GraphAgent(BaseAgent):
         })
         
         # 缓存结果
-        self.query_cache.set(f"generate_{question}", response)
+        self.cache_manager.set(f"generate:{question}", response)
         
         self._log_execution("generate", 
                            {"question": question, "docs_length": len(docs)}, 
@@ -198,7 +202,7 @@ class GraphAgent(BaseAgent):
         docs = messages[-1].content
 
         # 检查缓存
-        cached_result = self.query_cache.get(f"reduce_{question}")
+        cached_result = self.cache_manager.get(f"reduce:{question}")
         if cached_result:
             self._log_execution("reduce", 
                                {"question": question, "docs_length": len(docs)}, 
@@ -224,7 +228,7 @@ class GraphAgent(BaseAgent):
         })
         
         # 缓存结果
-        self.query_cache.set(f"reduce_{question}", response)
+        self.cache_manager.set(f"reduce:{question}", response)
         
         self._log_execution("reduce", 
                            {"question": question, "docs_length": len(docs)}, 

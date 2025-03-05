@@ -1,13 +1,9 @@
 import concurrent.futures
 from langchain_community.vectorstores import Neo4jVector
-from langchain_community.graphs import Neo4jGraph
 from typing import List, Dict, Any, Optional
 import time
 from model.get_models import get_embeddings_model, get_llm_model
-
-from dotenv import load_dotenv
-
-load_dotenv()
+from config.neo4jdb import get_db_manager
 
 class EntityIndexManager:
     """
@@ -25,7 +21,8 @@ class EntityIndexManager:
             max_workers: 并行工作线程数
         """
         # 初始化图数据库连接
-        self.graph = Neo4jGraph(refresh_schema=refresh_schema)
+        db_manager = get_db_manager()
+        self.graph = db_manager.graph
         
         # 初始化模型
         self.embeddings = get_embeddings_model()

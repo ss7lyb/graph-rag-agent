@@ -1,13 +1,10 @@
-import os
 from typing import List
 from tqdm import tqdm
-from dotenv import load_dotenv
-from langchain_community.graphs import Neo4jGraph
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from neo4j import GraphDatabase
 
 from config.prompt import MAP_SYSTEM_PROMPT, REDUCE_SYSTEM_PROMPT
+from config.neo4jdb import get_db_manager
 
 class GlobalSearch:
     """
@@ -20,38 +17,15 @@ class GlobalSearch:
     """
     
     def __init__(self, llm, response_type: str = "多个段落"):
-        """
-        初始化全局搜索器
-        
-        参数:
-            llm: 大语言模型实例
-            response_type: 响应类型，默认为"多个段落"
-        """
-        # 加载环境变量
-        load_dotenv('../.env')
-        
         # 保存模型实例和配置
         self.llm = llm
         self.response_type = response_type
         
-        # Neo4j数据库配置
-        self.neo4j_uri = os.getenv('NEO4J_URI')
-        self.neo4j_username = os.getenv('NEO4J_USERNAME')
-        self.neo4j_password = os.getenv('NEO4J_PASSWORD')
+        # 使用数据库连接管理
+        db_manager = get_db_manager()
         
         # 初始化Neo4j图实例
-        self.graph = Neo4jGraph(
-            url=self.neo4j_uri,
-            username=self.neo4j_username,
-            password=self.neo4j_password,
-            refresh_schema=False,
-        )
-        
-        # 初始化Neo4j驱动，用于资源管理
-        self.driver = GraphDatabase.driver(
-            self.neo4j_uri,
-            auth=(self.neo4j_username, self.neo4j_password)
-        )
+        self.graph = db_manager.get_graph()
         
     def _get_community_data(self, level: int) -> List[dict]:
         """
@@ -164,12 +138,7 @@ class GlobalSearch:
         return self._reduce_results(query, intermediate_results)
         
     def close(self):
-        """关闭Neo4j驱动连接"""
-        if hasattr(self, 'driver'):
-            self.driver.close()
-        if hasattr(self, 'graph'):
-            # 关闭 Neo4jGraph 的连接（如果有清理方法的话）
-            pass
+        pass
             
     def __enter__(self):
         """上下文管理器入口"""

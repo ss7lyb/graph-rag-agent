@@ -3,7 +3,6 @@ import ast
 import time
 import concurrent.futures
 from typing import List, Any, Optional
-from langchain_community.graphs import Neo4jGraph
 from langchain.prompts import (
     ChatPromptTemplate,
     MessagesPlaceholder,
@@ -12,10 +11,7 @@ from langchain.prompts import (
 )
 from model.get_models import get_llm_model
 from config.prompt import system_template_build_index, user_template_build_index
-
-from dotenv import load_dotenv
-
-load_dotenv()
+from config.neo4jdb import get_db_manager
 
 class EntityMerger:
     """
@@ -23,7 +19,7 @@ class EntityMerger:
     主要功能包括使用LLM分析实体相似性、解析合并建议，以及执行实体合并操作。
     """
     
-    def __init__(self, graph: Neo4jGraph = None, batch_size: int = 20, max_workers: int = 4):
+    def __init__(self, graph = None, batch_size: int = 20, max_workers: int = 4):
         """
         初始化实体合并管理器
         Args:
@@ -32,7 +28,8 @@ class EntityMerger:
             max_workers: 并行工作线程数
         """
         # 初始化图数据库连接
-        self.graph = graph if graph else Neo4jGraph()
+        db_manager = get_db_manager()
+        self.graph = db_manager.graph
         # 获取语言模型
         self.llm = get_llm_model()
         # 批处理和并行参数

@@ -1,4 +1,3 @@
-from dotenv import load_dotenv
 from typing import Dict, Any, List
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
@@ -22,6 +21,7 @@ from config.settings import (
     CHUNK_SIZE,
     OVERLAP
 )
+from config.neo4jdb import get_db_manager
 from processor.file_reader import FileReader
 from processor.text_chunker import ChineseTextChunker
 from graph.struct_builder import GraphStructureBuilder
@@ -49,9 +49,6 @@ class KnowledgeGraphBuilder:
         # 初始化终端界面
         self.console = Console()
         self.file_contents = []
-        
-        # 加载环境变量
-        load_dotenv()
         
         # 添加计时器
         self.start_time = None
@@ -93,7 +90,8 @@ class KnowledgeGraphBuilder:
             progress.advance(task)
             
             # 初始化图数据库连接
-            self.graph = Neo4jGraph()
+            db_manager = get_db_manager()
+            self.graph = db_manager.graph
             progress.advance(task)
             
             # 初始化文本处理器

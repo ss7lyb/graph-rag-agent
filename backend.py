@@ -1,17 +1,13 @@
-import os
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 import uvicorn
-from neo4j import GraphDatabase, Result
-from dotenv import load_dotenv
+from neo4j import Result
 import traceback
 import re
 import threading
 import time
 import functools
-
-load_dotenv()
 
 import shutup
 shutup.please()
@@ -19,6 +15,7 @@ shutup.please()
 from langchain_core.messages import RemoveMessage, AIMessage, HumanMessage, ToolMessage
 from agent.graph_agent import GraphAgent
 from agent.hybrid_agent import HybridAgent
+from config.neo4jdb import get_db_manager
 
 app = FastAPI()
 
@@ -78,10 +75,8 @@ def shutdown_event():
         print("已关闭Neo4j连接")
 
 # Initialize Neo4j driver
-driver = GraphDatabase.driver(
-    os.getenv('NEO4J_URI'),
-    auth=(os.getenv('NEO4J_USERNAME'), os.getenv('NEO4J_PASSWORD'))
-)
+db_manager = get_db_manager()
+driver = db_manager.driver
 
 # Pydantic models
 class ChatRequest(BaseModel):

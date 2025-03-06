@@ -13,6 +13,8 @@ import time
 import shutup
 shutup.please()
 
+from config.settings import examples
+
 API_URL = "http://localhost:8000"
 
 def init_session_state():
@@ -979,12 +981,7 @@ def main():
         
         # 示例问题部分
         st.header("示例问题")
-        example_questions = [
-            "《悟空传》的主要人物有哪些？",
-            "唐僧和会说话的树讨论了什么？",
-            "孙悟空跟女妖之间有什么故事？",
-            "他最后的选择是什么？"
-        ]
+        example_questions = examples
         
         for question in example_questions:
             st.markdown(f"""
@@ -999,7 +996,7 @@ def main():
         # 项目信息
         st.markdown("""
         ### 关于
-        这个 GraphRAG 演示基于《悟空传》的前7章建立知识图谱，使用不同的Agent策略回答问题。
+        这个 GraphRAG 演示基于本地文档建立的知识图谱，可以使用不同的Agent策略回答问题。
         
         **调试模式**可查看:
         - 执行轨迹

@@ -49,8 +49,9 @@ class EntityIndexManager:
             self.graph.query(query)
         
     def clear_existing_index(self) -> None:
-        """清除已存在的实体embedding索引"""
+        """清除已存在的实体embedding索引，为了防止有的时候embedding模型的切换问题，这里顺便清下vector索引"""
         self.graph.query("DROP INDEX entity_embedding IF EXISTS")
+        self.graph.query("DROP INDEX vector IF EXISTS")
 
     def create_entity_index(self, 
                           node_label: str = '__Entity__',

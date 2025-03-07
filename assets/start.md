@@ -91,6 +91,8 @@ cd graph-rag-agent/
 python build/main.py
 ```
 
+注意，对chunk的索引构建，一定需要在entity的索引构建完之后才能进行，否则会报错。因为chunk的索引是依赖与entity里建立的索引构建的。
+
 测试对知识图谱的搜索：
 
 ```bash

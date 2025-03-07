@@ -4,6 +4,7 @@ from rich.text import Text
 
 from build_graph import KnowledgeGraphBuilder
 from build_index_and_community import IndexCommunityBuilder
+from build_chunk_index import ChunkIndexBuilder
 
 class KnowledgeGraphProcessor:
     """
@@ -26,9 +27,13 @@ class KnowledgeGraphProcessor:
             graph_builder = KnowledgeGraphBuilder()
             graph_builder.process()
             
-            # 2. 构建索引和社区
+            # 2. 构建实体索引和社区
             index_builder = IndexCommunityBuilder()
             index_builder.process()
+            
+            # 3. 构建Chunk索引
+            chunk_index_builder = ChunkIndexBuilder()
+            chunk_index_builder.process()
             
             # 显示完成面板
             success_text = Text("知识图谱处理流程完成", style="bold green")

@@ -179,9 +179,12 @@ NAIVE_PROMPT="""
 - 在回复的最后才输出数据引用的情况，单独作为一段。
 
 输出引用数据的格式：
+
+### 引用数据
 {{'data': {{'Chunks':[逗号分隔的id列表] }} }}
 
 例如：
+### 引用数据
 {{'data': {{'Chunks':['d0509111239ae77ef1c630458a9eca372fb204d6','74509e55ff43bc35d42129e9198cd3c897f56ecb'] }} }}
 """
 
@@ -212,11 +215,16 @@ LC_SYSTEM_PROMPT="""
 - {response_type}
 - 根据要求的长度和格式，把回复划分为适当的章节和段落，并用markdown语法标记回复的样式。  
 - 在回复的最后才输出数据引用的情况，单独作为一段。
-输出引用数据的格式：
-{{'data': {{'Entities':[逗号分隔的顺序号列表], 'Reports':[逗号分隔的顺序号列表], 'Relationships':[逗号分隔的顺序号列表], 'Chunks':[逗号分隔的id列表] }} }}
-例如：
-{{'data': {{'Entities':[3], 'Reports':[2, 6], 'Relationships':[12, 13, 15, 16, 64], 'Chunks':['d0509111239ae77ef1c630458a9eca372fb204d6','74509e55ff43bc35d42129e9198cd3c897f56ecb'] }} }}
 
+输出引用数据的格式：
+### 引用数据
+
+{{'data': {{'Entities':[逗号分隔的顺序号列表], 'Reports':[逗号分隔的顺序号列表], 'Relationships':[逗号分隔的顺序号列表], 'Chunks':[逗号分隔的id列表] }} }}
+
+例如：
+
+### 引用数据
+{{'data': {{'Entities':[3], 'Reports':[2, 6], 'Relationships':[12, 13, 15, 16, 64], 'Chunks':['d0509111239ae77ef1c630458a9eca372fb204d6','74509e55ff43bc35d42129e9198cd3c897f56ecb'] }} }}
 """
 
 MAP_SYSTEM_PROMPT = """

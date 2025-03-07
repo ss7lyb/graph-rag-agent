@@ -7,16 +7,25 @@ import traceback
 import threading
 import time
 import functools
+import re
 
 import shutup
 shutup.please()
+import jieba
+import jieba.analyse
 
 from langchain_core.messages import RemoveMessage, AIMessage, HumanMessage, ToolMessage
 from agent.graph_agent import GraphAgent
 from agent.hybrid_agent import HybridAgent
+from agent.naive_rag_agent import NaiveRagAgent
 from config.neo4jdb import get_db_manager
 
+# 初始化 FastAPI 应用
 app = FastAPI()
+
+# 初始化 Neo4j 数据库连接
+db_manager = get_db_manager()
+driver = db_manager.driver
 
 # 创建线程锁和时间戳字典用于并发控制
 feedback_locks = {}
@@ -24,65 +33,20 @@ operation_timestamps = {}
 chat_locks = {}
 chat_timestamps = {}
 
-# 创建一个装饰器来测量API端点的性能
-def measure_performance(endpoint_name):
-    def decorator(func):
-        @functools.wraps(func)
-        async def wrapper(*args, **kwargs):
-            start_time = time.time()
-            
-            try:
-                result = await func(*args, **kwargs)
-                
-                # 记录性能
-                duration = time.time() - start_time
-                print(f"API性能 - {endpoint_name}: {duration:.4f}s")
-                
-                # 可以添加到日志或指标系统
-                # ...
-                
-                return result
-            except Exception as e:
-                # 记录异常和性能
-                duration = time.time() - start_time
-                print(f"API异常 - {endpoint_name}: {str(e)} ({duration:.4f}s)")
-                raise
-                
-        return wrapper
-    return decorator
-
-# 创建一个字典来存储所有可用的Agent
+# 创建一个字典来存储所有可用的 Agent
 agents = {
     "graph_agent": GraphAgent(),
     "hybrid_agent": HybridAgent(),
+    "naive_rag_agent": NaiveRagAgent(),
 }
 
-# 在应用关闭时清理资源
-@app.on_event("shutdown")
-def shutdown_event():
-    """应用关闭时清理资源"""
-    for agent_name, agent in agents.items():
-        try:
-            agent.close()
-            print(f"已关闭 {agent_name} 资源")
-        except Exception as e:
-            print(f"关闭 {agent_name} 资源时出错: {e}")
-    
-    # 关闭Neo4j连接
-    if driver:
-        driver.close()
-        print("已关闭Neo4j连接")
+# ================ 数据模型定义 ================
 
-# Initialize Neo4j driver
-db_manager = get_db_manager()
-driver = db_manager.driver
-
-# Pydantic models
 class ChatRequest(BaseModel):
     message: str
     session_id: str
     debug: bool = False
-    agent_type: str = "graph_agent"  # default to graph_agent
+    agent_type: str = "graph_agent"  # 默认采用 graphrag
 
 class ChatResponse(BaseModel):
     answer: str
@@ -113,6 +77,32 @@ class FeedbackResponse(BaseModel):
     status: str
     action: str
 
+# ================ 工具函数 ================
+
+def measure_performance(endpoint_name):
+    """性能测量装饰器"""
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            start_time = time.time()
+            
+            try:
+                result = await func(*args, **kwargs)
+                
+                # 记录性能
+                duration = time.time() - start_time
+                print(f"API性能 - {endpoint_name}: {duration:.4f}s")
+                
+                return result
+            except Exception as e:
+                # 记录异常和性能
+                duration = time.time() - start_time
+                print(f"API异常 - {endpoint_name}: {str(e)} ({duration:.4f}s)")
+                raise
+                
+        return wrapper
+    return decorator
+
 def format_messages_for_response(messages: List[Dict]) -> str:
     """将消息格式化为字符串"""
     formatted = []
@@ -123,7 +113,7 @@ def format_messages_for_response(messages: List[Dict]) -> str:
     return "\\n".join(formatted)
 
 def format_execution_log(log: List[Dict]) -> List[Dict]:
-    """格式化执行日志用于 JSON 响应"""
+    """格式化执行日志用于JSON响应"""
     formatted_log = []
     for entry in log:
         if isinstance(entry["input"], dict):
@@ -154,199 +144,323 @@ def format_execution_log(log: List[Dict]) -> List[Dict]:
         formatted_log.append(formatted_entry)
     return formatted_log
 
-def extract_kg_from_message(message: str, query: str = None) -> Dict:
-    """从消息中提取知识图谱实体和关系数据，并基于查询进行过滤"""
-    try:
-        # 首先尝试找到引用数据部分 - 通常在"#### 引用数据"之后
-        import re
-        reference_sections = re.findall(r'####\s+引用数据\s*(.*?)(?=###|\Z)', message, re.DOTALL)
+def extract_smart_keywords(query):
+    """使用jieba智能提取中文关键词"""
+    if not query:
+        return []
         
+    try:        
+        # 常见的停用词
+        stop_words = ['什么', '之间', '发生', '关系', '的', '和', '有', '是', '在', '了', '吗',
+                     '为什么', '如何', '怎么', '怎样', '请问', '告诉', '我', '你', '他', '她', '它',
+                     '们', '这个', '那个', '这些', '那些', '一个', '一些', '一下', '地', '得', '着']
+        
+        # 使用TF-IDF提取关键词
+        tfidf_keywords = jieba.analyse.extract_tags(query, topK=3)
+        
+        # 使用TextRank提取关键词
+        textrank_keywords = jieba.analyse.textrank(query, topK=3)
+        
+        # 使用精确模式分词提取2个字以上的词
+        seg_list = jieba.cut(query, cut_all=False)
+        seg_words = [word for word in seg_list if len(word) >= 2 and word not in stop_words]
+        
+        # 合并关键词并去重
+        all_keywords = list(set(tfidf_keywords + textrank_keywords + seg_words))
+        
+        # 按长度排序，优先使用长词
+        all_keywords.sort(key=len, reverse=True)
+        
+        # 如果关键词超过5个，只取前5个
+        result = all_keywords[:5] if len(all_keywords) > 5 else all_keywords
+        
+        # 如果没有提取到关键词，尝试直接提取实体名称
+        if not result:
+            # 匹配实体名称
+            import re
+            entity_names = re.findall(r'[\u4e00-\u9fa5]{2,}', query)
+            result = [name for name in entity_names if name not in stop_words]
+        
+        return result
+        
+    except ImportError:
+        print("jieba库未安装，使用简单分词")
+        # 回退到简单的正则匹配
+        import re
+        words = re.findall(r'[\u4e00-\u9fa5]{2,}|[a-zA-Z]{2,}', query)
+        stop_words = ['什么', '之间', '发生', '关系', '的', '和', '有', '是', '在', '了', '吗']
+        return [w for w in words if w not in stop_words]
+    except Exception as e:
+        print(f"关键词提取失败: {e}")
+        # 最后回退到直接分割
+        return [query]
+
+# ================ 知识图谱相关函数 ================
+
+def extract_kg_from_message(message: str, query: str = None) -> Dict:
+    """从消息中提取知识图谱实体和关系数据"""
+    try:
+        # 直接使用正则表达式提取各部分数据
         entity_ids = []
         rel_ids = []
         chunk_ids = []
         
-        if reference_sections:
-            # 从引用部分提取数据
-            reference_text = reference_sections[0]
+        # 匹配 Entities 列表
+        entity_pattern = r"['\"]?Entities['\"]?\s*:\s*\[(.*?)\]"
+        entity_match = re.search(entity_pattern, message, re.DOTALL)
+        if entity_match:
+            entity_str = entity_match.group(1).strip()
+            try:
+                # 处理数字ID
+                entity_parts = [p.strip() for p in entity_str.split(',') if p.strip()]
+                for part in entity_parts:
+                    clean_part = part.strip("'\"")
+                    if clean_part.isdigit():
+                        entity_ids.append(int(clean_part))
+                    else:
+                        entity_ids.append(clean_part)
+            except Exception as e:
+                print(f"解析实体ID时出错: {e}")
+        
+        # 匹配 Relationships 或 Reports 列表
+        rel_pattern = r"['\"]?(?:Relationships|Reports)['\"]?\s*:\s*\[(.*?)\]"
+        rel_match = re.search(rel_pattern, message, re.DOTALL)
+        if rel_match:
+            rel_str = rel_match.group(1).strip()
+            try:
+                # 处理数字ID
+                rel_parts = [p.strip() for p in rel_str.split(',') if p.strip()]
+                for part in rel_parts:
+                    clean_part = part.strip("'\"")
+                    if clean_part.isdigit():
+                        rel_ids.append(int(clean_part))
+                    else:
+                        rel_ids.append(clean_part)
+            except Exception as e:
+                print(f"解析关系ID时出错: {e}")
+        
+        # 匹配 Chunks 列表
+        chunk_pattern = r"['\"]?Chunks['\"]?\s*:\s*\[(.*?)\]"
+        chunk_match = re.search(chunk_pattern, message, re.DOTALL)
+        if chunk_match:
+            chunks_str = chunk_match.group(1).strip()
             
-            # 改进正则表达式，更加灵活地匹配JSON对象
-            data_match = re.search(r"\{'data':\s*{(.*?)}\}", reference_text, re.DOTALL) or \
-                        re.search(r"{'data':\s*{(.*?)}\}", reference_text, re.DOTALL)
-                        
-            if data_match:
-                data_str = "{" + data_match.group(1) + "}"
-                # 更好地清理数据，处理单引号和双引号混用情况
-                cleaned_data = data_str.replace("'", '"').replace('"[', '[').replace(']"', ']')
-                
-                try:
-                    # 尝试作为JSON解析
-                    import json
-                    data_dict = json.loads(cleaned_data)
-                    
-                    # 提取实体、关系和块ID
-                    entity_ids = data_dict.get('Entities', [])
-                    rel_ids = data_dict.get('Relationships', []) or data_dict.get('Reports', [])
-                    chunk_ids = data_dict.get('Chunks', [])
-                    
-                    # 确保所有IDs都是字符串列表
-                    entity_ids = [str(e) for e in entity_ids]
-                    rel_ids = [str(r) for r in rel_ids]
-                    
-                except json.JSONDecodeError:
-                    # 如果JSON解析失败，使用改进的正则表达式提取
-                    print("JSON解析失败，尝试使用正则表达式提取数据")
-                    
-                    # 提取实体IDs - 改进正则匹配模式
-                    entities_match = re.search(r"'Entities':\s*\[(.*?)\]", reference_text, re.DOTALL)
-                    if entities_match:
-                        entity_str = entities_match.group(1).strip()
-                        entity_ids = [id.strip() for id in re.findall(r'(\d+|\'[^\']+\')', entity_str) if id.strip()]
-                    
-                    # 提取关系IDs - 同样改进模式
-                    rels_match = re.search(r"'Relationships':\s*\[(.*?)\]", reference_text, re.DOTALL) or \
-                                re.search(r"'Reports':\s*\[(.*?)\]", reference_text, re.DOTALL)
-                    
-                    if rels_match:
-                        rel_str = rels_match.group(1).strip()
-                        rel_ids = [id.strip() for id in re.findall(r'(\d+|\'[^\']+\')', rel_str) if id.strip()]
-                    
-                    # 提取Chunk IDs - 使用更精确的模式
-                    chunks_match = re.search(r"'Chunks':\s*\[(.*?)\]", reference_text, re.DOTALL)
-                    if chunks_match:
-                        chunks_str = chunks_match.group(1).strip()
-                        # 处理带引号的ID
-                        chunk_ids = re.findall(r"'([^']*)'", chunks_str) or re.findall(r'"([^"]*)"', chunks_str)
-                        if not chunk_ids:
-                            # 处理不带引号的ID
-                            chunk_ids = [id.strip() for id in chunks_str.split(',') if id.strip()]
+            # 处理带引号的chunk IDs
+            if "'" in chunks_str or '"' in chunks_str:
+                # 匹配所有被引号包围的内容
+                chunk_parts = re.findall(r"['\"]([^'\"]*)['\"]", chunks_str)
+                chunk_ids = [part for part in chunk_parts if part]
+            else:
+                # 没有引号的情况，直接分割
+                chunk_ids = [part.strip() for part in chunks_str.split(',') if part.strip()]
         
-        # 打印提取的数据
-        print(f"提取的数据: entity_ids={entity_ids}, rel_ids={rel_ids}, chunk_ids={chunk_ids}")
+        # 提取关键词 (可选)
+        query_keywords = []
+        if query:
+            query_keywords = extract_smart_keywords(query)
         
-        # 查询相关的实体和关系，使用查询文本进行过滤
-        if entity_ids or rel_ids or chunk_ids:
-            # 如果提供了查询，提取关键词用于过滤
-            query_keywords = None
-            if query:
-                import re
-                # 提取有意义的关键词，排除常见连接词和疑问词
-                keywords = re.findall(r'\b\w+\b', query.lower())
-                query_keywords = [k for k in keywords if len(k) > 2 and k not in ['什么', '之间', '发生', '关系', '的', '和', '有', '是']]
-                print(f"提取的查询关键词: {query_keywords}")
-            
-            return get_knowledge_graph_for_ids(entity_ids, rel_ids, chunk_ids, query_keywords=query_keywords, max_distance=1)
-        
-        # 如果没有提取到任何有效数据，返回空的知识图谱
-        return {"nodes": [], "links": []}
+        # 获取知识图谱
+        return get_knowledge_graph_for_ids(entity_ids, rel_ids, chunk_ids)
         
     except Exception as e:
         print(f"提取知识图谱数据失败: {str(e)}")
         traceback.print_exc()
         return {"nodes": [], "links": []}
 
-def get_knowledge_graph_for_ids(entity_ids=None, relationship_ids=None, chunk_ids=None, query_keywords=None, max_distance=1):
-    """根据ID获取知识图谱数据，并可选基于查询关键词进行过滤"""
-    # 确保所有参数都有默认值，避免None
-    entity_ids = entity_ids or []
-    relationship_ids = relationship_ids or []
-    chunk_ids = chunk_ids or []
-    
-    if not entity_ids and not relationship_ids and not chunk_ids:
-        return {"nodes": [], "links": []}
-        
+def check_entity_existence(entity_ids):
+    """检查实体ID是否存在于数据库中"""
     try:
-        # 转换实体ID列表 - 支持数字ID和字符串ID
-        numeric_ids = []
-        string_ids = []
+        # 尝试多种格式查询，确保能找到实体
+        query = """
+        // 尝试不同格式匹配实体ID
+        UNWIND $ids AS id
+        OPTIONAL MATCH (e:__Entity__) 
+        WHERE e.id = id OR 
+              e.id = toString(id) OR
+              toString(e.id) = toString(id)
+        RETURN id AS input_id, e.id AS found_id, labels(e) AS labels
+        """
         
-        for eid in entity_ids:
-            try:
-                if isinstance(eid, str) and eid.isdigit():
-                    numeric_ids.append(int(eid))
-                elif isinstance(eid, int):
-                    numeric_ids.append(eid)
-                else:
-                    string_ids.append(str(eid))
-            except:
-                string_ids.append(str(eid))
+        params = {"ids": entity_ids}
         
-        # 确保查询参数正确设置
-        params = {
-            "entity_ids": numeric_ids,
-            "entity_id_strings": string_ids,
-            "chunk_ids": chunk_ids,
-            "query_keywords": query_keywords,
-            "max_distance": max_distance
-        }
+        result = driver.execute_query(query, params)
         
-        # 输出参数供调试
-        print(f"正在查询特定ID的知识图谱，参数: {params}")
+        if result.records:
+            found_entities = [r.get("found_id") for r in result.records if r.get("found_id") is not None]
+            return found_entities
+        else:
+            print("没有找到任何匹配的实体")
+            return []
+            
+    except Exception as e:
+        print(f"检查实体ID时出错: {str(e)}")
+        return []
+
+def inspect_entity_by_id(entity_id):
+    """检查特定ID的实体详情"""
+    try:
+        query = """
+        MATCH (e) 
+        WHERE e.id = $id
+        RETURN e, labels(e) as labels
+        """
+        
+        result = driver.execute_query(query, {"id": entity_id})
+        
+        if result.records and len(result.records) > 0:
+            return True
+        else:
+            print(f"未找到ID为 {entity_id} 的实体")
+            return False
+            
+    except Exception as e:
+        print(f"检查实体详情时出错: {str(e)}")
+        return False
+
+def get_entities_from_chunk(chunk_id):
+    """根据文本块ID查询相关联的实体"""
+    try:
+        query = """
+        MATCH (c:__Chunk__)-[:MENTIONS]->(e:__Entity__)
+        WHERE c.id = $chunk_id
+        RETURN collect(distinct e.id) AS entity_ids
+        """
+        
+        params = {"chunk_id": chunk_id}
+        
+        result = driver.execute_query(query, params)
+        
+        if result.records and len(result.records) > 0:
+            entity_ids = result.records[0].get("entity_ids", [])
+            return entity_ids
+        else:
+            print(f"文本块 {chunk_id} 没有关联的实体")
+            return []
+            
+    except Exception as e:
+        print(f"查询文本块关联实体时出错: {str(e)}")
+        return []
+
+def get_graph_from_chunks(chunk_ids):
+    """直接从文本块获取知识图谱"""
+    try:
+        print(f"从文本块获取知识图谱: {chunk_ids}")
         
         query = """
-        // 初始化实体集合
-        WITH [] AS entities_set
+        // 通过文本块直接查询相关实体
+        MATCH (c:__Chunk__)-[:MENTIONS]->(e:__Entity__)
+        WHERE c.id IN $chunk_ids
         
-        // 添加从实体ID获取的节点
-        CALL {
-            // 匹配指定的实体ID
-            MATCH (e:__Entity__)
-            WHERE ID(e) IN $entity_ids OR e.id IN $entity_id_strings
-            RETURN collect(e) AS entity_nodes
+        // 获取这些实体之间的关系
+        WITH collect(DISTINCT e) AS entities
+        UNWIND entities AS e1
+        OPTIONAL MATCH (e1)-[r]-(e2:__Entity__)
+        WHERE e2 IN entities
+        
+        // 收集结果
+        RETURN 
+        [e IN entities | {
+            id: e.id,
+            label: e.id,
+            description: CASE WHEN e.description IS NULL THEN '' ELSE e.description END,
+            group: CASE 
+                WHEN [lbl IN labels(e) WHERE lbl <> '__Entity__'] <> []
+                THEN [lbl IN labels(e) WHERE lbl <> '__Entity__'][0]
+                ELSE 'Unknown'
+            END
+        }] AS nodes,
+        [r IN collect(r) WHERE r IS NOT NULL | {
+            source: startNode(r).id,
+            target: endNode(r).id,
+            label: type(r),
+            weight: 1
+        }] AS links
+        """
+        
+        result = driver.execute_query(query, {"chunk_ids": chunk_ids})
+        
+        if not result.records or len(result.records) == 0:
+            print("从文本块查询结果为空")
+            return {"nodes": [], "links": []}
+            
+        record = result.records[0]
+        nodes = record.get("nodes", [])
+        links = record.get("links", [])
+        print(f"从文本块查询结果: {len(nodes)} 个节点, {len(links)} 个连接")
+        
+        return {
+            "nodes": nodes,
+            "links": links
         }
         
-        // 添加从文本块ID获取的相关实体
-        CALL {
-            // 匹配指定的文本块，找到关联的实体
-            MATCH (c:__Chunk__)-[:MENTIONS]->(e:__Entity__)
-            WHERE c.id IN $chunk_ids
-            RETURN collect(DISTINCT e) AS chunk_related_entities
+    except Exception as e:
+        print(f"从文本块获取知识图谱失败: {str(e)}")
+        return {"nodes": [], "links": []}
+
+def get_knowledge_graph_for_ids(entity_ids=None, relationship_ids=None, chunk_ids=None):
+    """根据ID获取知识图谱数据"""
+    try:
+        # 确保所有参数都有默认值，避免None
+        entity_ids = entity_ids or []
+        relationship_ids = relationship_ids or []
+        chunk_ids = chunk_ids or []
+        
+        # 如果提供了文本块ID，但没有实体ID，尝试从文本块获取实体
+        if chunk_ids and not entity_ids:
+            for chunk_id in chunk_ids:
+                chunk_entities = get_entities_from_chunk(chunk_id)
+                entity_ids.extend(chunk_entities)
+            
+            # 去重
+            entity_ids = list(set(entity_ids))
+        
+        if not entity_ids and not chunk_ids:
+            return {"nodes": [], "links": []}
+        
+        # 检查实体ID是否存在
+        verified_entity_ids = check_entity_existence(entity_ids)
+        if not verified_entity_ids:
+            # 尝试直接使用文本块查询
+            if chunk_ids:
+                return get_graph_from_chunks(chunk_ids)
+            return {"nodes": [], "links": []}
+        
+        # 使用确认存在的实体ID进行查询
+        params = {
+            "entity_ids": verified_entity_ids,
+            "max_distance": 1
         }
+        
+        # 简化的Cypher查询，专注于可靠地查询实体
+        query = """
+        // 匹配指定的实体ID
+        MATCH (e:__Entity__)
+        WHERE e.id IN $entity_ids
+        
+        // 收集基础实体
+        WITH collect(e) AS base_entities
+        
+        // 展开基础实体以便后续处理
+        UNWIND base_entities AS base_entity
+        
+        // 获取一跳邻居
+        OPTIONAL MATCH (base_entity)-[r]-(neighbor:__Entity__)
+        WHERE neighbor <> base_entity
+        
+        // 收集所有实体和关系
+        WITH base_entities, 
+             collect(DISTINCT neighbor) AS neighbors,
+             collect(DISTINCT r) AS all_rels
         
         // 合并所有实体
-        WITH entities_set + entity_nodes + chunk_related_entities AS base_entities
-        
-        // 有条件地扩展周边实体（只搜索一跳关系内的实体）
-        CALL {
-            WITH base_entities
-            MATCH (e)-[r]-(neighbor:__Entity__)
-            WHERE e IN base_entities
-            // 如果提供了关键词，根据关键词过滤
-            AND (size($query_keywords) = 0 OR 
-                 ANY(keyword IN $query_keywords WHERE 
-                     toLower(neighbor.id) CONTAINS toLower(keyword) OR 
-                     toLower(neighbor.description) CONTAINS toLower(keyword) OR
-                     toLower(type(r)) CONTAINS toLower(keyword)))
-            // 控制最大扩展距离
-            RETURN collect(DISTINCT neighbor) AS neighbors
-        }
-        
-        // 合并所有实体，应用关键词过滤
-        WITH base_entities + neighbors AS all_entities,
-             $query_keywords AS keywords
-        
-        // 如果提供了关键词，根据关键词过滤实体
-        WITH CASE 
-            WHEN size(keywords) > 0 THEN [e IN all_entities WHERE 
-                ANY(keyword IN keywords WHERE 
-                    toLower(e.id) CONTAINS toLower(keyword) OR 
-                    toLower(e.description) CONTAINS toLower(keyword))]
-            ELSE all_entities
-        END AS filtered_entities
-        
-        // 再次收集所有实体间的关系
-        CALL {
-            WITH filtered_entities
-            MATCH (e1:__Entity__)-[r]-(e2:__Entity__)
-            WHERE e1 IN filtered_entities AND e2 IN filtered_entities
-            RETURN collect(DISTINCT r) AS all_rels
-        }
+        WITH base_entities + neighbors AS all_entities, all_rels
         
         // 返回结果
         RETURN 
-        [n IN filtered_entities | {
+        [n IN all_entities | {
             id: n.id, 
-            label: n.id, 
-            description: n.description,
+            label: CASE WHEN n.id IS NULL THEN "未知" ELSE n.id END, 
+            description: CASE WHEN n.description IS NULL THEN '' ELSE n.description END,
             group: CASE 
                 WHEN [lbl IN labels(n) WHERE lbl <> '__Entity__'] <> []
                 THEN [lbl IN labels(n) WHERE lbl <> '__Entity__'][0]
@@ -357,37 +471,42 @@ def get_knowledge_graph_for_ids(entity_ids=None, relationship_ids=None, chunk_id
             source: startNode(r).id, 
             target: endNode(r).id, 
             label: type(r),
-            weight: CASE WHEN r.weight IS NOT NULL THEN r.weight ELSE 1 END
+            weight: CASE WHEN r.weight IS NULL THEN 1 ELSE r.weight END
         }] AS links
         """
         
         # 执行查询
-        try:
-            result = driver.execute_query(query, params)
-            
-            if not result.records:
-                return {"nodes": [], "links": []}
-                
-            record = result.records[0]
-            return {
-                "nodes": record["nodes"],
-                "links": record["links"]
-            }
-            
-        except Exception as e:
-            print(f"查询知识图谱数据时出错: {str(e)}")
-            traceback.print_exc()
+        result = driver.execute_query(query, params)
+        
+        if not result.records or len(result.records) == 0:
+            # 尝试直接使用文本块查询
+            if chunk_ids:
+                return get_graph_from_chunks(chunk_ids)
             return {"nodes": [], "links": []}
             
+        record = result.records[0]
+        nodes = record.get("nodes", [])
+        links = record.get("links", [])
+        
+        return {
+            "nodes": nodes,
+            "links": links
+        }
+        
     except Exception as e:
         print(f"获取知识图谱失败: {str(e)}")
-        traceback.print_exc()
+        
+        # 尝试直接使用文本块查询
+        if chunk_ids:
+            return get_graph_from_chunks(chunk_ids)
         return {"nodes": [], "links": []}
+
+# ================ API路由 ================
 
 @app.post("/chat", response_model=ChatResponse)
 @measure_performance("chat")
 async def chat(request: ChatRequest):
-    """处理聊天请求 - 增加并发控制和性能优化"""
+    """处理聊天请求"""
     # 生成锁的键
     lock_key = f"{request.session_id}_chat"
     
@@ -416,7 +535,7 @@ async def chat(request: ChatRequest):
         # 获取指定的agent
         selected_agent = agents[request.agent_type]
         
-        # 性能优化：首先尝试快速路径 - 跳过完整处理
+        # 首先尝试快速路径 - 跳过完整处理
         try:
             start_fast = time.time()
             fast_result = selected_agent.check_fast_cache(request.message, request.session_id)
@@ -528,7 +647,7 @@ async def clear_chat(request: ClearRequest):
                 if i == 2:  # 保留前两条消息
                     break
 
-        # 获取剩余消息时也添加检查
+        # 获取剩余消息
         try:
             # 使用graph_agent检查剩余消息
             graph_agent = agents["graph_agent"]
@@ -551,7 +670,6 @@ async def clear_chat(request: ClearRequest):
             
     except Exception as e:
         print(f"清除聊天历史时出错: {str(e)}")
-        traceback.print_exc()
         return ClearResponse(
             status="success",
             remaining_messages=""
@@ -562,7 +680,6 @@ async def get_source(request: SourceRequest):
     """处理源内容请求"""
     try:
         source_id = request.source_id
-        print(f"正在查询源内容，ID: {source_id}")
         
         if not source_id:
             return SourceResponse(content="未提供有效的源ID")
@@ -593,16 +710,12 @@ async def get_source(request: SourceRequest):
                 RETURN n.summary AS summary, n.full_content AS full_content
                 """
                 params = {"id": id_parts[1] if len(id_parts) > 1 else source_id}
-
-        print(f"源内容查询参数: {params}")
         
         result = driver.execute_query(
             query,
             params,
             result_transformer_=Result.to_df
         )
-        
-        print(f"查询结果: {result.shape if result is not None else 'None'}")
         
         if result is not None and result.shape[0] > 0:
             if "text" in result.columns:
@@ -614,20 +727,19 @@ async def get_source(request: SourceRequest):
             
         return SourceResponse(content=content)
     except Exception as e:
-        error_trace = traceback.format_exc()
-        print(f"获取源内容时出错: {str(e)}\n{error_trace}")
+        print(f"获取源内容时出错: {str(e)}")
         return SourceResponse(content=f"检索源内容时发生错误: {str(e)}")
 
 @app.get("/knowledge_graph")
 async def get_knowledge_graph(limit: int = 100, query: str = None):
-    """获取知识图谱数据，动态检测节点类型"""
+    """获取知识图谱数据"""
     try:
         # 确保limit是整数
         limit = int(limit) if limit else 100
         
         # 构建查询条件
         query_conditions = ""
-        params = {"limit": limit}  # 确保传递limit参数
+        params = {"limit": limit}
         
         if query:
             query_conditions = """
@@ -636,7 +748,6 @@ async def get_knowledge_graph(limit: int = 100, query: str = None):
             """
             params["query"] = query
         else:
-            # 即使没有query参数，也需要确保query_conditions是空字符串而不是None
             query_conditions = ""
             
         # 构建节点查询 - 动态获取节点类型
@@ -654,7 +765,7 @@ async def get_knowledge_graph(limit: int = 100, query: str = None):
             WITH entities
             MATCH (e1:__Entity__)-[r]-(e2:__Entity__)
             WHERE e1 IN entities AND e2 IN entities
-                AND ID(e1) < ID(e2)  // 避免重复关系
+                AND e1.id < e2.id  // 避免重复关系
             RETURN collect(r) AS relationships
         }}
         
@@ -679,9 +790,6 @@ async def get_knowledge_graph(limit: int = 100, query: str = None):
         }}] AS links
         """
         
-        # 明确输出参数，帮助调试
-        print(f"正在查询知识图谱，参数: {params}")
-        
         result = driver.execute_query(node_query, params)
         
         if not result or not result.records:
@@ -693,7 +801,7 @@ async def get_knowledge_graph(limit: int = 100, query: str = None):
         nodes = record["nodes"] or []
         links = record["links"] or []
         
-        # 标准化响应格式
+        # 返回标准格式
         return {
             "nodes": nodes,
             "links": links
@@ -701,21 +809,11 @@ async def get_knowledge_graph(limit: int = 100, query: str = None):
         
     except Exception as e:
         print(f"获取知识图谱数据失败: {str(e)}")
-        traceback.print_exc()
         return {"error": str(e), "nodes": [], "links": []}
 
 @app.get("/knowledge_graph_from_message")
 async def get_knowledge_graph_from_message(message: str = None, query: str = None):
-    """
-    从消息文本中提取知识图谱数据，使用动态类型
-    
-    参数:
-        message: AI回复消息文本
-        query: 用户查询文本，用于过滤相关节点
-        
-    返回:
-        包含节点和链接的知识图谱数据
-    """
+    """从消息文本中提取知识图谱数据"""
     if not message:
         return {"nodes": [], "links": []}
         
@@ -724,10 +822,8 @@ async def get_knowledge_graph_from_message(message: str = None, query: str = Non
             
     except Exception as e:
         print(f"从消息提取知识图谱失败: {str(e)}")
-        traceback.print_exc()
         return {"error": str(e), "nodes": [], "links": []}
 
-# 添加获取所有可能的实体类型的API
 @app.get("/entity_types")
 async def get_entity_types():
     """获取数据库中所有可能的实体类型"""
@@ -750,10 +846,8 @@ async def get_entity_types():
         
     except Exception as e:
         print(f"获取实体类型失败: {str(e)}")
-        traceback.print_exc()
         return {"error": str(e), "entity_types": []}
 
-# 添加用于获取文本块内容的API
 @app.get("/chunks")
 async def get_chunks(limit: int = 10, offset: int = 0):
     """获取数据库中的文本块"""
@@ -780,13 +874,12 @@ async def get_chunks(limit: int = 10, offset: int = 0):
             
     except Exception as e:
         print(f"获取文本块失败: {str(e)}")
-        traceback.print_exc()
         return {"error": str(e), "chunks": []}
 
 @app.post("/feedback", response_model=FeedbackResponse)
 @measure_performance("feedback")
 async def process_feedback(request: FeedbackRequest):
-    """处理用户对回答的反馈 - 增加并发控制和性能优化"""
+    """处理用户对回答的反馈"""
     try:
         # 生成锁的键
         lock_key = f"{request.thread_id}_{request.query}"
@@ -804,13 +897,13 @@ async def process_feedback(request: FeedbackRequest):
             # 确保agent_type存在
             if not agent_type or agent_type not in agents:
                 agent_type = "graph_agent"  # 回退到默认agent
-                print(f"未知的agent类型或未提供agent_type，使用默认值: {agent_type}")
+                print(f"未知的agent类型，使用默认值: {agent_type}")
                 
             selected_agent = agents[agent_type]
             
-            # 根据反馈进行处理 - 直接使用优化版方法
+            # 根据反馈进行处理
             if request.is_positive:
-                # 使用优化的反馈标记方法
+                # 标记为高质量回答
                 selected_agent.mark_answer_quality(request.query, True, request.thread_id)
                 action = "缓存已被标记为高质量"
             else:
@@ -840,8 +933,22 @@ async def process_feedback(request: FeedbackRequest):
             )
     except Exception as e:
         print(f"处理反馈时出错: {str(e)}")
-        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.on_event("shutdown")
+def shutdown_event():
+    """应用关闭时清理资源"""
+    for agent_name, agent in agents.items():
+        try:
+            agent.close()
+            print(f"已关闭 {agent_name} 资源")
+        except Exception as e:
+            print(f"关闭 {agent_name} 资源时出错: {e}")
+    
+    # 关闭Neo4j连接
+    if driver:
+        driver.close()
+        print("已关闭Neo4j连接")
 
 # 启动服务器
 if __name__ == "__main__":

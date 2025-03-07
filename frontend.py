@@ -194,6 +194,10 @@ def clear_chat():
         st.session_state.kg_data = None
         st.session_state.source_content = None
         
+        # 重要：也要清除current_kg_message
+        if 'current_kg_message' in st.session_state:
+            del st.session_state.current_kg_message
+        
         # 清除后端状态
         response = requests.post(
             f"{API_URL}/clear",
@@ -671,13 +675,13 @@ def display_chat_interface():
         with col1:
             # 使用不同的key: header_agent_type
             agent_type = st.selectbox(
-            "选择 Agent 类型",
-            options=["graph_agent", "hybrid_agent"],
-            key="header_agent_type",
-            help="选择不同的Agent以体验不同的检索策略",
-            index=0 if st.session_state.agent_type == "graph_agent" else 1
-        )
-            # 更新全局agent_type
+                "选择 Agent 类型",
+                options=["graph_agent", "hybrid_agent", "naive_rag_agent"],
+                key="header_agent_type",
+                help="选择不同的Agent以体验不同的检索策略",
+                index=0 if st.session_state.agent_type == "graph_agent" 
+                        else (1 if st.session_state.agent_type == "hybrid_agent" else 2)
+            )
             st.session_state.agent_type = agent_type
     
         with col2:
@@ -820,7 +824,8 @@ def display_chat_interface():
                                     # 使用用户查询来过滤知识图谱
                                     kg_data = get_knowledge_graph_from_message(msg["content"], user_query)
                                     if kg_data and len(kg_data.get("nodes", [])) > 0:
-                                        st.session_state.kg_data = kg_data
+                                        st.session_state.messages[i]["kg_data"] = kg_data
+                                        st.session_state.current_kg_message = i
                                         st.session_state.current_tab = "知识图谱"  # 自动切换到知识图谱标签
                                         st.rerun()
         
@@ -878,6 +883,10 @@ def display_knowledge_graph_tab(tabs):
     """显示知识图谱标签页内容"""
     with tabs[1]:
         st.markdown('<div class="kg-controls">', unsafe_allow_html=True)
+
+        if st.session_state.agent_type == "naive_rag_agent":
+            st.info("Naive RAG 是传统的向量搜索方式，没有知识图谱的可视化。")
+            return
         
         # 添加获取全局图谱/回答相关图谱的选择
         kg_display_mode = st.radio(
@@ -888,7 +897,8 @@ def display_knowledge_graph_tab(tabs):
         )
         st.markdown('</div>', unsafe_allow_html=True)
         
-        if kg_display_mode == "全局知识图谱" or not st.session_state.kg_data:
+        # 修复：首先检查messages是否为空以及current_kg_message是否存在
+        if kg_display_mode == "全局知识图谱" or "current_kg_message" not in st.session_state:
             # 获取全局图谱
             with st.spinner("加载全局知识图谱..."):
                 kg_data = get_knowledge_graph(limit=100)
@@ -898,19 +908,29 @@ def display_knowledge_graph_tab(tabs):
                     st.warning("未能加载全局知识图谱数据")
         else:
             # 显示与回答相关的图谱
-            if st.session_state.kg_data and len(st.session_state.kg_data.get("nodes", [])) > 0:
+            msg_idx = st.session_state.current_kg_message
+            
+            # 修复：添加安全检查，确保msg_idx是有效的索引
+            if (len(st.session_state.messages) > msg_idx and 
+                "kg_data" in st.session_state.messages[msg_idx] and 
+                len(st.session_state.messages[msg_idx]["kg_data"].get("nodes", [])) > 0):
                 st.success("显示与最近回答相关的知识图谱")
-                visualize_knowledge_graph(st.session_state.kg_data)
+                visualize_knowledge_graph(st.session_state.messages[msg_idx]["kg_data"])
             else:
                 st.info("未找到与当前回答相关的知识图谱数据")
         
         # 显示节点和边的统计信息
-        if st.session_state.kg_data and len(st.session_state.kg_data.get("nodes", [])) > 0:
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("节点数量", len(st.session_state.kg_data["nodes"]))
-            with col2:
-                st.metric("关系数量", len(st.session_state.kg_data["links"]))
+        # 修复：添加安全检查，确保current_kg_message索引有效
+        if ("current_kg_message" in st.session_state and 
+            len(st.session_state.messages) > st.session_state.current_kg_message and
+            "kg_data" in st.session_state.messages[st.session_state.current_kg_message]):
+            kg_data = st.session_state.messages[st.session_state.current_kg_message]["kg_data"]
+            if kg_data and len(kg_data.get("nodes", [])) > 0:
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("节点数量", len(kg_data["nodes"]))
+                with col2:
+                    st.metric("关系数量", len(kg_data["links"]))
         elif kg_display_mode == "回答相关图谱":
             st.info("在调试模式下发送查询获取相关的知识图谱")
 
@@ -958,9 +978,10 @@ def main():
         st.header("Agent 选择")
         agent_type = st.radio(
             "选择检索策略:",
-            ["graph_agent", "hybrid_agent"],
-            index=0 if st.session_state.agent_type == "graph_agent" else 1,
-            help="graph_agent：使用知识图谱的局部与全局搜索；hybrid_agent：使用混合搜索方式",
+            ["graph_agent", "hybrid_agent", "naive_rag_agent"],
+            index=0 if st.session_state.agent_type == "graph_agent" 
+                        else (1 if st.session_state.agent_type == "hybrid_agent" else 2),
+            help="graph_agent：使用知识图谱的局部与全局搜索；hybrid_agent：使用混合搜索方式；naive_rag_agent：使用朴素RAG",
             key="sidebar_agent_type"
         )
         # 更新全局agent_type

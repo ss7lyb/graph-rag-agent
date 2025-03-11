@@ -116,8 +116,8 @@ examples = [
 
 ```bash
 cd graph-rag-agent/
-uvicorn backend:app --reload
+python server/main.py
 
 cd graph-rag-agent/
-streamlit run frontend.py
+streamlit run frontend/app.py
 ```

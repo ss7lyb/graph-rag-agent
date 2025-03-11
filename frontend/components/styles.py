@@ -1,0 +1,153 @@
+import streamlit as st
+
+def custom_css():
+    """添加自定义CSS样式"""
+    st.markdown("""
+    <style>
+    .main .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background-color: #f0f2f6;
+        border-radius: 4px 4px 0px 0px;
+        padding: 0.5rem 1rem;
+        font-weight: 600;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #4b9bff;
+        color: white;
+    }
+    .agent-selector {
+        padding: 10px;
+        margin-bottom: 20px;
+        border-radius: 5px;
+        background-color: #f7f7f7;
+    }
+    .chat-container {
+        border-radius: 10px;
+        background-color: white;
+        padding: 10px;
+        height: calc(100vh - 250px);
+        overflow-y: auto;
+        margin-bottom: 10px;
+        box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+    }
+    .debug-container {
+        border-radius: 10px;
+        background-color: white;
+        height: calc(100vh - 120px);
+        overflow-y: auto;
+        padding: 10px;
+        box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+    }
+    .example-question {
+        background-color: #f7f7f7;
+        padding: 8px;
+        border-radius: 4px;
+        margin: 5px 0;
+        cursor: pointer;
+        transition: background-color 0.3s;
+    }
+    .example-question:hover {
+        background-color: #e6e6e6;
+    }
+    .settings-bar {
+        padding: 10px;
+        background-color: #f7f7f7;
+        border-radius: 5px;
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    /* 源内容样式 - 改进版 */
+    .source-content-container {
+        background-color: #f8f9fa;
+        border-radius: 8px;
+        padding: 15px;
+        margin-top: 10px;
+        border: 1px solid #e0e0e0;
+    }
+    .source-content {
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        background-color: #f5f5f5;
+        padding: 16px;
+        border-radius: 4px;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        font-size: 14px;
+        line-height: 1.6;
+        overflow-x: auto;
+        color: #24292e;
+        max-height: 600px;
+        overflow-y: auto;
+        border: 1px solid #e1e4e8;
+    }
+    /* 调试信息样式 */
+    .debug-header {
+        background-color: #eef2f5;
+        padding: 10px 15px;
+        border-radius: 5px;
+        margin-bottom: 15px;
+        border-left: 4px solid #4b9bff;
+    }
+    /* 知识图谱控制面板 */
+    .kg-controls {
+        background-color: #f8f9fa;
+        padding: 12px;
+        border-radius: 8px;
+        margin-bottom: 15px;
+        border: 1px solid #e6e6e6;
+    }
+    /* 按钮悬停效果 */
+    button:hover {
+        box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
+        transition: all 0.3s cubic-bezier(.25,.8,.25,1);
+    }
+    /* 源内容按钮样式 */
+    .view-source-button {
+        background-color: #f1f8ff;
+        border: 1px solid #c8e1ff;
+        color: #0366d6;
+        border-radius: 6px;
+        padding: 4px 8px;
+        font-size: 12px;
+        margin: 4px;
+    }
+    .view-source-button:hover {
+        background-color: #dbedff;
+    }
+    /* 反馈按钮样式 */
+    .feedback-buttons {
+        display: flex;
+        gap: 10px;
+        margin-top: 5px;
+    }
+    .feedback-positive {
+        color: #0F9D58;
+        font-weight: bold;
+    }
+    .feedback-negative {
+        color: #DB4437;
+        font-weight: bold;
+    }
+    .feedback-given {
+        opacity: 0.7;
+        font-style: italic;
+    }
+    /* 操作中状态提示 */
+    .processing-indicator {
+        background-color: #fff3cd;
+        color: #856404;
+        padding: 5px 10px;
+        border-radius: 4px;
+        border-left: 4px solid #ffeeba;
+        margin: 5px 0;
+        font-size: 12px;
+    }
+    </style>
+    """, unsafe_allow_html=True)

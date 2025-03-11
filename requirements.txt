@@ -9,7 +9,7 @@ langchain_openai==0.3.7
 langgraph==0.3.5
 langsmith==0.3.12
 matplotlib==3.10.1
-numpy==2.2.3
+numpy==1.26.2
 pandas==2.2.3
 psutil==5.9.7
 pydantic==2.10.6
@@ -17,7 +17,6 @@ python-dotenv==1.0.1
 pyvis==0.3.2
 Requests==2.32.3
 rich==13.9.4
-setuptools==68.2.2
 setuptools==75.8.0
 shutup==0.2.0
 streamlit==1.42.2

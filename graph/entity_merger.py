@@ -481,10 +481,15 @@ class EntityMerger:
         return merged_count
     
     def clean_duplicate_relationships(self):
-        """清除重复关系"""
+        """
+        清除重复关系，包括：
+        1. 相同方向的重复关系
+        2. SIMILAR关系的双向冗余（保留一个方向）
+        """
         print("开始清除重复关系...")
         
-        result = self.graph.query("""
+        # 第一步：清除相同方向的重复关系
+        result1 = self.graph.query("""
         MATCH (a)-[r]->(b)
         WITH a, b, type(r) as type, collect(r) as rels
         WHERE size(rels) > 1
@@ -494,6 +499,26 @@ class EntityMerger:
         RETURN count(*) as deleted
         """)
         
-        deleted_count = result[0]["deleted"] if result else 0
-        print(f"已删除 {deleted_count} 个重复关系")
-        return deleted_count
+        deleted_count1 = result1[0]["deleted"] if result1 else 0
+        print(f"已删除 {deleted_count1} 个相同方向的重复关系")
+        
+        # 第二步：清除SIMILAR关系的双向冗余（保留一个方向）
+        result2 = self.graph.query("""
+        // 找出所有双向的SIMILAR关系
+        MATCH (a)-[r1:SIMILAR]->(b)
+        MATCH (b)-[r2:SIMILAR]->(a)
+        WHERE a.id < b.id  // 确保每对节点只处理一次
+        
+        // 随机选择一个方向删除（这里选择删除b->a方向）
+        DELETE r2
+        
+        RETURN count(*) as deleted_bidirectional
+        """)
+        
+        deleted_count2 = result2[0]["deleted_bidirectional"] if result2 else 0
+        print(f"已删除 {deleted_count2} 个双向SIMILAR关系的冗余方向")
+        
+        total_deleted = deleted_count1 + deleted_count2
+        print(f"总共删除了 {total_deleted} 个重复关系")
+        
+        return total_deleted

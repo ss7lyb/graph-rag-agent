@@ -28,3 +28,5 @@ def init_session_state():
         st.session_state.feedback_in_progress = False
     if 'processing_lock' not in st.session_state:
         st.session_state.processing_lock = False
+    if 'current_kg_message' not in st.session_state:
+        st.session_state.current_kg_message = None

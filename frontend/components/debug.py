@@ -58,12 +58,35 @@ def display_debug_panel():
     # 性能监控标签
     add_performance_tab(tabs)
     
-    # 自动选择标签页
+    # 通过JS脚本直接控制标签切换
+    tab_index = 0  # 默认显示执行轨迹标签
+    
     if st.session_state.current_tab == "执行轨迹":
-        tabs[0].activate = True
+        tab_index = 0
     elif st.session_state.current_tab == "知识图谱":
-        tabs[1].activate = True
+        tab_index = 1
     elif st.session_state.current_tab == "源内容":
-        tabs[2].activate = True
+        tab_index = 2
     elif st.session_state.current_tab == "性能监控":
-        tabs[3].activate = True
+        tab_index = 3
+    
+    # 使用自定义JS自动切换到指定标签页
+    tab_js = f"""
+    <script>
+        // 等待DOM加载完成
+        document.addEventListener('DOMContentLoaded', function() {{
+            setTimeout(function() {{
+                // 查找所有标签按钮
+                const tabs = document.querySelectorAll('[data-baseweb="tab"]');
+                if (tabs.length > {tab_index}) {{
+                    // 模拟点击目标标签
+                    tabs[{tab_index}].click();
+                }}
+            }}, 100);
+        }});
+    </script>
+    """
+    
+    # 只有当需要切换标签时才注入JS
+    if "current_tab" in st.session_state:
+        st.markdown(tab_js, unsafe_allow_html=True)

@@ -153,21 +153,22 @@ def display_chat_interface():
                                                 st.rerun()
                         
                         # 如果是最后一条AI消息，添加自动提取图谱按钮
-                        if i == len(st.session_state.messages) - 1:
-                            if st.button("提取知识图谱", key=f"extract_kg_{i}"):
-                                with st.spinner("提取知识图谱数据..."):
-                                    # 获取对应的用户查询
-                                    user_query = ""
-                                    if i > 0 and st.session_state.messages[i-1]["role"] == "user":
-                                        user_query = st.session_state.messages[i-1]["content"]
-                                        
-                                    # 使用用户查询来过滤知识图谱
-                                    kg_data = get_knowledge_graph_from_message(msg["content"], user_query)
-                                    if kg_data and len(kg_data.get("nodes", [])) > 0:
-                                        st.session_state.messages[i]["kg_data"] = kg_data
-                                        st.session_state.current_kg_message = i
-                                        st.session_state.current_tab = "知识图谱"  # 自动切换到知识图谱标签
-                                        st.rerun()
+                        if st.button("提取知识图谱", key=f"extract_kg_{i}"):
+                            with st.spinner("提取知识图谱数据..."):
+                                # 获取对应的用户查询
+                                user_query = ""
+                                if i > 0 and st.session_state.messages[i-1]["role"] == "user":
+                                    user_query = st.session_state.messages[i-1]["content"]
+                                    
+                                # 使用用户查询来过滤知识图谱
+                                kg_data = get_knowledge_graph_from_message(msg["content"], user_query)
+                                if kg_data and len(kg_data.get("nodes", [])) > 0:
+                                    # 确保当前消息有正确的kg_data
+                                    st.session_state.messages[i]["kg_data"] = kg_data
+                                    # 更新当前的图谱消息索引为当前处理的消息索引
+                                    st.session_state.current_kg_message = i
+                                    st.session_state.current_tab = "知识图谱"  # 自动切换到知识图谱标签
+                                    st.rerun()
         
         # 处理新消息
         if prompt := st.chat_input("请输入您的问题...", key="chat_input"):
@@ -210,8 +211,17 @@ def display_chat_interface():
                                     kg_data = get_knowledge_graph_from_message(response["answer"], prompt)  # 传递当前查询
                                 
                                 if kg_data and len(kg_data.get("nodes", [])) > 0:
-                                    st.session_state.kg_data = kg_data
-                                    st.session_state.current_tab = "知识图谱"  # 自动切换到知识图谱标签
+                                    # 获取当前新消息的索引，即最后一条消息
+                                    current_msg_index = len(st.session_state.messages) - 1
+                                    
+                                    # 更新该消息的kg_data
+                                    st.session_state.messages[current_msg_index]["kg_data"] = kg_data
+                                    
+                                    # 更新当前处理的图谱消息索引为最新消息的索引
+                                    st.session_state.current_kg_message = current_msg_index
+                                    
+                                    # 自动切换到知识图谱标签
+                                    st.session_state.current_tab = "知识图谱"
                         except Exception as e:
                             print(f"提取知识图谱失败: {e}")
             

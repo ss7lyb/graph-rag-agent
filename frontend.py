@@ -280,14 +280,13 @@ def visualize_knowledge_graph(kg_data: Dict) -> None:
     
     # 设置物理引擎选项，增强灵动性
     if physics_enabled:
-        # 修改物理引擎参数，使节点移动更灵动
         net.barnes_hut(
             gravity=st.session_state.kg_display_settings["gravity"], 
-            central_gravity=0.3, 
+            central_gravity=0.5, 
             spring_length=spring_length,
-            spring_strength=0.08,  # 降低弹簧强度使移动更平滑
-            damping=0.09,  # 降低阻尼使运动更持久
-            overlap=0.5    # 允许一定程度的重叠
+            spring_strength=0.04,
+            damping=0.15, 
+            overlap=0.1
         )
     else:
         net.toggle_physics(False)
@@ -397,9 +396,18 @@ def visualize_knowledge_graph(kg_data: Dict) -> None:
                 // 使节点在初始加载时有一个轻微的动画效果
                 setTimeout(function() {
                     network.once("stabilizationIterationsDone", function() {
-                        network.setOptions({ physics: { stabilization: false } });
+                        network.setOptions({ 
+                            physics: { 
+                                stabilization: false,
+                                barnesHut: {
+                                    gravitationalConstant: -2000,  
+                                    springConstant: 0.02,
+                                    damping: 0.2,
+                                }
+                            } 
+                        });
                     });
-                    network.stabilize(100);
+                    network.stabilize(200);
                 }, 1000);
                 
                 // 添加鼠标悬停效果

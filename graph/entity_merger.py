@@ -447,7 +447,10 @@ class EntityMerger:
         merged_count = 0
         if merge_groups:
             merged_count = self.execute_merges(merge_groups)
-            
+
+        # 合并重复关系
+        self.clean_duplicate_relationships()
+                
         end_time = time.time()
         merge_elapsed = end_time - suggestion_time
         total_elapsed = end_time - start_time
@@ -476,3 +479,21 @@ class EntityMerger:
             print(f"  {key}: {value}")
         
         return merged_count
+    
+    def clean_duplicate_relationships(self):
+        """清除重复关系"""
+        print("开始清除重复关系...")
+        
+        result = self.graph.query("""
+        MATCH (a)-[r]->(b)
+        WITH a, b, type(r) as type, collect(r) as rels
+        WHERE size(rels) > 1
+        WITH a, b, type, rels[0] as kept, rels[1..] as rels
+        UNWIND rels as rel
+        DELETE rel
+        RETURN count(*) as deleted
+        """)
+        
+        deleted_count = result[0]["deleted"] if result else 0
+        print(f"已删除 {deleted_count} 个重复关系")
+        return deleted_count

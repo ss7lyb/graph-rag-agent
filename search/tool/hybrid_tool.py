@@ -127,44 +127,8 @@ class HybridSearchTool(BaseSearchTool):
         )
     
     def _vector_search(self, query: str, limit: int = 5) -> List[str]:
-        """
-        自定义向量搜索方法
-        
-        参数:
-            query: 搜索查询
-            limit: 最大返回结果数
-            
-        返回:
-            List[str]: 匹配实体ID列表
-        """
-        try:
-            # 生成查询的嵌入向量
-            query_embedding = self.embeddings.embed_query(query)
-            
-            # 构建Neo4j向量搜索查询
-            cypher = """
-            CALL db.index.vector.queryNodes('vector', $limit, $embedding)
-            YIELD node, score
-            RETURN node.id AS id, score
-            ORDER BY score DESC
-            """
-            
-            # 执行搜索
-            results = self.db_query(cypher, {
-                "embedding": query_embedding,
-                "limit": limit
-            })
-            
-            # 提取实体ID
-            if not results.empty:
-                return results['id'].tolist()
-            else:
-                return []
-                
-        except Exception as e:
-            print(f"向量搜索失败: {e}")
-            # 如果向量搜索失败，尝试使用文本搜索作为备用
-            return self._fallback_text_search(query, limit)
+        """使用基类的向量搜索方法"""
+        return self.vector_search(query, limit)
 
     def _fallback_text_search(self, query: str, limit: int = 5) -> List[str]:
         """

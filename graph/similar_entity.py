@@ -331,8 +331,8 @@ class SimilarEntityDetector:
             WITH collect(combinedResult) as allCombinedResults
             UNWIND range(0, size(allCombinedResults)-1, 1) as combinedResultIndex
             WITH allCombinedResults[combinedResultIndex] as combinedResult, 
-                 combinedResultIndex, 
-                 allCombinedResults
+                combinedResultIndex, 
+                allCombinedResults
             WHERE NOT any(x IN range(0,size(allCombinedResults)-1,1)
                 WHERE x <> combinedResultIndex
                 AND apoc.coll.containsAll(allCombinedResults[x], combinedResult)
@@ -343,9 +343,16 @@ class SimilarEntityDetector:
         )
         
         self.query_time = time.time() - query_start
-        print(f"潜在重复实体查找完成，找到 {len(results)} 组候选实体, 用时: {self.query_time:.2f}秒")
         
-        return results
+        # 转换查询结果为简单的字符串列表列表格式
+        processed_results = []
+        for record in results:
+            if "combinedResult" in record and isinstance(record["combinedResult"], list):
+                processed_results.append(record["combinedResult"])
+        
+        print(f"潜在重复实体查找完成，找到 {len(processed_results)} 组候选实体, 用时: {self.query_time:.2f}秒")
+        
+        return processed_results
     
     def cleanup(self) -> None:
         """清理内存中的投影图"""

@@ -134,34 +134,8 @@ class LocalSearchTool(BaseSearchTool):
     
     def _filter_documents_by_relevance(self, docs, query: str) -> List:
         """根据相关性过滤文档"""
-        # 使用向量相似度对文档进行排序
-        try:
-            vectorized_query = self.embeddings.embed_query(query)
-            
-            # 计算相似度和分数
-            scored_docs = []
-            for doc in docs:
-                # 如果文档有向量表示
-                if hasattr(doc, 'embedding') and doc.embedding:
-                    similarity = cosine_similarity(vectorized_query, doc.embedding)
-                else:
-                    # 如果没有向量，给一个中等分数
-                    similarity = 0.5
-                    
-                scored_docs.append({
-                    'document': doc,
-                    'score': similarity
-                })
-            
-            # 按分数排序
-            scored_docs.sort(key=lambda x: x['score'], reverse=True)
-            
-            # 只返回前5个高分文档
-            top_docs = [item['document'] for item in scored_docs[:5]]
-            return top_docs
-        except Exception as e:
-            print(f"文档过滤失败: {e}")
-            return docs
+        # 直接使用基类的标准方法
+        return self.filter_by_relevance(query, docs, top_k=5)
 
     @traceable
     def search(self, query_input: Any) -> str:

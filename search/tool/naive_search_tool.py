@@ -9,6 +9,7 @@ from langchain_core.output_parsers import StrOutputParser
 from config.prompt import NAIVE_PROMPT
 from config.settings import response_type, naive_description
 from search.tool.base import BaseSearchTool
+from search.utils import VectorUtils
 
 
 class NaiveSearchTool(BaseSearchTool):
@@ -102,20 +103,12 @@ class NaiveSearchTool(BaseSearchTool):
             LIMIT 100  // 获取候选集
             """)
             
-            # 手动计算相似度
-            scored_chunks = []
-            for chunk in chunks_with_embedding:
-                if "embedding" in chunk and chunk["embedding"]:
-                    # 计算相似度
-                    similarity = self._cosine_similarity(query_embedding, chunk["embedding"])
-                    scored_chunks.append({
-                        "id": chunk["id"],
-                        "text": chunk["text"],
-                        "score": similarity
-                    })
-            
-            # 按相似度排序
-            scored_chunks.sort(key=lambda x: x["score"], reverse=True)
+            scored_chunks = VectorUtils.rank_by_similarity(
+            query_embedding,
+            chunks_with_embedding,
+            "embedding",
+            self.top_k
+            )
             
             # 取top_k个结果
             results = scored_chunks[:self.top_k]

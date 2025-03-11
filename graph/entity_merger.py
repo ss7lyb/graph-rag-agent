@@ -413,12 +413,25 @@ class EntityMerger:
         """
         start_time = time.time()
         
+        # 确保duplicate_candidates是列表的列表，处理不同的数据结构
+        fixed_candidates = []
+        for candidates in duplicate_candidates:
+            # 检查候选组是否是字典或类似对象
+            if isinstance(candidates, dict) and "combinedResult" in candidates:
+                candidate_list = candidates["combinedResult"]
+                if isinstance(candidate_list, list) and len(candidate_list) > 1:
+                    fixed_candidates.append(candidate_list)
+            # 检查候选组是否已经是列表
+            elif isinstance(candidates, list) and len(candidates) > 1:
+                fixed_candidates.append(candidates)
+        
         # 过滤处理数量过少的候选组
         filtered_candidates = [
-            candidates for candidates in duplicate_candidates
+            candidates for candidates in fixed_candidates
             if len(candidates) > 1
         ]
         
+        print(f"处理后候选实体组数: {len(filtered_candidates)}")
         print(f"开始处理 {len(filtered_candidates)} 组有效重复实体候选...")
         
         # 获取合并建议
@@ -427,7 +440,7 @@ class EntityMerger:
         suggestion_time = time.time()
         suggestion_elapsed = suggestion_time - start_time
         print(f"生成合并建议完成，用时 {suggestion_elapsed:.2f} 秒, "
-              f"找到 {len(merge_groups)} 组可合并实体")
+            f"找到 {len(merge_groups)} 组可合并实体")
         print(f"其中: LLM处理时间: {self.llm_time:.2f}秒, 解析时间: {self.parse_time:.2f}秒")
         
         # 如果有建议的合并组，执行合并
@@ -444,11 +457,15 @@ class EntityMerger:
         print(f"总耗时: {total_elapsed:.2f} 秒")
         
         # 返回性能统计摘要
+        llm_percentage = (self.llm_time/total_elapsed*100) if total_elapsed > 0 else 0
+        parse_percentage = (self.parse_time/total_elapsed*100) if total_elapsed > 0 else 0
+        db_percentage = (self.db_time/total_elapsed*100) if total_elapsed > 0 else 0
+        
         performance_stats = {
             "总耗时": f"{total_elapsed:.2f}秒",
-            "LLM处理时间": f"{self.llm_time:.2f}秒 ({self.llm_time/total_elapsed*100:.1f}%)",
-            "解析时间": f"{self.parse_time:.2f}秒 ({self.parse_time/total_elapsed*100:.1f}%)",
-            "数据库时间": f"{self.db_time:.2f}秒 ({self.db_time/total_elapsed*100:.1f}%)",
+            "LLM处理时间": f"{self.llm_time:.2f}秒 ({llm_percentage:.1f}%)",
+            "解析时间": f"{self.parse_time:.2f}秒 ({parse_percentage:.1f}%)",
+            "数据库时间": f"{self.db_time:.2f}秒 ({db_percentage:.1f}%)",
             "候选实体组数": len(filtered_candidates),
             "识别出的合并组数": len(merge_groups),
             "合并的实体数": merged_count

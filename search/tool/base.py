@@ -7,6 +7,7 @@ from langchain_core.tools import BaseTool
 from model.get_models import get_llm_model, get_embeddings_model
 from CacheManage.base import CacheManager, ContextAndKeywordAwareCacheKeyStrategy, MemoryCacheBackend
 from config.neo4jdb import get_db_manager
+from search.utils import VectorUtils
 
 
 class BaseSearchTool(ABC):
@@ -86,6 +87,123 @@ class BaseSearchTool(ABC):
             str: 搜索结果
         """
         pass
+
+    def vector_search(self, query: str, limit: int = 5) -> List[str]:
+        """
+        基于向量相似度的搜索方法
+        
+        参数:
+            query: 搜索查询
+            limit: 最大返回结果数
+            
+        返回:
+            List[str]: 匹配实体ID列表
+        """
+        try:
+            # 生成查询的嵌入向量
+            query_embedding = self.embeddings.embed_query(query)
+            
+            # 构建Neo4j向量搜索查询
+            cypher = """
+            CALL db.index.vector.queryNodes('vector', $limit, $embedding)
+            YIELD node, score
+            RETURN node.id AS id, score
+            ORDER BY score DESC
+            """
+            
+            # 执行搜索
+            results = self.db_query(cypher, {
+                "embedding": query_embedding,
+                "limit": limit
+            })
+            
+            # 提取实体ID
+            if not results.empty:
+                return results['id'].tolist()
+            else:
+                return []
+                
+        except Exception as e:
+            print(f"向量搜索失败: {e}")
+            # 如果向量搜索失败，尝试使用文本搜索作为备用
+            return self.text_search(query, limit)
+    
+    def text_search(self, query: str, limit: int = 5) -> List[str]:
+        """
+        基于文本匹配的搜索方法
+        
+        参数:
+            query: 搜索查询
+            limit: 最大返回结果数
+            
+        返回:
+            List[str]: 匹配实体ID列表
+        """
+        try:
+            # 构建全文搜索查询
+            cypher = """
+            MATCH (e:__Entity__)
+            WHERE e.id CONTAINS $query OR e.description CONTAINS $query
+            RETURN e.id AS id
+            LIMIT $limit
+            """
+            
+            results = self.db_query(cypher, {
+                "query": query,
+                "limit": limit
+            })
+            
+            if not results.empty:
+                return results['id'].tolist()
+            else:
+                return []
+                
+        except Exception as e:
+            print(f"文本搜索失败: {e}")
+            return []
+            
+    def semantic_search(self, query: str, entities: List[Dict], 
+                        embedding_field: str = "embedding", 
+                        top_k: int = 5) -> List[Dict]:
+        """
+        对一组实体进行语义相似度搜索
+        
+        参数:
+            query: 搜索查询
+            entities: 实体列表
+            embedding_field: 嵌入向量的字段名
+            top_k: 返回的最大结果数
+            
+        返回:
+            按相似度排序的实体列表，每项增加"score"字段表示相似度
+        """
+        try:
+            # 生成查询的嵌入向量
+            query_embedding = self.embeddings.embed_query(query)
+            
+            # 使用工具类进行排序
+            return VectorUtils.rank_by_similarity(
+                query_embedding, 
+                entities, 
+                embedding_field, 
+                top_k
+            )
+        except Exception as e:
+            print(f"语义搜索失败: {e}")
+            return entities[:top_k] if top_k else entities
+    
+    def filter_by_relevance(self, query: str, docs: List, top_k: int = 5) -> List:
+        """根据相关性过滤文档"""
+        try:
+            query_embedding = self.embeddings.embed_query(query)
+            return VectorUtils.filter_documents_by_relevance(
+                query_embedding,
+                docs,
+                top_k=top_k
+            )
+        except Exception as e:
+            print(f"文档过滤失败: {e}")
+            return docs[:top_k] if top_k else docs
     
     def get_tool(self) -> BaseTool:
         """

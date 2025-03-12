@@ -168,8 +168,8 @@ class NaiveSearchTool(BaseSearchTool):
     def get_tool(self) -> BaseTool:
         """获取搜索工具"""
         class NaiveRetrievalTool(BaseTool):
-            name = "naive_retriever"
-            description = naive_description
+            name : str= "naive_retriever"
+            description : str = naive_description
             
             def _run(self_tool, query: Any) -> str:
                 return self.search(query)

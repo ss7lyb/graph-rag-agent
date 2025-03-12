@@ -449,8 +449,8 @@ class HybridSearchTool(BaseSearchTool):
     def get_global_tool(self) -> BaseTool:
         """获取全局搜索工具"""
         class GlobalSearchTool(BaseTool):
-            name = "global_retriever"
-            description = gl_description
+            name : str = "global_retriever"
+            description : str= gl_description
             
             def _run(self_tool, query: Any) -> str:
                 # 设置为仅使用高级内容

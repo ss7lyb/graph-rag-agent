@@ -554,19 +554,19 @@ class SLLPADetector(BaseCommunityDetector):
         if self.memory_mb > 32 * 1024:  # 大于32GB内存
             return {
                 'maxIterations': 100,
-                'minAssociationStrength': 0.1,
+                'minAssociationStrength': 0.05,
                 'concurrency': self.max_concurrency
             }
         elif self.memory_mb > 16 * 1024:  # 大于16GB内存
             return {
                 'maxIterations': 80,
-                'minAssociationStrength': 0.15,
+                'minAssociationStrength': 0.08,
                 'concurrency': max(1, self.max_concurrency - 1)
             }
         else:  # 小内存系统
             return {
                 'maxIterations': 50,
-                'minAssociationStrength': 0.2,
+                'minAssociationStrength': 0.1,
                 'concurrency': max(1, self.max_concurrency // 2)
             }
     

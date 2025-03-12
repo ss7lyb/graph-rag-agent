@@ -214,8 +214,8 @@ class BaseSearchTool(ABC):
         """
         # 创建动态工具类
         class DynamicSearchTool(BaseTool):
-            name = f"{self.__class__.__name__.lower()}"
-            description = "高级搜索工具，用于在知识库中查找信息"
+            name : str= f"{self.__class__.__name__.lower()}"
+            description : str = "高级搜索工具，用于在知识库中查找信息"
             
             def _run(self_tool, query: Any) -> str:
                 return self.search(query)

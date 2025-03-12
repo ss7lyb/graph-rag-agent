@@ -25,7 +25,8 @@ relationship_types=[
 similarity_threshold = 0.9
 
 # 社区算法：sllpa or leiden
-community_algorithm = 'sllpa'
+# sllpa如果发现不了社区，则换成leiden效果会好一点
+community_algorithm = 'leiden'
 
 # 构建路径
 BASE_DIR = Path(__file__).resolve().parent.parent

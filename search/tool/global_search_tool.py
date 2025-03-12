@@ -263,8 +263,8 @@ class GlobalSearchTool(BaseSearchTool):
     def get_tool(self) -> BaseTool:
         """获取搜索工具"""
         class GlobalRetrievalTool(BaseTool):
-            name = "global_retriever"
-            description = gl_description
+            name : str= "global_retriever"
+            description : str = gl_description
             
             def _run(self_tool, query: Any) -> List[str]:
                 return self.search(query)

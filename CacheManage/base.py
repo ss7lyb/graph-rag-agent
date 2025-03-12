@@ -4,6 +4,7 @@ import time
 import hashlib
 from typing import Any, Dict, Optional, Callable
 from abc import ABC, abstractmethod
+import threading
 
 
 class CacheKeyStrategy(ABC):
@@ -35,11 +36,13 @@ class ContextAwareCacheKeyStrategy(CacheKeyStrategy):
         """
         self.context_window = context_window
         self.conversation_history = {}
+        self.history_versions = {}
     
     def update_history(self, query: str, thread_id: str = "default", max_history: int = 10):
         """更新会话历史"""
         if thread_id not in self.conversation_history:
             self.conversation_history[thread_id] = []
+            self.history_versions[thread_id] = 0  # 初始化版本号
         
         # 添加新查询到历史
         self.conversation_history[thread_id].append(query)
@@ -47,28 +50,25 @@ class ContextAwareCacheKeyStrategy(CacheKeyStrategy):
         # 保持历史记录在可管理的大小
         if len(self.conversation_history[thread_id]) > max_history:
             self.conversation_history[thread_id] = self.conversation_history[thread_id][-max_history:]
+        
+        # 增加版本号，确保上下文变化时键也会变化
+        self.history_versions[thread_id] += 1
     
     def generate_key(self, query: str, **kwargs) -> str:
-        """
-        生成上下文感知的缓存键
-        
-        参数:
-            query: 查询字符串
-            thread_id: 会话ID，默认为"default"
-        
-        返回:
-            str: 缓存键
-        """
+        """生成上下文感知的缓存键"""
         thread_id = kwargs.get("thread_id", "default")
         
         # 获取当前会话的历史记录
         history = self.conversation_history.get(thread_id, [])
         
+        # 获取历史版本号
+        version = self.history_versions.get(thread_id, 0)
+        
         # 构建上下文字符串 - 包含最近的n条消息
         context = " ".join(history[-self.context_window:] if self.context_window > 0 else [])
         
-        # 组合上下文和查询生成缓存键
-        combined = (context + " " + query).strip()
+        # 组合上下文、版本和查询生成缓存键
+        combined = f"{context}|v{version}|{query}".strip()
         return hashlib.md5(combined.encode('utf-8')).hexdigest()
 
 
@@ -84,11 +84,13 @@ class ContextAndKeywordAwareCacheKeyStrategy(CacheKeyStrategy):
         """
         self.context_window = context_window
         self.conversation_history = {}
+        self.history_versions = {}  # 历史版本号
     
     def update_history(self, query: str, thread_id: str = "default", max_history: int = 10):
         """更新会话历史"""
         if thread_id not in self.conversation_history:
             self.conversation_history[thread_id] = []
+            self.history_versions[thread_id] = 0  # 初始化版本号
         
         # 添加新查询到历史
         self.conversation_history[thread_id].append(query)
@@ -96,40 +98,38 @@ class ContextAndKeywordAwareCacheKeyStrategy(CacheKeyStrategy):
         # 保持历史记录在可管理的大小
         if len(self.conversation_history[thread_id]) > max_history:
             self.conversation_history[thread_id] = self.conversation_history[thread_id][-max_history:]
+        
+        # 增加版本号，确保上下文变化时键也会变化
+        self.history_versions[thread_id] += 1
     
     def generate_key(self, query: str, **kwargs) -> str:
-        """
-        生成同时考虑上下文和关键词的缓存键
-        
-        参数:
-            query: 查询字符串
-            thread_id: 会话ID，默认为"default"
-            low_level_keywords: 低级关键词列表
-            high_level_keywords: 高级关键词列表
-        
-        返回:
-            str: 缓存键
-        """
+        """生成同时考虑上下文和关键词的缓存键"""
         thread_id = kwargs.get("thread_id", "default")
         key_parts = [query.strip()]
         
         # 添加上下文信息
         # 获取当前会话的历史记录
         history = self.conversation_history.get(thread_id, [])
+        version = self.history_versions.get(thread_id, 0)
         
         # 构建上下文字符串 - 包含最近的n条消息
         if self.context_window > 0 and history:
             context = " ".join(history[-self.context_window:])
-            key_parts.append("ctx:" + hashlib.md5(context.encode('utf-8')).hexdigest())
+            key_parts.append(f"ctx:{hashlib.md5(context.encode('utf-8')).hexdigest()}")
         
-        # 添加低级关键词
+        # 添加版本号
+        key_parts.append(f"v:{version}")
+        
+        # 添加低级关键词（保持现有功能）
         low_level_keywords = kwargs.get("low_level_keywords", [])
         if low_level_keywords:
+            # 对关键词排序，确保相同关键词集合生成相同的键
             key_parts.append("low:" + ",".join(sorted(low_level_keywords)))
         
-        # 添加高级关键词
+        # 添加高级关键词（保持现有功能）
         high_level_keywords = kwargs.get("high_level_keywords", [])
         if high_level_keywords:
+            # 对关键词排序，确保相同关键词集合生成相同的键
             key_parts.append("high:" + ",".join(sorted(high_level_keywords)))
         
         # 生成最终的键
@@ -226,16 +226,23 @@ class MemoryCacheBackend(CacheStorageBackend):
     def clear(self) -> None:
         """清空缓存"""
         self.cache.clear()
-        self.access_times.clear()
+        self.access_times.clear()  # 确保同时清空访问时间字典
     
     def _evict_lru(self) -> None:
         """淘汰最久未使用的缓存项"""
         if not self.access_times:
             return
-            
+        
         # 找出最旧的项
         oldest_key = min(self.access_times.items(), key=lambda x: x[1])[0]
-        self.delete(oldest_key)
+        self.delete(oldest_key)  # 使用delete方法确保同时清理access_times
+        
+    def cleanup_unused(self) -> None:
+        """清理access_times中未使用的键"""
+        # 找出那些在access_times中存在但在cache中不存在的键
+        unused_keys = [k for k in self.access_times if k not in self.cache]
+        for key in unused_keys:
+            del self.access_times[key]
 
 
 class DiskCacheBackend(CacheStorageBackend):
@@ -375,20 +382,32 @@ class DiskCacheBackend(CacheStorageBackend):
         if not self.write_queue:
             return
         
+        successful_keys = []
+        failed_keys = []
+        
         for key, value in self.write_queue:
             try:
                 with open(self._get_cache_path(key), 'w', encoding='utf-8') as f:
                     json.dump(value, f, ensure_ascii=False, indent=2)
+                successful_keys.append(key)
             except Exception as e:
-                print(f"写入缓存文件失败: {e}")
+                failed_keys.append(key)
+                print(f"写入缓存文件失败 ({key}): {e}")
         
-        # 清空队列并更新时间戳
-        self.write_queue = []
+        # 更新写入队列，只保留失败的项
+        self.write_queue = [(k, v) for k, v in self.write_queue if k in failed_keys]
+        
+        # 更新时间戳
         self.last_flush_time = time.time()
         
-        # 保存索引
-        self._save_index()
-    
+        # 如果有成功项，保存索引
+        if successful_keys:
+            try:
+                self._save_index()
+            except Exception as e:
+                print(f"保存索引失败: {e}")
+                # 下次写入时会再次尝试保存索引
+     
     def _save_index_async(self) -> None:
         """异步保存索引（简化实现）"""
         # 在真实环境中，应该使用异步方法执行
@@ -489,6 +508,10 @@ class HybridCacheBackend(CacheStorageBackend):
         """
         self.memory_cache = MemoryCacheBackend(max_size=memory_max_size)
         self.disk_cache = DiskCacheBackend(cache_dir=cache_dir, max_size=disk_max_size)
+        self.memory_hits = 0
+        self.disk_hits = 0
+        self.misses = 0
+        self.frequent_keys = set()  # 跟踪频繁访问的键
     
     def get(self, key: str) -> Optional[Any]:
         """
@@ -508,10 +531,17 @@ class HybridCacheBackend(CacheStorageBackend):
         # 如果内存中没有，检查磁盘缓存
         value = self.disk_cache.get(key)
         if value is not None:
-            # 将磁盘中的项添加到内存缓存
-            self.memory_cache.set(key, value)
+            # 检查是否是高质量缓存项，优先加入内存
+            is_high_quality = False
+            if isinstance(value, dict) and "metadata" in value:
+                metadata = value.get("metadata", {})
+                is_high_quality = metadata.get("user_verified", False) or metadata.get("fast_path_eligible", False)
+            
+            # 将磁盘中的项添加到内存缓存，优先考虑高质量项
+            if is_high_quality:
+                self.memory_cache.set(key, value)
+            
             return value
-        
         return None
     
     def set(self, key: str, value: Any) -> None:
@@ -522,9 +552,21 @@ class HybridCacheBackend(CacheStorageBackend):
             key: 缓存键
             value: 缓存值
         """
-        # 同时更新内存和磁盘缓存
-        self.memory_cache.set(key, value)
+        # 检查是否是高质量缓存项
+        is_high_quality = False
+        if isinstance(value, dict) and "metadata" in value:
+            metadata = value.get("metadata", {})
+            is_high_quality = metadata.get("user_verified", False) or metadata.get("fast_path_eligible", False)
+        
+        # 总是更新磁盘缓存
         self.disk_cache.set(key, value)
+        
+        # 高质量项总是加入内存缓存
+        if is_high_quality:
+            self.memory_cache.set(key, value)
+        else:
+            # 非高质量项根据策略决定是否加入内存
+            self.memory_cache.set(key, value)
     
     def delete(self, key: str) -> bool:
         """
@@ -550,20 +592,23 @@ class CacheItem:
     """缓存项包装类，支持元数据"""
     
     def __init__(self, content: Any, metadata: Optional[Dict[str, Any]] = None):
-        """
-        初始化缓存项
-        
-        参数:
-            content: 缓存内容
-            metadata: 元数据字典
-        """
+        """初始化缓存项"""
         self.content = content
-        self.metadata = metadata or {
-            "created_at": time.time(),
-            "quality_score": 0,
-            "user_verified": False,
-            "access_count": 0
-        }
+        
+        # 确保元数据包含必要字段
+        self.metadata = metadata or {}
+        
+        if "created_at" not in self.metadata:
+            self.metadata["created_at"] = time.time()
+        if "quality_score" not in self.metadata:
+            self.metadata["quality_score"] = 0
+        if "user_verified" not in self.metadata:
+            self.metadata["user_verified"] = False
+        if "access_count" not in self.metadata:
+            self.metadata["access_count"] = 0
+        if "fast_path_eligible" not in self.metadata:
+            # 增加快速路径标记
+            self.metadata["fast_path_eligible"] = False
     
     def get_content(self) -> Any:
         """
@@ -584,19 +629,18 @@ class CacheItem:
         return self.metadata.get("user_verified", False) or self.metadata.get("quality_score", 0) > 2
     
     def mark_quality(self, is_positive: bool) -> None:
-        """
-        标记缓存质量
-        
-        参数:
-            is_positive: 是否为正面评价
-        """
+        """标记缓存质量"""
         if is_positive:
             current_score = self.metadata.get("quality_score", 0)
             self.metadata["quality_score"] = current_score + 1
             self.metadata["user_verified"] = True
+            # 标记为适合快速路径
+            self.metadata["fast_path_eligible"] = True
         else:
             current_score = self.metadata.get("quality_score", 0)
             self.metadata["quality_score"] = max(0, current_score - 2)  # 负面评价权重更大
+            # 标记为不适合快速路径
+            self.metadata["fast_path_eligible"] = False
     
     def update_access_stats(self) -> None:
         """更新访问统计"""
@@ -626,15 +670,49 @@ class CacheItem:
         返回:
             CacheItem: 缓存项
         """
-        if isinstance(data, dict) and "content" in data and "metadata" in data:
-            return cls(data["content"], data["metadata"])
-        else:
-            # 尝试兼容旧格式
-            return cls(data, {
+        try:
+            if isinstance(data, dict):
+                if "content" in data and "metadata" in data:
+                    # 处理完整格式
+                    metadata = data["metadata"]
+                    # 确保metadata具有所有必要字段
+                    if not isinstance(metadata, dict):
+                        metadata = {}
+                    if "created_at" not in metadata:
+                        metadata["created_at"] = time.time()
+                    if "quality_score" not in metadata:
+                        metadata["quality_score"] = 0
+                    if "user_verified" not in metadata:
+                        metadata["user_verified"] = False
+                    if "access_count" not in metadata:
+                        metadata["access_count"] = 0
+                    
+                    return cls(data["content"], metadata)
+                else:
+                    # 处理简单格式
+                    return cls(data, {
+                        "created_at": time.time(),
+                        "quality_score": 0,
+                        "user_verified": False,
+                        "access_count": 0
+                    })
+            else:
+                # 如果是非字典类型，直接作为内容
+                return cls(data, {
+                    "created_at": time.time(),
+                    "quality_score": 0,
+                    "user_verified": False,
+                    "access_count": 0
+                })
+        except Exception as e:
+            print(f"反序列化缓存项失败: {e}")
+            # 返回默认对象，确保程序不会崩溃
+            return cls("Error deserializing cache item", {
                 "created_at": time.time(),
                 "quality_score": 0,
                 "user_verified": False,
-                "access_count": 0
+                "access_count": 0,
+                "error": str(e)
             })
     
     @classmethod
@@ -654,46 +732,90 @@ class CacheItem:
             return cls.from_dict(data)
         else:
             return cls(data)
+    
+    
+class ThreadSafeCacheBackend(CacheStorageBackend):
+    """线程安全的缓存后端装饰器"""
+
+    def __init__(self, backend: CacheStorageBackend):
+        """
+        初始化线程安全缓存后端
+        
+        参数:
+            backend: 被装饰的缓存后端
+        """
+        self.backend = backend
+        self.lock = threading.RLock()
+    
+    def get(self, key: str) -> Optional[Any]:
+        """获取缓存项，线程安全"""
+        with self.lock:
+            return self.backend.get(key)
+    
+    def set(self, key: str, value: Any) -> None:
+        """设置缓存项，线程安全"""
+        with self.lock:
+            self.backend.set(key, value)
+    
+    def delete(self, key: str) -> bool:
+        """删除缓存项，线程安全"""
+        with self.lock:
+            return self.backend.delete(key)
+    
+    def clear(self) -> None:
+        """清空缓存，线程安全"""
+        with self.lock:
+            self.backend.clear()
 
 
 class CacheManager:
     """统一缓存管理器，提供高级缓存功能"""
     
     def __init__(self, 
-                 key_strategy: CacheKeyStrategy = None, 
-                 storage_backend: CacheStorageBackend = None,
-                 cache_dir: str = "./cache",
-                 memory_only: bool = False,
-                 max_memory_size: int = 100,
-                 max_disk_size: int = 1000):
-        """
-        初始化缓存管理器
-        
-        参数:
-            key_strategy: 缓存键生成策略
-            storage_backend: 存储后端
-            cache_dir: 缓存目录
-            memory_only: 是否仅使用内存缓存
-            max_memory_size: 内存缓存最大大小
-            max_disk_size: 磁盘缓存最大大小
-        """
+             key_strategy: CacheKeyStrategy = None, 
+             storage_backend: CacheStorageBackend = None,
+             cache_dir: str = "./cache",
+             memory_only: bool = False,
+             max_memory_size: int = 100,
+             max_disk_size: int = 1000,
+             thread_safe: bool = True):
         # 设置缓存键策略
         self.key_strategy = key_strategy or SimpleCacheKeyStrategy()
         
         # 设置存储后端
+        backend = None
         if storage_backend:
-            self.storage = storage_backend
+            backend = storage_backend
         elif memory_only:
-            self.storage = MemoryCacheBackend(max_size=max_memory_size)
+            backend = MemoryCacheBackend(max_size=max_memory_size)
         else:
-            self.storage = HybridCacheBackend(
+            backend = HybridCacheBackend(
                 cache_dir=cache_dir,
                 memory_max_size=max_memory_size,
                 disk_max_size=max_disk_size
             )
         
+        # 如果需要线程安全，添加包装器
+        if thread_safe:
+            self.storage = ThreadSafeCacheBackend(backend)
+        else:
+            self.storage = backend
+        
         # 性能指标收集
         self.performance_metrics = {}
+    
+    def _get_consistent_key(self, query: str, **kwargs) -> str:
+        """
+        生成一致的缓存键，确保不同方法间的键生成逻辑一致
+        
+        参数:
+            query: 查询内容
+            **kwargs: 其他参数，如thread_id、关键词等
+            
+        返回:
+            str: 生成的一致缓存键
+        """
+        return self.key_strategy.generate_key(query, **kwargs)
     
     def get(self, query: str, skip_validation: bool = False, **kwargs) -> Optional[Any]:
         """
@@ -710,7 +832,7 @@ class CacheManager:
         start_time = time.time()
         
         # 生成缓存键
-        key = self.key_strategy.generate_key(query, **kwargs)
+        key = self._get_consistent_key(query, **kwargs)
         
         # 获取缓存项
         cached_data = self.storage.get(key)
@@ -749,7 +871,7 @@ class CacheManager:
         start_time = time.time()
         
         # 生成缓存键
-        key = self.key_strategy.generate_key(query, **kwargs)
+        key = self._get_consistent_key(query, **kwargs)
         
         # 获取缓存项
         cached_data = self.storage.get(key)
@@ -795,7 +917,7 @@ class CacheManager:
             self.key_strategy.update_history(query, thread_id)
         
         # 生成缓存键
-        key = self.key_strategy.generate_key(query, **kwargs)
+        key = self._get_consistent_key(query, **kwargs)
         
         # 包装缓存项
         if isinstance(result, dict) and "content" in result and "metadata" in result:
@@ -825,7 +947,7 @@ class CacheManager:
         start_time = time.time()
         
         # 生成缓存键
-        key = self.key_strategy.generate_key(query, **kwargs)
+        key = self._get_consistent_key(query, **kwargs)
         
         # 获取缓存项
         cached_data = self.storage.get(key)
@@ -842,6 +964,12 @@ class CacheManager:
         # 更新缓存
         self.storage.set(key, cache_item.to_dict())
         
+        if is_positive and cache_item.is_high_quality():
+            # 明确标记为高质量缓存，增加额外属性确保快速路径能识别
+            item_dict = cache_item.to_dict()
+            item_dict["metadata"]["fast_path_eligible"] = True
+            self.storage.set(key, item_dict)
+        
         self.performance_metrics["mark_time"] = time.time() - start_time
         return True
     
@@ -857,7 +985,7 @@ class CacheManager:
             bool: 是否成功删除
         """
         # 生成缓存键
-        key = self.key_strategy.generate_key(query, **kwargs)
+        key = self._get_consistent_key(query, **kwargs)
         
         # 删除缓存项
         return self.storage.delete(key)

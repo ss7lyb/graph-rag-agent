@@ -160,7 +160,6 @@ class BaseAgent(ABC):
         
         # 使用缓存管理器的快速获取方法，传递相关参数
         result = self.cache_manager.get_fast(query, **cache_params)
-        
         duration = time.time() - start_time
         self._log_performance("fast_cache_check", {
             "duration": duration,
@@ -327,7 +326,7 @@ class BaseAgent(ABC):
         }
         
         # 调用缓存管理器的质量标记方法，传递相关参数
-        self.cache_manager.mark_quality(query.strip(), is_positive, **cache_params)
+        marked = self.cache_manager.mark_quality(query.strip(), is_positive, **cache_params)
         
         mark_time = time.time() - start_time
         self._log_performance("mark_quality", {

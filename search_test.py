@@ -33,7 +33,7 @@
 from agent.deep_research_agent import DeepResearchAgent
 
 agent = DeepResearchAgent()
-result = agent.ask_with_thinking("旷课多少学时会被退学？")
+result = agent.ask_with_thinking("我旷课了30学时，我会被退学吗？")
 print(result)
 
 print(result.get('answer'))

@@ -1,5 +1,8 @@
 from pathlib import Path
 
+# 知识库主题，用于deepresearch
+KB_NAME = "华东理工大学"
+
 # 知识图谱设置
 theme="华东理工大学学生管理"
 entity_types=[

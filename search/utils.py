@@ -7,7 +7,16 @@ class VectorUtils:
     @staticmethod
     def cosine_similarity(vec1: Union[List[float], np.ndarray], 
                          vec2: Union[List[float], np.ndarray]) -> float:
-        """计算两个向量的余弦相似度"""
+        """
+        计算两个向量的余弦相似度
+        
+        参数:
+            vec1: 第一个向量
+            vec2: 第二个向量
+            
+        返回:
+            float: 相似度值 (0-1)
+        """
         # 确保向量是numpy数组
         if not isinstance(vec1, np.ndarray):
             vec1 = np.array(vec1)
@@ -53,7 +62,7 @@ class VectorUtils:
                 scored_item["score"] = similarity
                 scored_items.append(scored_item)
         
-        # 按相似度排序
+        # 按相似度排序（降序）
         scored_items.sort(key=lambda x: x["score"], reverse=True)
         
         # 如果指定了top_k，则返回前top_k个结果
@@ -102,10 +111,10 @@ class VectorUtils:
                     'score': 0.0
                 })
         
-        # 按分数排序
+        # 按分数排序（降序）
         scored_docs.sort(key=lambda x: x['score'], reverse=True)
         
-        # 如果指定了top_k，则返回前top_k个结果
+        # 提取排序后的文档
         if top_k is not None:
             top_docs = [item['document'] for item in scored_docs[:top_k]]
         else:
@@ -117,7 +126,7 @@ class VectorUtils:
     def batch_cosine_similarity(query_embedding: np.ndarray, 
                             embeddings: List[np.ndarray]) -> np.ndarray:
         """
-        批量计算余弦相似度
+        批量计算余弦相似度，提高效率
         
         参数:
             query_embedding: 查询向量
@@ -141,7 +150,7 @@ class VectorUtils:
         matrix_norm[matrix_norm == 0] = 1.0
         matrix_normalized = matrix / matrix_norm
         
-        # 一次性计算所有相似度
+        # 一次性计算所有相似度（矩阵乘法提高效率）
         similarities = np.dot(matrix_normalized, query_normalized)
         
         return similarities

@@ -31,6 +31,7 @@ class HybridSearchTool(BaseSearchTool):
         # 调用父类构造函数
         super().__init__(cache_dir="./cache/hybrid_search")
 
+        # 设置处理链
         self._setup_chains()
     
     def _setup_chains(self):
@@ -85,7 +86,15 @@ class HybridSearchTool(BaseSearchTool):
         self.keyword_chain = self.keyword_prompt | self.llm | StrOutputParser()
     
     def extract_keywords(self, query: str) -> Dict[str, List[str]]:
-        """从查询中提取双级关键词"""
+        """
+        从查询中提取双级关键词
+        
+        参数:
+            query: 查询字符串
+            
+        返回:
+            Dict[str, List[str]]: 分类关键词字典
+        """
         # 检查缓存
         cached_keywords = self.cache_manager.get(f"keywords:{query}")
         if cached_keywords:
@@ -94,10 +103,13 @@ class HybridSearchTool(BaseSearchTool):
         try:
             llm_start = time.time()
             
-            # 尝试解析JSON结果
+            # 调用LLM提取关键词
             result = self.keyword_chain.invoke({"query": query})
+            
+            # 解析JSON结果
             keywords = json.loads(result)
             
+            # 记录LLM处理时间
             self.performance_metrics["llm_time"] += time.time() - llm_start
             
             # 确保包含必要的键
@@ -119,7 +131,16 @@ class HybridSearchTool(BaseSearchTool):
             return {"low_level": [], "high_level": []}
     
     def db_query(self, cypher: str, params: Dict[str, Any] = {}) -> pd.DataFrame:
-        """执行Cypher查询并返回结果"""
+        """
+        执行Cypher查询并返回结果
+        
+        参数:
+            cypher: Cypher查询语句
+            params: 查询参数
+            
+        返回:
+            pandas.DataFrame: 查询结果
+        """
         return self.driver.execute_query(
             cypher,
             parameters_=params,
@@ -127,7 +148,16 @@ class HybridSearchTool(BaseSearchTool):
         )
     
     def _vector_search(self, query: str, limit: int = 5) -> List[str]:
-        """使用基类的向量搜索方法"""
+        """
+        使用基类的向量搜索方法
+        
+        参数:
+            query: 查询字符串
+            limit: 最大结果数
+            
+        返回:
+            List[str]: 实体ID列表
+        """
         return self.vector_search(query, limit)
 
     def _fallback_text_search(self, query: str, limit: int = 5) -> List[str]:
@@ -165,7 +195,16 @@ class HybridSearchTool(BaseSearchTool):
             return []
     
     def _retrieve_low_level_content(self, query: str, keywords: List[str]) -> str:
-        """检索低级内容（具体实体和关系）"""
+        """
+        检索低级内容（具体实体和关系）
+        
+        参数:
+            query: 查询字符串
+            keywords: 低级关键词列表
+            
+        返回:
+            str: 格式化的低级内容
+        """
         query_start = time.time()
         
         # 首先使用关键词查询获取相关实体
@@ -315,7 +354,16 @@ class HybridSearchTool(BaseSearchTool):
             return "查询实体信息时出错。"
     
     def _retrieve_high_level_content(self, query: str, keywords: List[str]) -> str:
-        """检索高级内容（社区和主题概念）"""
+        """
+        检索高级内容（社区和主题概念）
+        
+        参数:
+            query: 查询字符串
+            keywords: 高级关键词列表
+            
+        返回:
+            str: 格式化的高级内容
+        """
         query_start = time.time()
         
         # 构建关键词条件
@@ -419,7 +467,7 @@ class HybridSearchTool(BaseSearchTool):
             # 3. 生成最终答案
             llm_start = time.time()
             
-            # 添加需要的response_type参数
+            # 调用LLM生成最终答案
             result = self.query_chain.invoke({
                 "query": query,
                 "low_level": low_level_content,
@@ -447,7 +495,12 @@ class HybridSearchTool(BaseSearchTool):
             return error_msg
     
     def get_global_tool(self) -> BaseTool:
-        """获取全局搜索工具"""
+        """
+        获取全局搜索工具
+        
+        返回:
+            BaseTool: 全局搜索工具实例
+        """
         class GlobalSearchTool(BaseTool):
             name : str = "global_retriever"
             description : str= gl_description

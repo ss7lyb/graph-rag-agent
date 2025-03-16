@@ -27,6 +27,7 @@ class GlobalSearchTool(BaseSearchTool):
         # 调用父类构造函数
         super().__init__(cache_dir="./cache/global_search")
 
+        # 设置处理链
         self._setup_chains()
     
     def _setup_chains(self):
@@ -75,7 +76,15 @@ class GlobalSearchTool(BaseSearchTool):
         self.keyword_chain = self.keyword_prompt | self.llm | StrOutputParser()
     
     def extract_keywords(self, query: str) -> Dict[str, List[str]]:
-        """从查询中提取关键词"""
+        """
+        从查询中提取关键词
+        
+        参数:
+            query: 查询字符串
+            
+        返回:
+            Dict[str, List[str]]: 关键词字典
+        """
         # 检查缓存
         cached_keywords = self.cache_manager.get(f"keywords:{query}")
         if cached_keywords:
@@ -84,10 +93,13 @@ class GlobalSearchTool(BaseSearchTool):
         try:
             llm_start = time.time()
             
-            # 尝试解析JSON结果
+            # 调用LLM提取关键词
             result = self.keyword_chain.invoke({"query": query})
+            
+            # 解析JSON结果
             keywords = json.loads(result)
             
+            # 记录LLM处理时间
             self.performance_metrics["llm_time"] = time.time() - llm_start
             
             # 将关键词数组转换为标准格式
@@ -116,7 +128,16 @@ class GlobalSearchTool(BaseSearchTool):
             return {"keywords": [], "low_level": [], "high_level": []}
     
     def _get_community_data(self, keywords: List[str] = None) -> List[dict]:
-        """使用关键词检索社区数据"""
+        """
+        使用关键词检索社区数据
+        
+        参数:
+            keywords: 关键词列表，用于过滤社区
+            
+        返回:
+            List[dict]: 社区数据列表
+        """
+        # 构建基础查询
         cypher_query = """
         MATCH (c:__Community__)
         WHERE c.level = $level
@@ -147,7 +168,16 @@ class GlobalSearchTool(BaseSearchTool):
         return self.graph.query(cypher_query, params=params)
     
     def _process_community_batch(self, query: str, batch: List[dict]) -> str:
-        """处理社区批次"""
+        """
+        处理社区批次，提高效率
+        
+        参数:
+            query: 查询字符串
+            batch: 社区数据批次
+            
+        返回:
+            str: 批次处理结果
+        """
         # 合并批次内的社区数据
         combined_data = []
         for item in batch:
@@ -172,7 +202,7 @@ class GlobalSearchTool(BaseSearchTool):
         返回:
             List[str]: 中间结果列表
         """
-        batch_size = 5  # 每批处理5个社区
+        batch_size = 5  # 每批处理5个社区，提高效率
         
         results = []
         
@@ -199,7 +229,7 @@ class GlobalSearchTool(BaseSearchTool):
         返回:
             str: 最终生成的答案
         """
-        # 生成最终答案
+        # 调用Reduce链生成最终答案
         return self.reduce_chain.invoke({
             "report_data": intermediate_results,
             "question": query,
@@ -261,7 +291,12 @@ class GlobalSearchTool(BaseSearchTool):
             return [f"搜索过程中出现错误: {str(e)}"]
     
     def get_tool(self) -> BaseTool:
-        """获取搜索工具"""
+        """
+        获取搜索工具
+        
+        返回:
+            BaseTool: 搜索工具实例
+        """
         class GlobalRetrievalTool(BaseTool):
             name : str= "global_retriever"
             description : str = gl_description

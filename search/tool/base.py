@@ -11,16 +11,16 @@ from search.utils import VectorUtils
 
 
 class BaseSearchTool(ABC):
-    """搜索工具基础类"""
+    """搜索工具基础类，为各种搜索实现提供通用功能"""
     
     def __init__(self, cache_dir: str = "./cache/search"):
         """
         初始化搜索工具
         
         参数:
-            cache_dir: 缓存目录
+            cache_dir: 缓存目录，用于存储搜索结果
         """
-        # 初始化模型
+        # 初始化大语言模型和嵌入模型
         self.llm = get_llm_model()
         self.embeddings = get_embeddings_model()
         
@@ -31,11 +31,11 @@ class BaseSearchTool(ABC):
             cache_dir=cache_dir
         )
         
-        # 性能监控
+        # 性能监控指标
         self.performance_metrics = {
-            "query_time": 0,
-            "llm_time": 0,
-            "total_time": 0
+            "query_time": 0,  # 数据库查询时间
+            "llm_time": 0,    # 大语言模型处理时间
+            "total_time": 0   # 总处理时间
         }
         
         # 初始化Neo4j连接
@@ -43,23 +43,35 @@ class BaseSearchTool(ABC):
     
     def _setup_neo4j(self):
         """设置Neo4j连接"""
-        # 获取连接管理器
+        # 获取数据库连接管理器
         db_manager = get_db_manager()
         
-        # 获取图实例
+        # 获取图数据库实例
         self.graph = db_manager.get_graph()
         
-        # 获取驱动（如果需要直接执行查询）
+        # 获取驱动（用于直接执行查询）
         self.driver = db_manager.get_driver()
     
     def db_query(self, cypher: str, params: Dict[str, Any] = {}):
-        """执行Cypher查询"""
+        """
+        执行Cypher查询
+        
+        参数:
+            cypher: Cypher查询语句
+            params: 查询参数
+            
+        返回:
+            查询结果
+        """
         # 使用连接管理器执行查询
         return get_db_manager().execute_query(cypher, params)
         
     @abstractmethod
     def _setup_chains(self):
-        """设置处理链，子类必须实现"""
+        """
+        设置处理链，子类必须实现
+        用于配置各种LLM处理链和提示模板
+        """
         pass
     
     @abstractmethod
@@ -130,7 +142,7 @@ class BaseSearchTool(ABC):
     
     def text_search(self, query: str, limit: int = 5) -> List[str]:
         """
-        基于文本匹配的搜索方法
+        基于文本匹配的搜索方法（作为向量搜索的备选）
         
         参数:
             query: 搜索查询
@@ -193,7 +205,17 @@ class BaseSearchTool(ABC):
             return entities[:top_k] if top_k else entities
     
     def filter_by_relevance(self, query: str, docs: List, top_k: int = 5) -> List:
-        """根据相关性过滤文档"""
+        """
+        根据相关性过滤文档
+        
+        参数:
+            query: 查询字符串
+            docs: 文档列表
+            top_k: 返回的最大结果数
+            
+        返回:
+            按相关性排序的文档列表
+        """
         try:
             query_embedding = self.embeddings.embed_query(query)
             return VectorUtils.filter_documents_by_relevance(
@@ -207,7 +229,7 @@ class BaseSearchTool(ABC):
     
     def get_tool(self) -> BaseTool:
         """
-        获取搜索工具
+        获取搜索工具实例
         
         返回:
             BaseTool: 搜索工具
@@ -238,7 +260,7 @@ class BaseSearchTool(ABC):
         print(f"性能指标 - {operation}: {duration:.4f}s")
     
     def close(self):
-        """关闭资源"""
+        """关闭资源连接"""
         # 关闭Neo4j连接
         if hasattr(self, 'graph'):
             # 如果Neo4jGraph有close方法，调用它
@@ -250,5 +272,5 @@ class BaseSearchTool(ABC):
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """上下文管理器出口"""
+        """上下文管理器出口，确保资源被正确释放"""
         self.close()

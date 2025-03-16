@@ -23,6 +23,7 @@ class NaiveSearchTool(BaseSearchTool):
         # 搜索参数设置
         self.top_k = 3 # 检索的最大文档数量
         
+        # 设置处理链
         self._setup_chains()
         
     def _setup_chains(self):
@@ -43,11 +44,28 @@ class NaiveSearchTool(BaseSearchTool):
         self.query_chain = self.query_prompt | self.llm | StrOutputParser()
     
     def extract_keywords(self, query: str) -> Dict[str, List[str]]:
-        # naive rag 不需要关键词提取
+        """
+        从查询中提取关键词（naive rag不需要复杂的关键词提取）
+        
+        参数:
+            query: 查询字符串
+            
+        返回:
+            Dict[str, List[str]]: 空的关键词字典
+        """
         return {"low_level": [], "high_level": []}
     
     def _cosine_similarity(self, vec1, vec2):
-        """计算两个向量的余弦相似度"""
+        """
+        计算两个向量的余弦相似度
+        
+        参数:
+            vec1: 第一个向量
+            vec2: 第二个向量
+            
+        返回:
+            float: 相似度值
+        """
         # 确保向量是numpy数组
         if not isinstance(vec1, np.ndarray):
             vec1 = np.array(vec1)
@@ -103,11 +121,12 @@ class NaiveSearchTool(BaseSearchTool):
             LIMIT 100  // 获取候选集
             """)
             
+            # 使用工具类对候选集进行排序
             scored_chunks = VectorUtils.rank_by_similarity(
-            query_embedding,
-            chunks_with_embedding,
-            "embedding",
-            self.top_k
+                query_embedding,
+                chunks_with_embedding,
+                "embedding",
+                self.top_k
             )
             
             # 取top_k个结果
@@ -166,7 +185,12 @@ class NaiveSearchTool(BaseSearchTool):
             return f"搜索过程中出错: {str(e)}\n\n{{'data': {{'Chunks':[] }} }}"
     
     def get_tool(self) -> BaseTool:
-        """获取搜索工具"""
+        """
+        获取搜索工具
+        
+        返回:
+            BaseTool: 搜索工具实例
+        """
         class NaiveRetrievalTool(BaseTool):
             name : str= "naive_retriever"
             description : str = naive_description

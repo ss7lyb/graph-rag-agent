@@ -9,9 +9,9 @@ from config.neo4jdb import get_db_manager
 
 class LocalSearch:
     """
-    本地搜索类：使用Neo4j和LangChain实现基于向量检索的本地搜索功能。
+    本地搜索类：使用Neo4j和LangChain实现基于向量检索的本地搜索功能
     
-    该类通过向量相似度搜索在知识图谱中查找相关内容，并生成回答。
+    该类通过向量相似度搜索在知识图谱中查找相关内容，并生成回答
     主要功能包括：
     1. 基于向量相似度的文本检索
     2. 社区内容和关系的检索
@@ -19,25 +19,38 @@ class LocalSearch:
     """
     
     def __init__(self, llm, embeddings, response_type: str = "多个段落"):
+        """
+        初始化本地搜索类
         
+        参数:
+            llm: 大语言模型实例
+            embeddings: 向量嵌入模型
+            response_type: 响应类型，默认为"多个段落"
+        """
         # 保存模型实例和配置
         self.llm = llm
         self.embeddings = embeddings
         self.response_type = response_type
         
+        # 获取数据库连接管理器
         db_manager = get_db_manager()
         self.driver = db_manager.get_driver()
         
         # 设置检索参数
-        self.top_chunks = 3
-        self.top_communities = 3
-        self.top_outside_rels = 10
-        self.top_inside_rels = 10
-        self.top_entities = 10
-        self.index_name = 'vector'
+        self.top_chunks = 3         # 最多返回的文本块数
+        self.top_communities = 3    # 最多返回的社区数
+        self.top_outside_rels = 10  # 最多返回的外部关系数
+        self.top_inside_rels = 10   # 最多返回的内部关系数
+        self.top_entities = 10      # 最多返回的实体数
+        self.index_name = 'vector'  # 向量索引名称
         
         # 初始化社区节点权重
         self._init_community_weights()
+        
+        # 配置Neo4j URI和认证信息
+        self.neo4j_uri = db_manager.neo4j_uri
+        self.neo4j_username = db_manager.neo4j_username
+        self.neo4j_password = db_manager.neo4j_password
         
     def _init_community_weights(self):
         """初始化Neo4j中社区节点的权重"""
@@ -48,7 +61,16 @@ class LocalSearch:
         """)
         
     def db_query(self, cypher: str, params: Dict[str, Any] = {}) -> pd.DataFrame:
-        """执行Cypher查询并返回结果"""
+        """
+        执行Cypher查询并返回结果
+        
+        参数:
+            cypher: Cypher查询语句
+            params: 查询参数
+            
+        返回:
+            pandas.DataFrame: 查询结果
+        """
         return self.driver.execute_query(
             cypher,
             parameters_=params,
@@ -57,7 +79,12 @@ class LocalSearch:
         
     @property
     def retrieval_query(self) -> str:
-        """获取Neo4j检索查询语句"""
+        """
+        获取Neo4j检索查询语句
+        
+        返回:
+            str: Cypher查询语句，用于检索相关内容
+        """
         return """
         WITH collect(node) as nodes
         WITH
@@ -106,7 +133,12 @@ class LocalSearch:
         """
     
     def as_retriever(self, **kwargs):
-        """返回检索器实例，用于链式调用"""
+        """
+        返回检索器实例，用于链式调用
+        
+        返回:
+            检索器实例
+        """
         # 生成包含所有检索参数的查询
         final_query = self.retrieval_query.replace("$topChunks", str(self.top_chunks))\
             .replace("$topCommunities", str(self.top_communities))\
@@ -187,12 +219,10 @@ class LocalSearch:
         
         # 使用LLM生成响应
         response = chain.invoke({
-            "context": docs[0].page_content,
+            "context": docs[0].page_content if docs else "",
             "input": query,
             "response_type": self.response_type
         })
-
-        # print(docs[0].page_content) # 数据源
         
         return response
         

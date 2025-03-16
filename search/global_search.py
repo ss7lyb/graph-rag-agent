@@ -8,7 +8,7 @@ from config.neo4jdb import get_db_manager
 
 class GlobalSearch:
     """
-    全局搜索类：使用Neo4j和LangChain实现基于Map-Reduce模式的全局搜索功能。
+    全局搜索类：使用Neo4j和LangChain实现基于Map-Reduce模式的全局搜索功能
     
     该类主要用于在整个知识图谱范围内进行搜索，采用以下步骤：
     1. 获取指定层级的所有社区数据
@@ -17,6 +17,13 @@ class GlobalSearch:
     """
     
     def __init__(self, llm, response_type: str = "多个段落"):
+        """
+        初始化全局搜索类
+        
+        参数:
+            llm: 大语言模型实例
+            response_type: 响应类型，默认为"多个段落"
+        """
         # 保存模型实例和配置
         self.llm = llm
         self.response_type = response_type
@@ -138,6 +145,7 @@ class GlobalSearch:
         return self._reduce_results(query, intermediate_results)
         
     def close(self):
+        """关闭资源连接"""
         pass
             
     def __enter__(self):

@@ -9,7 +9,7 @@ import pprint
 import time
 
 from model.get_models import get_llm_model
-from CacheManage.base import (
+from CacheManage.manager import (
     CacheManager, 
     ContextAwareCacheKeyStrategy, 
     HybridCacheBackend

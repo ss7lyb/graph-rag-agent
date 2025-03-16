@@ -5,7 +5,7 @@ import time
 from langchain_core.tools import BaseTool
 
 from model.get_models import get_llm_model, get_embeddings_model
-from CacheManage.base import CacheManager, ContextAndKeywordAwareCacheKeyStrategy, MemoryCacheBackend
+from CacheManage.manager import CacheManager, ContextAndKeywordAwareCacheKeyStrategy, MemoryCacheBackend
 from config.neo4jdb import get_db_manager
 from search.utils import VectorUtils
 

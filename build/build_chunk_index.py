@@ -8,7 +8,7 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 
-from graph.chunk_indexer import ChunkIndexManager
+from graph import ChunkIndexManager
 from config.neo4jdb import get_db_manager
 
 import shutup

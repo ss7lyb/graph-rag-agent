@@ -9,11 +9,11 @@ from rich.panel import Panel
 from rich.text import Text
 
 from config.settings import community_algorithm
-from graph.entity_indexer import EntityIndexManager
-from graph.similar_entity import GDSConfig, SimilarEntityDetector
-from graph.entity_merger import EntityMerger
-from community.dector import LeidenDetector, SLLPADetector
-from community.summary import CommunitySummarizerFactory
+from graph import EntityIndexManager
+from graph import GDSConfig, SimilarEntityDetector
+from graph import EntityMerger
+from community import CommunityDetectorFactory
+from community import CommunitySummarizerFactory
 from graphdatascience import GraphDataScience
 
 from config.neo4jdb import get_db_manager
@@ -217,32 +217,35 @@ class IndexCommunityBuilder:
             # 4. 社区检测
             community_start = time.time()
             self.console.print("[cyan]正在执行社区检测...[/cyan]")
-            
-            # 获取社区检测器和算法名称
-            detector_class = LeidenDetector if community_algorithm == 'leiden' else SLLPADetector
-            algorithm_name = "Leiden" if community_algorithm == 'leiden' else "SLLPA"
-            
-            detector = detector_class(self.gds, self.graph)
+
+            # 使用工厂类创建检测器
+            detector = CommunityDetectorFactory.create(
+                algorithm=community_algorithm,
+                gds=self.gds,
+                graph=self.graph
+            )
             community_results = detector.process()
-            
+
             self.performance_stats["社区检测"] = time.time() - community_start
-            
-            self.console.print(f"[blue]社区检测({algorithm_name})完成，耗时: {self.performance_stats['社区检测']:.2f}秒[/blue]")
+
+            self.console.print(f"[blue]社区检测完成，耗时: {self.performance_stats['社区检测']:.2f}秒[/blue]")
             if community_results and community_results.get('status') == 'success':
-                self.console.print(f"[blue]检测到 {community_results.get('details', {}).get('detection', {}).get('communityCount', 0)} 个社区[/blue]")
-            
+                community_count = community_results.get('details', {}).get('detection', {}).get('communityCount', 0)
+                self.console.print(f"[blue]检测到 {community_count} 个社区[/blue]")
+
             # 5. 生成社区摘要
             summary_start = time.time()
             self.console.print("[cyan]正在生成社区摘要...[/cyan]")
-            
+
+            # 使用摘要工厂类
             summarizer = CommunitySummarizerFactory.create_summarizer(
                 community_algorithm,
                 self.graph
             )
             summaries = summarizer.process_communities()
-            
+
             self.performance_stats["社区摘要"] = time.time() - summary_start
-            
+
             self._display_results_table(
                 "社区摘要结果",
                 {

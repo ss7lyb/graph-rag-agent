@@ -5,7 +5,7 @@ from typing import Tuple, List, Any, Dict
 from dataclasses import dataclass
 
 from config.settings import similarity_threshold
-from config.neo4jdb import get_db_manager
+from graph.core import connection_manager, timer, get_performance_stats, print_performance_stats
 
 @dataclass
 class GDSConfig:
@@ -29,20 +29,19 @@ class SimilarEntityDetector:
     4. 识别潜在的重复实体
     """
     
-    def __init__(self, config: GDSConfig):
+    def __init__(self, config: GDSConfig = None):
         """
         初始化相似实体检测器
         
         Args:
             config: GDS配置参数，包含连接信息和算法阈值
         """
-        self.config = config
-        db_manager = get_db_manager()
+        self.config = config or GDSConfig()
         self.gds = GraphDataScience(
             self.config.uri,
             auth=(self.config.username, self.config.password)
         )
-        self.graph = db_manager.graph
+        self.graph = connection_manager.get_connection()
         self.projection_name = "entities"
         self.G = None
         
@@ -62,15 +61,15 @@ class SimilarEntityDetector:
             "CREATE INDEX IF NOT EXISTS FOR (e:`__Entity__`) ON (e.wcc)"
         ]
         
-        for query in index_queries:
-            self.graph.query(query)
+        connection_manager.create_multiple_indexes(index_queries)
     
-    def create_entity_projection(self) -> Tuple[Any, Any]:
+    @timer
+    def create_entity_projection(self) -> Tuple[Any, Dict[str, Any]]:
         """
         创建实体的内存投影子图
         
         Returns:
-            Tuple[Any, Any]: 投影图对象和结果信息
+            Tuple[Any, Dict[str, Any]]: 投影图对象和结果信息
         """
         start_time = time.time()
         
@@ -137,6 +136,7 @@ class SimilarEntityDetector:
         )
         return result[0]["count"] if result else 0
     
+    @timer
     def detect_similar_entities(self) -> Dict[str, Any]:
         """
         使用KNN算法检测相似实体并创建SIMILAR关系
@@ -213,6 +213,7 @@ class SimilarEntityDetector:
                     "message": str(e)
                 }
         
+    @timer
     def detect_communities(self) -> Dict[str, Any]:
         """
         使用WCC算法检测社区并将结果写入节点的wcc属性
@@ -276,6 +277,7 @@ class SimilarEntityDetector:
                     "message": str(e)
                 }
         
+    @timer
     def find_potential_duplicates(self) -> List[Any]:
         """
         查找潜在的重复实体
@@ -365,12 +367,13 @@ class SimilarEntityDetector:
             finally:
                 self.G = None
 
-    def process_entities(self) -> List[Any]:
+    @timer
+    def process_entities(self) -> Tuple[List[Any], Dict[str, Any]]:
         """
         执行完整的实体处理流程
         
         Returns:
-            List[Any]: 潜在重复实体的列表
+            Tuple[List[Any], Dict[str, Any]]: 潜在重复实体的列表和性能统计
         """
         start_time = time.time()
         duplicates = []
@@ -381,36 +384,50 @@ class SimilarEntityDetector:
             
             if not self.G:
                 print("实体投影创建失败，无法继续处理")
-                return []
+                return [], {"status": "error", "message": "投影创建失败"}
                 
             # 2. 检测相似实体
             knn_result = self.detect_similar_entities()
             
             if knn_result.get('status') == 'error':
                 print(f"相似实体检测失败: {knn_result.get('message')}")
-                return []
+                return [], {"status": "error", "message": "相似实体检测失败"}
                 
             # 3. 检测社区
             wcc_result = self.detect_communities()
             
             if wcc_result.get('status') == 'error':
                 print(f"社区检测失败: {wcc_result.get('message')}")
-                return []
+                return [], {"status": "error", "message": "社区检测失败"}
                 
             # 4. 查找潜在重复
             duplicates = self.find_potential_duplicates()
             
             total_time = time.time() - start_time
             
-            # 输出性能摘要
-            print(f"\n总处理时间: {total_time:.2f}秒")
-            print(f"找到 {len(duplicates)} 组潜在重复实体")
+            # 准备性能统计
+            time_records = {
+                "投影时间": self.projection_time,
+                "KNN时间": self.knn_time,
+                "WCC时间": self.wcc_time,
+                "查询时间": self.query_time
+            }
             
-            return duplicates
+            stats = get_performance_stats(total_time, time_records)
+            stats.update({
+                "status": "success",
+                "候选实体组数": len(duplicates),
+                "关系数量": knn_result.get('relationshipsWritten', 0),
+                "社区数量": wcc_result.get('communityCount', 0)
+            })
+            
+            print_performance_stats(stats)
+            
+            return duplicates, stats
             
         except Exception as e:
             print(f"实体处理过程中发生错误: {e}")
-            raise
+            return [], {"status": "error", "message": str(e)}
             
         finally:
             # 确保清理投影图

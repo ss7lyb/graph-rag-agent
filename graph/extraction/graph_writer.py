@@ -5,9 +5,24 @@ from langchain_community.graphs import Neo4jGraph
 from langchain_core.documents import Document
 from langchain_community.graphs.graph_document import GraphDocument, Node, Relationship
 
+from graph.core import connection_manager
+
 class GraphWriter:
-    def __init__(self, graph: Neo4jGraph, batch_size=50, max_workers=4):
-        self.graph = graph
+    """
+    图写入器，负责将提取的实体和关系写入Neo4j图数据库。
+    处理实体和关系的解析、转换为GraphDocument，以及批量写入图数据库。
+    """
+    
+    def __init__(self, graph: Neo4jGraph = None, batch_size: int = 50, max_workers: int = 4):
+        """
+        初始化图写入器
+        
+        Args:
+            graph: Neo4j图数据库对象，如果为None则使用连接管理器获取
+            batch_size: 批处理大小
+            max_workers: 并行工作线程数
+        """
+        self.graph = graph or connection_manager.get_connection()
         self.batch_size = batch_size
         self.max_workers = max_workers
         
@@ -18,7 +33,17 @@ class GraphWriter:
         self.processed_nodes: Set[str] = set()
         
     def convert_to_graph_document(self, chunk_id: str, input_text: str, result: str) -> GraphDocument:
-        """将提取的实体关系文本转换为GraphDocument对象 - 使用缓存优化"""
+        """
+        将提取的实体关系文本转换为GraphDocument对象
+        
+        Args:
+            chunk_id: 文本块ID
+            input_text: 输入文本
+            result: 提取结果
+            
+        Returns:
+            GraphDocument: 转换后的图文档对象
+        """
         node_pattern = re.compile(r'\("entity" : "(.+?)" : "(.+?)" : "(.+?)"\)')
         relationship_pattern = re.compile(r'\("relationship" : "(.+?)" : "(.+?)" : "(.+?)" : "(.+?)" : (.+?)\)')
 
@@ -44,7 +69,7 @@ class GraphWriter:
 
             # 解析关系
             for match in relationship_pattern.findall(result):
-                source_id, target_id, type, description, weight = match
+                source_id, target_id, rel_type, description, weight = match
                 # 确保源节点存在，先检查缓存
                 if source_id not in nodes:
                     if source_id in self.node_cache:
@@ -75,7 +100,7 @@ class GraphWriter:
                     Relationship(
                         source=nodes[source_id],
                         target=nodes[target_id],
-                        type=type,
+                        type=rel_type,
                         properties={
                             "description": description,
                             "weight": float(weight)
@@ -105,7 +130,12 @@ class GraphWriter:
         )
         
     def process_and_write_graph_documents(self, file_contents: List) -> None:
-        """处理并写入所有文件的GraphDocument对象 - 使用并行处理和批处理优化"""
+        """
+        处理并写入所有文件的GraphDocument对象 - 使用并行处理和批处理优化
+        
+        Args:
+            file_contents: 文件内容列表
+        """
         all_graph_documents = []
         all_chunk_ids = []
         
@@ -116,6 +146,8 @@ class GraphWriter:
         
         chunk_index = 0
         error_count = 0
+        
+        print(f"开始处理 {total_chunks} 个chunks的GraphDocument")
         
         # 使用线程池并行处理
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -162,12 +194,32 @@ class GraphWriter:
         
         print(f"共处理 {total_chunks} 个chunks, 有效文档 {len(all_graph_documents)}, 错误 {error_count}")
         
+        # 批量写入图文档
+        self._batch_write_graph_documents(all_graph_documents)
+        
+        # 批量合并chunk关系
+        if all_chunk_ids:
+            self.merge_chunk_relationships(all_chunk_ids)
+    
+    def _batch_write_graph_documents(self, documents: List[GraphDocument]) -> None:
+        """
+        批量写入图文档
+        
+        Args:
+            documents: 图文档列表
+        """
+        if not documents:
+            return
+            
         # 增加批处理大小的动态调整
-        optimal_batch_size = min(self.batch_size, max(10, len(all_graph_documents) // 10))
+        optimal_batch_size = min(self.batch_size, max(10, len(documents) // 10))
+        total_batches = (len(documents) + optimal_batch_size - 1) // optimal_batch_size
+        
+        print(f"开始批量写入 {len(documents)} 个文档，批次大小: {optimal_batch_size}, 总批次: {total_batches}")
         
         # 批量写入图文档
-        for i in range(0, len(all_graph_documents), optimal_batch_size):
-            batch = all_graph_documents[i:i+optimal_batch_size]
+        for i in range(0, len(documents), optimal_batch_size):
+            batch = documents[i:i+optimal_batch_size]
             if batch:
                 try:
                     self.graph.add_graph_documents(
@@ -175,7 +227,7 @@ class GraphWriter:
                         baseEntityLabel=True,
                         include_source=True
                     )
-                    print(f"已写入批次 {i//optimal_batch_size + 1}/{(len(all_graph_documents) + optimal_batch_size - 1) // optimal_batch_size}")
+                    print(f"已写入批次 {i//optimal_batch_size + 1}/{total_batches}")
                 except Exception as e:
                     print(f"写入图文档批次时出错: {e}")
                     # 如果批次写入失败，尝试逐个写入以避免整批失败
@@ -188,13 +240,14 @@ class GraphWriter:
                             )
                         except Exception as e2:
                             print(f"单个文档写入失败: {e2}")
-        
-        # 批量合并chunk关系
-        if all_chunk_ids:
-            self.merge_chunk_relationships(all_chunk_ids)
     
     def merge_chunk_relationships(self, chunk_ids: List[str]) -> None:
-        """合并Chunk节点与Document节点的关系 - 保持原有查询的结构"""
+        """
+        合并Chunk节点与Document节点的关系
+        
+        Args:
+            chunk_ids: 块ID列表
+        """
         if not chunk_ids:
             return
         
@@ -204,6 +257,9 @@ class GraphWriter:
             
         # 动态批处理大小
         optimal_batch_size = min(self.batch_size, max(20, len(unique_chunk_ids) // 5))
+        total_batches = (len(unique_chunk_ids) + optimal_batch_size - 1) // optimal_batch_size
+        
+        print(f"合并关系批次大小: {optimal_batch_size}, 总批次: {total_batches}")
         
         # 分批处理，避免一次性处理过多数据
         for i in range(0, len(unique_chunk_ids), optimal_batch_size):
@@ -223,7 +279,7 @@ class GraphWriter:
                 """
                 
                 self.graph.query(merge_query, params={"batch_data": batch_data})
-                print(f"已处理合并关系批次 {i//optimal_batch_size + 1}/{(len(unique_chunk_ids) + optimal_batch_size - 1) // optimal_batch_size}")
+                print(f"已处理合并关系批次 {i//optimal_batch_size + 1}/{total_batches}")
             except Exception as e:
                 print(f"合并关系批次时出错: {e}")
                 # 如果批处理失败，尝试逐个处理

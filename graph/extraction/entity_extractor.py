@@ -1,7 +1,6 @@
 import time
 import os
 import pickle
-import hashlib
 import concurrent.futures
 from typing import List, Tuple, Optional
 from langchain.prompts import (
@@ -11,10 +10,30 @@ from langchain.prompts import (
     SystemMessagePromptTemplate,
 )
 
+from graph.core import retry, generate_hash
+
 class EntityRelationExtractor:
+    """
+    实体关系提取器，负责从文本中提取实体和关系。
+    使用LLM分析文本块，生成结构化的实体和关系数据。
+    """
+    
     def __init__(self, llm, system_template, human_template, 
                  entity_types: List[str], relationship_types: List[str],
                  cache_dir="./cache/graph", max_workers=4, batch_size=5):
+        """
+        初始化实体关系提取器
+        
+        Args:
+            llm: 语言模型
+            system_template: 系统提示模板
+            human_template: 用户提示模板
+            entity_types: 实体类型列表
+            relationship_types: 关系类型列表
+            cache_dir: 缓存目录
+            max_workers: 并行工作线程数
+            batch_size: 批处理大小
+        """
         self.llm = llm
         self.entity_types = entity_types
         self.relationship_types = relationship_types
@@ -55,15 +74,37 @@ class EntityRelationExtractor:
         self.cache_misses = 0
         
     def _generate_cache_key(self, text: str) -> str:
-        """生成文本的缓存键"""
-        return hashlib.md5(text.encode()).hexdigest()
+        """
+        生成文本的缓存键
+        
+        Args:
+            text: 输入文本
+            
+        Returns:
+            str: 缓存键
+        """
+        return generate_hash(text)
     
     def _cache_path(self, cache_key: str) -> str:
-        """获取缓存文件路径"""
+        """
+        获取缓存文件路径
+        
+        Args:
+            cache_key: 缓存键
+            
+        Returns:
+            str: 缓存文件路径
+        """
         return os.path.join(self.cache_dir, f"{cache_key}.pkl")
     
     def _save_to_cache(self, cache_key: str, result: str) -> None:
-        """保存结果到缓存"""
+        """
+        保存结果到缓存
+        
+        Args:
+            cache_key: 缓存键
+            result: 结果
+        """
         if not self.enable_cache:
             return
             
@@ -75,7 +116,15 @@ class EntityRelationExtractor:
             print(f"缓存保存错误: {e}")
     
     def _load_from_cache(self, cache_key: str) -> Optional[str]:
-        """从缓存加载结果"""
+        """
+        从缓存加载结果
+        
+        Args:
+            cache_key: 缓存键
+            
+        Returns:
+            Optional[str]: 缓存的结果，如果不存在则返回None
+        """
         if not self.enable_cache:
             return None
             
@@ -93,7 +142,16 @@ class EntityRelationExtractor:
         return None
         
     def process_chunks(self, file_contents: List[Tuple], progress_callback=None) -> List[Tuple]:
-        """并行处理所有文件的所有chunks"""
+        """
+        并行处理所有文件的所有chunks
+        
+        Args:
+            file_contents: 文件内容列表
+            progress_callback: 进度回调函数
+            
+        Returns:
+            List[Tuple]: 处理结果
+        """
         t0 = time.time()
         chunk_index = 0
         total_chunks = sum(len(file_content[2]) for file_content in file_contents)
@@ -159,7 +217,16 @@ class EntityRelationExtractor:
         return file_contents
     
     def process_chunks_batch(self, file_contents: List[Tuple], progress_callback=None) -> List[Tuple]:
-        """批量处理chunks，减少LLM调用次数"""
+        """
+        批量处理chunks，减少LLM调用次数
+        
+        Args:
+            file_contents: 文件内容列表
+            progress_callback: 进度回调函数
+            
+        Returns:
+            List[Tuple]: 处理结果
+        """
         for file_content in file_contents:
             chunks = file_content[2]
             results = []
@@ -250,13 +317,30 @@ class EntityRelationExtractor:
         return file_contents
 
     def _parse_batch_response(self, batch_content: str) -> List[str]:
-        """解析批量响应，将其分割为单独的结果"""
+        """
+        解析批量响应，将其分割为单独的结果
+        
+        Args:
+            batch_content: 批处理响应内容
+            
+        Returns:
+            List[str]: 分割后的结果列表
+        """
         # 使用分隔符分割响应
         parts = batch_content.split(f"\n{'-'*50}\n")
         return [part.strip() for part in parts]
     
+    @retry(times=3, exceptions=(Exception,), delay=1.0)
     def _process_single_chunk(self, input_text: str) -> str:
-        """处理单个文本块（带缓存）"""
+        """
+        处理单个文本块（带缓存）
+        
+        Args:
+            input_text: 输入文本
+            
+        Returns:
+            str: 处理结果
+        """
         # 生成缓存键
         cache_key = self._generate_cache_key(input_text)
         
@@ -266,30 +350,34 @@ class EntityRelationExtractor:
             return cached_result
         
         # 未缓存，调用LLM处理
-        try:
-            response = self.chain.invoke({
-                "chat_history": self.chat_history,
-                "entity_types": self.entity_types,
-                "relationship_types": self.relationship_types,
-                "tuple_delimiter": self.tuple_delimiter,
-                "record_delimiter": self.record_delimiter,
-                "completion_delimiter": self.completion_delimiter,
-                "input_text": input_text
-            })
-            
-            result = response.content
-            
-            # 保存结果到缓存
-            self._save_to_cache(cache_key, result)
-            
-            return result
-        except Exception as e:
-            print(f"LLM处理异常: {e}")
-            raise
+        response = self.chain.invoke({
+            "chat_history": self.chat_history,
+            "entity_types": self.entity_types,
+            "relationship_types": self.relationship_types,
+            "tuple_delimiter": self.tuple_delimiter,
+            "record_delimiter": self.record_delimiter,
+            "completion_delimiter": self.completion_delimiter,
+            "input_text": input_text
+        })
+        
+        result = response.content
+        
+        # 保存结果到缓存
+        self._save_to_cache(cache_key, result)
+        
+        return result
     
     def stream_process_large_files(self, file_path: str, chunk_size: int = 5000, 
                                    structure_builder=None, graph_writer=None) -> None:
-        """以流式方式处理大文件，避免一次性加载全部内容"""
+        """
+        以流式方式处理大文件，避免一次性加载全部内容
+        
+        Args:
+            file_path: 文件路径
+            chunk_size: 块大小
+            structure_builder: 结构构建器
+            graph_writer: 图写入器
+        """
         if not structure_builder or not graph_writer:
             print("需要提供structure_builder和graph_writer才能进行流式处理")
             return

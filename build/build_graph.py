@@ -24,10 +24,9 @@ from config.settings import (
 from config.neo4jdb import get_db_manager
 from processor.file_reader import FileReader
 from processor.text_chunker import ChineseTextChunker
-from graph.struct_builder import GraphStructureBuilder
-from graph.entity_extractor import EntityRelationExtractor
-from graph.graph_writer import GraphWriter
-from langchain_community.graphs import Neo4jGraph
+from graph import GraphStructureBuilder
+from graph import EntityRelationExtractor
+from graph import GraphWriter
 
 import shutup
 shutup.please()

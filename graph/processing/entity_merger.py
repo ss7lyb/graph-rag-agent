@@ -2,16 +2,18 @@ import re
 import ast
 import time
 import concurrent.futures
-from typing import List, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
+
 from langchain.prompts import (
     ChatPromptTemplate,
     MessagesPlaceholder,
     HumanMessagePromptTemplate,
     SystemMessagePromptTemplate
 )
+
 from model.get_models import get_llm_model
 from config.prompt import system_template_build_index, user_template_build_index
-from config.neo4jdb import get_db_manager
+from graph.core import connection_manager, timer, get_performance_stats, print_performance_stats
 
 class EntityMerger:
     """
@@ -19,24 +21,27 @@ class EntityMerger:
     主要功能包括使用LLM分析实体相似性、解析合并建议，以及执行实体合并操作。
     """
     
-    def __init__(self, graph = None, batch_size: int = 20, max_workers: int = 4):
+    def __init__(self, batch_size: int = 20, max_workers: int = 4):
         """
         初始化实体合并管理器
+        
         Args:
-            graph: Neo4j图数据库连接，如果不提供则创建新的连接
             batch_size: 批处理大小
             max_workers: 并行工作线程数
         """
         # 初始化图数据库连接
-        db_manager = get_db_manager()
-        self.graph = db_manager.graph
+        self.graph = connection_manager.get_connection()
+        
         # 获取语言模型
         self.llm = get_llm_model()
+        
         # 批处理和并行参数
         self.batch_size = batch_size
         self.max_workers = max_workers
+        
         # 设置LLM处理链
         self._setup_llm_chain()
+        
         # 创建索引
         self._create_indexes()
         
@@ -51,8 +56,7 @@ class EntityMerger:
             "CREATE INDEX IF NOT EXISTS FOR (e:`__Entity__`) ON (e.id)"
         ]
         
-        for query in index_queries:
-            self.graph.query(query)
+        connection_manager.create_multiple_indexes(index_queries)
 
     def _setup_llm_chain(self) -> None:
         """
@@ -401,7 +405,51 @@ class EntityMerger:
         
         return total_merged
 
-    def process_duplicates(self, duplicate_candidates: List[Any]) -> int:
+    def clean_duplicate_relationships(self):
+        """
+        清除重复关系，包括：
+        1. 相同方向的重复关系
+        2. SIMILAR关系的双向冗余（保留一个方向）
+        """
+        print("开始清除重复关系...")
+        
+        # 第一步：清除相同方向的重复关系
+        result1 = self.graph.query("""
+        MATCH (a)-[r]->(b)
+        WITH a, b, type(r) as type, collect(r) as rels
+        WHERE size(rels) > 1
+        WITH a, b, type, rels[0] as kept, rels[1..] as rels
+        UNWIND rels as rel
+        DELETE rel
+        RETURN count(*) as deleted
+        """)
+        
+        deleted_count1 = result1[0]["deleted"] if result1 else 0
+        print(f"已删除 {deleted_count1} 个相同方向的重复关系")
+        
+        # 第二步：清除SIMILAR关系的双向冗余（保留一个方向）
+        result2 = self.graph.query("""
+        // 找出所有双向的SIMILAR关系
+        MATCH (a)-[r1:SIMILAR]->(b)
+        MATCH (b)-[r2:SIMILAR]->(a)
+        WHERE a.id < b.id  // 确保每对节点只处理一次
+        
+        // 随机选择一个方向删除（这里选择删除b->a方向）
+        DELETE r2
+        
+        RETURN count(*) as deleted_bidirectional
+        """)
+        
+        deleted_count2 = result2[0]["deleted_bidirectional"] if result2 else 0
+        print(f"已删除 {deleted_count2} 个双向SIMILAR关系的冗余方向")
+        
+        total_deleted = deleted_count1 + deleted_count2
+        print(f"总共删除了 {total_deleted} 个重复关系")
+        
+        return total_deleted
+
+    @timer
+    def process_duplicates(self, duplicate_candidates: List[Any]) -> Tuple[int, Dict[str, Any]]:
         """
         处理重复实体的完整流程，包括获取合并建议和执行合并 - 性能优化版本
         
@@ -409,7 +457,7 @@ class EntityMerger:
             duplicate_candidates: 潜在的重复实体候选列表
             
         Returns:
-            int: 合并的实体数量
+            Tuple[int, Dict[str, Any]]: 合并的实体数量和性能统计
         """
         start_time = time.time()
         
@@ -460,65 +508,19 @@ class EntityMerger:
         print(f"总耗时: {total_elapsed:.2f} 秒")
         
         # 返回性能统计摘要
-        llm_percentage = (self.llm_time/total_elapsed*100) if total_elapsed > 0 else 0
-        parse_percentage = (self.parse_time/total_elapsed*100) if total_elapsed > 0 else 0
-        db_percentage = (self.db_time/total_elapsed*100) if total_elapsed > 0 else 0
+        time_records = {
+            "LLM处理时间": self.llm_time,
+            "解析时间": self.parse_time,
+            "数据库时间": self.db_time
+        }
         
-        performance_stats = {
-            "总耗时": f"{total_elapsed:.2f}秒",
-            "LLM处理时间": f"{self.llm_time:.2f}秒 ({llm_percentage:.1f}%)",
-            "解析时间": f"{self.parse_time:.2f}秒 ({parse_percentage:.1f}%)",
-            "数据库时间": f"{self.db_time:.2f}秒 ({db_percentage:.1f}%)",
+        performance_stats = get_performance_stats(total_elapsed, time_records)
+        performance_stats.update({
             "候选实体组数": len(filtered_candidates),
             "识别出的合并组数": len(merge_groups),
             "合并的实体数": merged_count
-        }
+        })
         
-        print("\n性能统计摘要:")
-        for key, value in performance_stats.items():
-            print(f"  {key}: {value}")
+        print_performance_stats(performance_stats)
         
-        return merged_count
-    
-    def clean_duplicate_relationships(self):
-        """
-        清除重复关系，包括：
-        1. 相同方向的重复关系
-        2. SIMILAR关系的双向冗余（保留一个方向）
-        """
-        print("开始清除重复关系...")
-        
-        # 第一步：清除相同方向的重复关系
-        result1 = self.graph.query("""
-        MATCH (a)-[r]->(b)
-        WITH a, b, type(r) as type, collect(r) as rels
-        WHERE size(rels) > 1
-        WITH a, b, type, rels[0] as kept, rels[1..] as rels
-        UNWIND rels as rel
-        DELETE rel
-        RETURN count(*) as deleted
-        """)
-        
-        deleted_count1 = result1[0]["deleted"] if result1 else 0
-        print(f"已删除 {deleted_count1} 个相同方向的重复关系")
-        
-        # 第二步：清除SIMILAR关系的双向冗余（保留一个方向）
-        result2 = self.graph.query("""
-        // 找出所有双向的SIMILAR关系
-        MATCH (a)-[r1:SIMILAR]->(b)
-        MATCH (b)-[r2:SIMILAR]->(a)
-        WHERE a.id < b.id  // 确保每对节点只处理一次
-        
-        // 随机选择一个方向删除（这里选择删除b->a方向）
-        DELETE r2
-        
-        RETURN count(*) as deleted_bidirectional
-        """)
-        
-        deleted_count2 = result2[0]["deleted_bidirectional"] if result2 else 0
-        print(f"已删除 {deleted_count2} 个双向SIMILAR关系的冗余方向")
-        
-        total_deleted = deleted_count1 + deleted_count2
-        print(f"总共删除了 {total_deleted} 个重复关系")
-        
-        return total_deleted
+        return merged_count, performance_stats

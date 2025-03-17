@@ -12,14 +12,28 @@ def display_sidebar():
         st.header("Agent 选择")
         agent_type = st.radio(
             "选择检索策略:",
-            ["graph_agent", "hybrid_agent", "naive_rag_agent"],
+            ["graph_agent", "hybrid_agent", "naive_rag_agent", "deep_research_agent"],
             index=0 if st.session_state.agent_type == "graph_agent" 
-                    else (1 if st.session_state.agent_type == "hybrid_agent" else 2),
-            help="graph_agent：使用知识图谱的局部与全局搜索；hybrid_agent：使用混合搜索方式；naive_rag_agent：使用朴素RAG",
+                    else (1 if st.session_state.agent_type == "hybrid_agent" 
+                         else (2 if st.session_state.agent_type == "naive_rag_agent" 
+                              else 3)),
+            help="graph_agent：使用知识图谱的局部与全局搜索；hybrid_agent：使用混合搜索方式；naive_rag_agent：使用朴素RAG；deep_research_agent：私域深度研究",
             key="sidebar_agent_type"
         )
         # 更新全局agent_type
         st.session_state.agent_type = agent_type
+
+        # 思考过程选项 - 仅当选择 deep_research_agent 时显示
+        if agent_type == "deep_research_agent":
+            show_thinking = st.checkbox("显示推理过程", 
+                                      value=st.session_state.get("show_thinking", False), 
+                                      key="sidebar_show_thinking",
+                                      help="显示AI的思考过程")
+            # 更新全局 show_thinking
+            st.session_state.show_thinking = show_thinking
+        elif "show_thinking" in st.session_state:
+            # 如果切换到其他Agent类型，重置show_thinking为False
+            st.session_state.show_thinking = False
         
         st.markdown("---")
         

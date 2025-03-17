@@ -109,7 +109,7 @@ def get_knowledge_graph(limit: int = 100, query: str = None) -> Dict:
         st.error(f"获取知识图谱时出错: {str(e)}")
         return {"nodes": [], "links": []}
 
-def get_knowledge_graph_from_message(message: str, query: str = None) -> Dict:
+def get_knowledge_graph_from_message(message: str, query: str = None):
     """从AI响应中提取知识图谱数据"""
     try:
         params = {"message": message}

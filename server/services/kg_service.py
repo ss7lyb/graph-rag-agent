@@ -10,18 +10,48 @@ db_manager = get_db_manager()
 driver = db_manager.driver
 
 
-def extract_kg_from_message(message: str, query: str = None) -> Dict:
+def extract_kg_from_message(message: str, query: str = None, reference: Dict = None) -> Dict:
     """
     从消息中提取知识图谱实体和关系数据
     
     Args:
         message: 消息文本
         query: 用户查询内容(可选)
+        reference: 引用数据(可选)
     
     Returns:
         Dict: 知识图谱数据，包含节点和连接
     """
     try:
+        # 如果提供了reference数据，优先使用
+        if reference and isinstance(reference, dict):
+            # 从reference中直接提取实体、关系和文本块ID
+            chunks = reference.get("chunks", [])
+            chunk_ids = reference.get("Chunks", [])
+            
+            # 尝试从chunks中获取更多信息
+            for chunk in chunks:
+                if "chunk_id" in chunk:
+                    chunk_ids.append(chunk["chunk_id"])
+                
+            # 提取实体和关系ID
+            entities = reference.get("entities", [])
+            entity_ids = [e.get("id") for e in entities if isinstance(e, dict) and "id" in e]
+            
+            relationships = reference.get("relationships", [])
+            rel_ids = [r.get("id") for r in relationships if isinstance(r, dict) and "id" in r]
+            
+            # 如果找到了chunk_ids，使用它们获取图谱
+            if chunk_ids:
+                return get_knowledge_graph_for_ids(entity_ids, rel_ids, chunk_ids)
+        
+        # 如果没有提供reference或提取失败，回退到消息文本解析
+        # 如果消息包含思考过程，需要先移除
+        if isinstance(message, str) and "<think>" in message and "</think>" in message:
+            # 提取思考过程外的内容
+            think_pattern = r'<think>.*?</think>'
+            message = re.sub(think_pattern, '', message, flags=re.DOTALL).strip()
+        
         # 直接使用正则表达式提取各部分数据
         entity_ids = []
         rel_ids = []
@@ -88,6 +118,31 @@ def extract_kg_from_message(message: str, query: str = None) -> Dict:
         print(f"提取知识图谱数据失败: {str(e)}")
         traceback.print_exc()
         return {"nodes": [], "links": []}
+    
+# 辅助函数，用于从有思考过程的内容中提取实际回答
+def extract_answer_from_thinking(content: str) -> str:
+    """
+    从带有思考过程的内容中提取实际回答
+    
+    Args:
+        content: 带思考过程的内容
+        
+    Returns:
+        str: 提取出的实际回答
+    """
+    if not isinstance(content, str):
+        return content
+        
+    # 如果包含思考过程，提取出实际回答部分
+    if "<think>" in content and "</think>" in content:
+        # 使用正则表达式提取思考过程
+        think_match = re.search(r'<think>(.*?)</think>', content, re.DOTALL)
+        if think_match:
+            # 移除思考过程，保留实际回答
+            return content.replace(f"<think>{think_match.group(1)}</think>", "").strip()
+    
+    # 如果没有思考过程或提取失败，返回原内容
+    return content
 
 
 def check_entity_existence(entity_ids: List[Any]) -> List:

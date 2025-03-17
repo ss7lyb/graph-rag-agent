@@ -149,5 +149,44 @@ def custom_css():
         margin: 5px 0;
         font-size: 12px;
     }
+    /* 迭代轮次样式 */
+    .iteration-round {
+        background-color: #f8f9fa;
+        border-left: 4px solid #4285F4;
+        padding: 10px;
+        margin: 10px 0;
+        border-radius: 4px;
+    }
+    
+    .iteration-query {
+        background-color: #f0f2f6;
+        padding: 8px 12px;
+        border-radius: 4px;
+        font-family: monospace;
+        margin: 5px 0;
+    }
+    
+    .iteration-info {
+        background-color: #e8f5e9;
+        padding: 12px;
+        border-radius: 4px;
+        border-left: 3px solid #4CAF50;
+        margin: 10px 0;
+    }
+    
+    /* 进度条样式 */
+    .iteration-progress {
+        height: 8px;
+        background-color: #f0f0f0;
+        border-radius: 4px;
+        margin: 15px 0;
+        overflow: hidden;
+    }
+    
+    .iteration-progress-bar {
+        height: 100%;
+        background-color: #4CAF50;
+        border-radius: 4px;
+    }
     </style>
     """, unsafe_allow_html=True)

@@ -14,6 +14,8 @@ def init_session_state():
         st.session_state.execution_log = None
     if 'agent_type' not in st.session_state:
         st.session_state.agent_type = "graph_agent"  # 默认使用graph_agent
+    if 'show_thinking' not in st.session_state:
+        st.session_state.show_thinking = False  # 默认不显示思考过程
     if 'kg_data' not in st.session_state:
         st.session_state.kg_data = None
     if 'source_content' not in st.session_state:
@@ -30,3 +32,7 @@ def init_session_state():
         st.session_state.processing_lock = False
     if 'current_kg_message' not in st.session_state:
         st.session_state.current_kg_message = None
+    if 'deep_research_iterations' not in st.session_state:
+        st.session_state.deep_research_iterations = []
+    if 'iterations' not in st.session_state:
+        st.session_state.iterations = []

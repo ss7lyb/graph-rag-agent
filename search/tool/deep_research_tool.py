@@ -510,7 +510,7 @@ class DeepResearchTool(BaseSearchTool):
                 think += self.thinking_engine.remove_result_tags(summary_think)
         
         # 完成思考过程
-        think += "</think>"
+        think += "</think>\n"
         
         # 生成最终答案
         # 确保至少执行了一次搜索

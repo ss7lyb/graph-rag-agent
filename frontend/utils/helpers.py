@@ -47,3 +47,41 @@ def display_source_content(content: str):
     # 将换行符转换为HTML换行，确保格式正确
     formatted_content = content.replace("\n", "<br>")
     st.markdown(f'<div class="source-content">{formatted_content}</div>', unsafe_allow_html=True)
+
+
+def process_thinking_content(content: str, show_thinking: bool = False):
+    """
+    处理带有思考过程的内容
+    
+    Args:
+        content: 原始内容
+        show_thinking: 是否显示思考过程
+        
+    Returns:
+        dict: 包含处理后的内容信息
+    """
+    if not isinstance(content, str):
+        return {"processed": content, "has_thinking": False}
+        
+    # 检查是否有思考过程
+    if "<think>" in content and "</think>" in content:
+        # 使用正则表达式提取思考过程
+        think_match = re.search(r'<think>(.*?)</think>', content, re.DOTALL)
+        if think_match:
+            thinking_process = think_match.group(1).strip()
+            # 移除思考过程部分，只保留答案
+            answer_only = content.replace(f"<think>{thinking_process}</think>", "").strip()
+            
+            # 将思考过程格式化为Markdown引用格式
+            thinking_lines = thinking_process.split('\n')
+            quoted_thinking = '\n'.join([f"> {line}" for line in thinking_lines])
+            
+            return {
+                "processed": answer_only,
+                "has_thinking": True,
+                "thinking": quoted_thinking,
+                "original": content
+            }
+    
+    # 如果没有思考过程或提取失败，返回原内容
+    return {"processed": content, "has_thinking": False}

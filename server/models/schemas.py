@@ -8,6 +8,7 @@ class ChatRequest(BaseModel):
     session_id: str
     debug: bool = False
     agent_type: str = "graph_agent"  # 默认采用 graphrag
+    show_thinking: bool = False  # 是否显示思考过程，仅适用于deep_research_agent
 
 
 class ChatResponse(BaseModel):
@@ -15,6 +16,8 @@ class ChatResponse(BaseModel):
     answer: str
     execution_log: Optional[List[Dict]] = None
     kg_data: Optional[Dict] = None
+    reference: Optional[Dict] = None
+    iterations: Optional[List[Dict]] = None
 
 
 class SourceRequest(BaseModel):

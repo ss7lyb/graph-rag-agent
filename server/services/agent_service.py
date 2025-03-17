@@ -12,12 +12,14 @@ class AgentManager:
         from agent.graph_agent import GraphAgent
         from agent.hybrid_agent import HybridAgent
         from agent.naive_rag_agent import NaiveRagAgent
+        from agent.deep_research_agent import DeepResearchAgent 
         
         # 创建Agent字典
         self.agents = {
             "graph_agent": GraphAgent(),
             "hybrid_agent": HybridAgent(),
             "naive_rag_agent": NaiveRagAgent(),
+            "deep_research_agent": DeepResearchAgent(),
         }
     
     def get_agent(self, agent_type: str):

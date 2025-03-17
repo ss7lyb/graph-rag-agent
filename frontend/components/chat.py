@@ -1,6 +1,7 @@
 import time
 import streamlit as st
 import uuid
+import re
 from utils.api import send_message, send_feedback, get_source_content, get_knowledge_graph_from_message, clear_chat
 from utils.helpers import extract_source_ids
 
@@ -13,16 +14,25 @@ def display_chat_interface():
         col1, col2 = st.columns([3, 1])
         
         with col1:
-            # 使用不同的key: header_agent_type
             agent_type = st.selectbox(
                 "选择 Agent 类型",
-                options=["graph_agent", "hybrid_agent", "naive_rag_agent"],
+                options=["graph_agent", "hybrid_agent", "naive_rag_agent", "deep_research_agent"],
                 key="header_agent_type",
                 help="选择不同的Agent以体验不同的检索策略",
                 index=0 if st.session_state.agent_type == "graph_agent" 
-                        else (1 if st.session_state.agent_type == "hybrid_agent" else 2)
+                        else (1 if st.session_state.agent_type == "hybrid_agent" 
+                             else (2 if st.session_state.agent_type == "naive_rag_agent"
+                                  else 3))
             )
             st.session_state.agent_type = agent_type
+            
+            # 添加思考过程切换 - 仅当选择 deep_research_agent 时显示
+            if agent_type == "deep_research_agent":
+                show_thinking = st.checkbox("显示推理过程", 
+                                          value=st.session_state.get("show_thinking", False),
+                                          help="显示AI的思考过程")
+                # 更新全局 show_thinking
+                st.session_state.show_thinking = show_thinking
     
         with col2:
             st.button("🗑️ 清除聊天", on_click=clear_chat)
@@ -36,7 +46,43 @@ def display_chat_interface():
         # 显示现有消息
         for i, msg in enumerate(st.session_state.messages):
             with st.chat_message(msg["role"]):
-                st.write(msg["content"])
+                # 获取要显示的内容
+                content = msg["content"]
+                
+                # 处理带有思考过程的AI消息
+                if msg["role"] == "assistant" and isinstance(content, str) and "<think>" in content:
+                    # 提取思考过程和答案
+                    think_pattern = r'<think>(.*?)</think>'
+                    think_match = re.search(think_pattern, content, re.DOTALL)
+                    
+                    if think_match:
+                        thinking_process = think_match.group(1).strip()
+                        # 移除思考过程，保留答案
+                        answer = re.sub(think_pattern, '', content, flags=re.DOTALL).strip()
+                        
+                        # 保存处理后的内容
+                        if "processed_content" not in msg:
+                            msg["processed_content"] = answer
+                        
+                        # 如果设置了显示思考过程
+                        if st.session_state.get("show_thinking", False):
+                            # 直接显示思考过程，使用引用格式
+                            thinking_lines = thinking_process.split('\n')
+                            quoted_thinking = '\n'.join([f"> {line}" for line in thinking_lines])
+                            st.markdown(quoted_thinking)
+                            
+                            # 显示答案
+                            st.write(answer)
+                        else:
+                            # 不显示思考过程
+                            st.write(answer)
+                    else:
+                        # 尝试清理任何残留的标签
+                        cleaned_content = re.sub(r'</think>', '', content).strip()
+                        st.write(cleaned_content)
+                else:
+                    # 普通消息直接显示
+                    st.write(content)
                 
                 # 为AI回答添加反馈按钮和源内容引用
                 if msg["role"] == "assistant":
@@ -189,16 +235,72 @@ def display_chat_interface():
             with st.chat_message("assistant"):
                 with st.spinner("思考中..."):
                     response = send_message(prompt)
+                
                 if response:
-                    st.write(response["answer"])
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": response["answer"],
-                        "message_id": str(uuid.uuid4())  # 为新消息生成ID
-                    })
+                    answer_content = response["answer"]
+                    
+                    # 保存迭代信息和原始思考过程到会话状态
+                    if "iterations" in response:
+                        st.session_state.iterations = response["iterations"]
+                    if "raw_thinking" in response:
+                        st.session_state.raw_thinking = response["raw_thinking"]
+                    
+                    # 保存执行日志
                     if response.get("execution_log"):
                         st.session_state.execution_log = response["execution_log"]
+                    
+                    # 处理带有思考过程的回答
+                    think_pattern = r'<think>(.*?)</think>'
+                    think_match = re.search(think_pattern, answer_content, re.DOTALL)
+                    
+                    if think_match:
+                        thinking_process = think_match.group(1).strip()
+                        # 移除思考过程部分，只保留答案
+                        answer_only = re.sub(think_pattern, '', answer_content, flags=re.DOTALL).strip()
                         
+                        # 创建消息对象
+                        message_obj = {
+                            "role": "assistant",
+                            "content": answer_content,  # 保存完整内容，包含思考过程
+                            "processed_content": answer_only,  # 保存处理后的内容
+                            "message_id": str(uuid.uuid4())
+                        }
+                        
+                        # 保存引用数据
+                        if "reference" in response:
+                            message_obj["reference"] = response["reference"]
+                        
+                        # 如果设置了显示思考过程
+                        if st.session_state.get("show_thinking", False):
+                            # 直接显示思考过程，使用引用格式
+                            thinking_lines = thinking_process.split('\n')
+                            quoted_thinking = '\n'.join([f"> {line}" for line in thinking_lines])
+                            st.markdown(quoted_thinking)
+                            
+                            # 显示最终答案
+                            st.write(answer_only)
+                        else:
+                            # 不显示思考过程，仅显示答案
+                            st.write(answer_only)
+                        
+                        # 保存消息对象
+                        st.session_state.messages.append(message_obj)
+                    else:
+                        # 普通回答
+                        st.write(answer_content)
+                        
+                        message_obj = {
+                            "role": "assistant",
+                            "content": answer_content,
+                            "message_id": str(uuid.uuid4())
+                        }
+                        
+                        # 保存引用数据
+                        if "reference" in response:
+                            message_obj["reference"] = response["reference"]
+                            
+                        st.session_state.messages.append(message_obj)
+                    
                     # 从回答中提取知识图谱数据
                     if st.session_state.debug_mode:
                         try:
@@ -208,7 +310,7 @@ def display_chat_interface():
                                 
                                 # 如果后端没有返回kg_data，尝试从回答中提取，并传递用户查询
                                 if not kg_data or len(kg_data.get("nodes", [])) == 0:
-                                    kg_data = get_knowledge_graph_from_message(response["answer"], prompt)  # 传递当前查询
+                                    kg_data = get_knowledge_graph_from_message(response["answer"], prompt)
                                 
                                 if kg_data and len(kg_data.get("nodes", [])) > 0:
                                     # 获取当前新消息的索引，即最后一条消息

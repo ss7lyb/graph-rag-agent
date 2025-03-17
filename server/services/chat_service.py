@@ -1,6 +1,7 @@
 import time
+import re
 import traceback
-from typing import Dict
+from typing import Dict, List
 from fastapi import HTTPException
 
 from services.agent_service import agent_manager
@@ -79,28 +80,81 @@ async def process_chat(message: str, session_id: str, debug: bool = False, agent
             # 快速路径失败，继续常规流程
             print(f"快速路径检查失败: {e}")
         
+        # 检查是否为deep_research_agent且是否显示思考过程
+        show_thinking = agent_type == "deep_research_agent"
+        
         if debug:
-            # 在Debug模式下使用ask_with_trace，并返回知识图谱数据
-            result = selected_agent.ask_with_trace(
-                message, 
-                thread_id=session_id
-            )
-            
-            # 从结果中提取知识图谱数据
-            kg_data = extract_kg_from_message(result["answer"])
-            
-            return {
-                "answer": result["answer"],
-                "execution_log": result["execution_log"],
-                "kg_data": kg_data
-            }
+            # 在Debug模式下使用ask_with_trace或ask_with_thinking，并返回知识图谱数据
+            if agent_type == "deep_research_agent":
+                # 使用ask_with_thinking方法获取带思考过程的结果
+                result = selected_agent.ask_with_thinking(message, thread_id=session_id)
+                
+                # 从结果字典中获取各个组件
+                thinking_process = result.get("thinking_process", "")
+                answer_content = result.get("answer", "")
+                retrieved_info = result.get("retrieved_info", [])
+                reference = result.get("reference", {})
+                
+                # 构建知识图谱数据
+                kg_data = extract_kg_from_message(answer_content)
+                
+                # 提取迭代轮次信息以便前端展示
+                iterations = extract_iterations(retrieved_info)
+                
+                # 如果未能从retrieved_info提取到有效迭代，尝试从thinking_process中提取
+                if not iterations or len(iterations) == 0:
+                    print("从retrieved_info中没有提取到迭代信息，尝试从thinking_process中提取")
+                    thinking_iterations = extract_iterations_from_thinking(thinking_process)
+                    if thinking_iterations and len(thinking_iterations) > 0:
+                        print(f"从thinking_process中提取到{len(thinking_iterations)}轮迭代")
+                        iterations = thinking_iterations
+                
+                # 构建完整响应
+                return {
+                    "answer": f'<think>{thinking_process}</think>\n{answer_content}',
+                    "execution_log": [{"node": "deep_research", "input": message, "output": retrieved_info}],
+                    "kg_data": kg_data,
+                    "reference": reference,
+                    "iterations": iterations,
+                    "raw_thinking": thinking_process
+                }
+            else:
+                # 其他Agent使用标准的ask_with_trace
+                result = selected_agent.ask_with_trace(
+                    message, 
+                    thread_id=session_id
+                )
+                
+                # 从结果中提取知识图谱数据
+                kg_data = extract_kg_from_message(result["answer"])
+                
+                return {
+                    "answer": result["answer"],
+                    "execution_log": result["execution_log"],
+                    "kg_data": kg_data
+                }
         else:
             # 标准模式
-            answer = selected_agent.ask(
-                message, 
-                thread_id=session_id
-            )
-            return {"answer": answer}
+            if agent_type == "deep_research_agent" and show_thinking:
+                # 使用ask_with_thinking方法获取带思考过程的结果
+                result = selected_agent.ask_with_thinking(message, thread_id=session_id)
+                
+                # 从结果字典中获取各个组件
+                thinking_process = result.get("thinking_process", "")
+                answer_content = result.get("answer", "")
+                
+                # 构建带思考过程的答案
+                return {
+                    "answer": f'<think>{thinking_process}</think>\n{answer_content}'
+                }
+            else:
+                # 普通模式，使用标准ask方法
+                answer = selected_agent.ask(
+                    message, 
+                    thread_id=session_id,
+                    show_thinking=show_thinking if agent_type == "deep_research_agent" else False
+                )
+                return {"answer": answer}
     except Exception as e:
         print(f"处理聊天请求时出错: {str(e)}")
         traceback.print_exc()
@@ -112,6 +166,222 @@ async def process_chat(message: str, session_id: str, debug: bool = False, agent
         # 清理过期的锁
         chat_manager.cleanup_expired_locks()
 
+
+def extract_iterations(retrieved_info):
+    """
+    从检索信息中提取迭代轮次
+    
+    Args:
+        retrieved_info: 检索到的信息列表
+        
+    Returns:
+        List: 迭代轮次信息
+    """
+    if not retrieved_info:
+        return []
+    
+    # 根据DeepResearchTool的输出，retrieved_info可能是一个列表
+    if isinstance(retrieved_info, list):
+        # 合并所有检索信息为一个字符串
+        text_items = []
+        for item in retrieved_info:
+            if isinstance(item, str):
+                text_items.append(item)
+            else:
+                try:
+                    text_items.append(str(item))
+                except:
+                    pass
+        
+        full_text = "\n".join(text_items)
+    else:
+        # 如果是字符串或其他类型，转换为字符串
+        full_text = str(retrieved_info)
+    
+    # 将文本按照迭代轮次分割
+    iterations = []
+    current_iteration = {"round": 1, "content": [], "queries": []}
+    
+    lines = full_text.split('\n')
+    for line in lines:
+        # 检测迭代轮次开始
+        round_match = re.search(r'\[深度研究\]\s*开始第(\d+)轮迭代', line)
+        if round_match:
+            # 如果已有内容，保存前一轮
+            if current_iteration["content"]:
+                iterations.append(current_iteration)
+            
+            # 开始新一轮
+            round_num = int(round_match.group(1))
+            current_iteration = {"round": round_num, "content": [line], "queries": []}
+        # 检测查询
+        elif re.search(r'\[深度研究\]\s*执行查询:', line):
+            query = re.sub(r'\[深度研究\]\s*执行查询:\s*', '', line).strip()
+            current_iteration["queries"].append(query)
+            current_iteration["content"].append(line)
+        # 检测是否发现有用信息
+        elif re.search(r'\[深度研究\]\s*发现有用信息:', line):
+            current_iteration["content"].append(line)
+            info = re.sub(r'\[深度研究\]\s*发现有用信息:\s*', '', line).strip()
+            current_iteration["useful_info"] = info
+        # 其他行
+        else:
+            current_iteration["content"].append(line)
+    
+    # 添加最后一轮
+    if current_iteration["content"]:
+        iterations.append(current_iteration)
+    
+    # 如果没有生成有效的迭代，创建一个基本迭代
+    if not iterations:
+        # 从原始文本中提取有用信息
+        useful_info = None
+        queries = []
+        
+        # 查找最终信息
+        for i, line in enumerate(lines):
+            if "Final Information" in line and i + 1 < len(lines):
+                useful_info = lines[i + 1]
+                break
+            # 查找可能的查询
+            if ">" in line and "?" in line:
+                query = line.strip("> ").strip()
+                if query and query not in queries:
+                    queries.append(query)
+        
+        return [{
+            "round": 1,
+            "content": lines,
+            "queries": queries if queries else ["原始查询"],
+            "useful_info": useful_info or "深度研究已完成，但无法提取详细迭代信息"
+        }]
+    
+    return iterations
+
+def extract_iterations_from_thinking(thinking_process: str) -> List[Dict]:
+    """
+    从思考过程中提取迭代信息
+    
+    Args:
+        thinking_process: 思考过程文本
+        
+    Returns:
+        List[Dict]: 迭代轮次信息
+    """
+    if not thinking_process or not isinstance(thinking_process, str):
+        return []
+    
+    # 去除<think>和</think>标签
+    if thinking_process.startswith("<think>"):
+        thinking_process = thinking_process[7:]
+    if thinking_process.endswith("</think>"):
+        thinking_process = thinking_process[:-8]
+    
+    # 分析思考过程结构
+    lines = thinking_process.split('\n')
+    
+    # 检查是否有迭代标记
+    has_iteration_marker = False
+    for line in lines:
+        if re.search(r'开始第\d+轮迭代', line) or re.search(r'> \d+\.', line):
+            has_iteration_marker = True
+            break
+    
+    if not has_iteration_marker:
+        # 查找Final Information部分
+        final_info_idx = -1
+        for i, line in enumerate(lines):
+            if "Final Information" in line:
+                final_info_idx = i
+                break
+        
+        # 提取useful_info
+        useful_info = None
+        if final_info_idx >= 0 and final_info_idx + 1 < len(lines):
+            useful_info_lines = []
+            for i in range(final_info_idx + 1, min(final_info_idx + 5, len(lines))):
+                if lines[i].strip():
+                    useful_info_lines.append(lines[i])
+            
+            if useful_info_lines:
+                useful_info = "\n".join(useful_info_lines)
+        
+        # 提取查询
+        queries = []
+        for line in lines:
+            if line.strip().startswith(">") and "?" in line:
+                query = line.strip()[1:].strip()
+                if query and query not in queries:
+                    queries.append(query)
+        
+        # 创建一个基本迭代
+        return [{
+            "round": 1,
+            "content": lines,
+            "queries": queries if queries else ["原始查询"],
+            "useful_info": useful_info or "从思考过程中提取的信息"
+        }]
+    
+    # 尝试识别迭代轮次
+    iterations = []
+    current_iteration = {"round": 1, "content": [], "queries": []}
+    current_query = None
+    
+    for line in lines:
+        # 检测新的迭代轮次
+        round_match = re.search(r'开始第(\d+)轮迭代', line)
+        if round_match:
+            # 保存前一轮
+            if current_iteration["content"]:
+                iterations.append(current_iteration)
+            
+            # 开始新一轮
+            round_num = int(round_match.group(1))
+            current_iteration = {"round": round_num, "content": [line], "queries": []}
+            continue
+        
+        # 检测查询行（以 "> 1. "等格式开头的行）
+        query_match = re.search(r'> (\d+)\. (.+)', line)
+        if query_match:
+            query_text = query_match.group(2).strip()
+            if query_text:
+                current_iteration["queries"].append(query_text)
+                current_query = query_text
+            current_iteration["content"].append(line)
+            continue
+        
+        # 检测发现有用信息的行
+        if "发现有用信息" in line:
+            info_match = re.search(r'发现有用信息:\s*(.+)', line)
+            if info_match:
+                info = info_match.group(1).strip()
+                current_iteration["useful_info"] = info
+            current_iteration["content"].append(line)
+            continue
+        
+        # 检测Final Information部分
+        if "Final Information" in line and current_iteration and "useful_info" not in current_iteration:
+            info_idx = lines.index(line)
+            if info_idx + 1 < len(lines):
+                current_iteration["useful_info"] = lines[info_idx + 1]
+        
+        # 其他行
+        current_iteration["content"].append(line)
+    
+    # 添加最后一轮
+    if current_iteration["content"]:
+        iterations.append(current_iteration)
+    
+    # 如果未能找到有效的迭代，创建一个基本迭代
+    if not iterations:
+        return [{
+            "round": 1,
+            "content": lines,
+            "queries": ["原始查询"],
+            "useful_info": "从思考过程中提取的信息"
+        }]
+    
+    return iterations
 
 async def process_feedback(message_id: str, query: str, is_positive: bool, thread_id: str, agent_type: str = "graph_agent") -> Dict:
     """

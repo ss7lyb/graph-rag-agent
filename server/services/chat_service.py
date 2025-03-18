@@ -62,11 +62,13 @@ async def process_chat(message: str, session_id: str, debug: bool = False, agent
                         "output": "高质量缓存命中，跳过完整处理"
                     }]
                     
-                    # 尝试提取图谱数据
-                    try:
-                        kg_data = extract_kg_from_message(fast_result)
-                    except:
-                        kg_data = {"nodes": [], "links": []}
+                    # 尝试提取图谱数据，对deep_research_agent禁用
+                    kg_data = {"nodes": [], "links": []}
+                    if agent_type != "deep_research_agent":
+                        try:
+                            kg_data = extract_kg_from_message(fast_result)
+                        except:
+                            kg_data = {"nodes": [], "links": []}
                         
                     return {
                         "answer": fast_result,
@@ -94,9 +96,10 @@ async def process_chat(message: str, session_id: str, debug: bool = False, agent
                 answer_content = result.get("answer", "")
                 retrieved_info = result.get("retrieved_info", [])
                 reference = result.get("reference", {})
+                execution_logs = result.get("execution_logs", [])  # 获取执行日志
                 
-                # 构建知识图谱数据
-                kg_data = extract_kg_from_message(answer_content)
+                # 为deep_research_agent禁用知识图谱数据
+                kg_data = {"nodes": [], "links": []}
                 
                 # 提取迭代轮次信息以便前端展示
                 iterations = extract_iterations(retrieved_info)
@@ -109,20 +112,32 @@ async def process_chat(message: str, session_id: str, debug: bool = False, agent
                         print(f"从thinking_process中提取到{len(thinking_iterations)}轮迭代")
                         iterations = thinking_iterations
                 
-                # 构建完整响应
+                # 构建执行日志
+                execution_log = [{
+                    "node": "deep_research", 
+                    "input": message, 
+                    "output": "\n".join(execution_logs) if execution_logs else "无执行日志"
+                }]
+                
+                # 打印日志长度信息
+                logs_count = len(execution_logs)
+                print(f"执行日志数量: {logs_count}条")
+                
+                # 构建完整响应，包含执行日志
                 return {
-                    "answer": f'<think>{thinking_process}</think>\n{answer_content}',
-                    "execution_log": [{"node": "deep_research", "input": message, "output": retrieved_info}],
+                    "answer": answer_content,
+                    "execution_log": execution_log,
                     "kg_data": kg_data,
                     "reference": reference,
                     "iterations": iterations,
-                    "raw_thinking": thinking_process
+                    "raw_thinking": thinking_process,
+                    "execution_logs": execution_logs,
                 }
             else:
                 # 其他Agent使用标准的ask_with_trace
                 result = selected_agent.ask_with_trace(
                     message, 
-                    thread_id=session_id
+                    thread_id=session_id,
                 )
                 
                 # 从结果中提取知识图谱数据
@@ -131,7 +146,7 @@ async def process_chat(message: str, session_id: str, debug: bool = False, agent
                 return {
                     "answer": result["answer"],
                     "execution_log": result["execution_log"],
-                    "kg_data": kg_data
+                    "kg_data": kg_data,
                 }
         else:
             # 标准模式
@@ -142,10 +157,13 @@ async def process_chat(message: str, session_id: str, debug: bool = False, agent
                 # 从结果字典中获取各个组件
                 thinking_process = result.get("thinking_process", "")
                 answer_content = result.get("answer", "")
+                execution_logs = result.get("execution_logs", [])
                 
-                # 构建带思考过程的答案
+                # 返回思考过程、答案和执行日志
                 return {
-                    "answer": f'<think>{thinking_process}</think>\n{answer_content}'
+                    "answer": answer_content,
+                    "raw_thinking": thinking_process,
+                    "execution_logs": execution_logs
                 }
             else:
                 # 普通模式，使用标准ask方法

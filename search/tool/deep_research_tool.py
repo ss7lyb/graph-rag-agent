@@ -69,6 +69,9 @@ class DeepResearchTool(BaseSearchTool):
         
         # 设置最大迭代次数
         self.max_iterations = MAX_SEARCH_LIMIT
+        
+        # 用于存储执行日志
+        self.execution_logs = []
     
     def _setup_chains(self):
         """设置处理链"""
@@ -171,11 +174,11 @@ class DeepResearchTool(BaseSearchTool):
             """基于问题检索知识库内容"""
             try:
                 # 记录开始检索
-                print(f"[KB检索] 开始搜索: {question}")
+                self._log(f"[KB检索] 开始搜索: {question}")
 
                 # 使用本地搜索工具
                 result = self.local_tool.search(question)
-                print(f"[KB检索] 原始结果: {result[:200]}..." if isinstance(result, str) else f"[KB检索] 原始结果类型: {type(result)}")
+                self._log(f"[KB检索] 原始结果: {result}" if isinstance(result, str) else f"[KB检索] 原始结果类型: {type(result)}")
                 
                 # 检查结果是否为空
                 if not result:
@@ -191,7 +194,7 @@ class DeepResearchTool(BaseSearchTool):
                 # 解析结果
                 try:
                     data_dict = self._parse_search_result(result)
-                    print(f"[KB检索] 解析结果: {data_dict.keys()}")
+                    self._log(f"[KB检索] 解析结果: {data_dict.keys()}")
                 except Exception as parse_e:
                     print(f"[KB检索] 解析结果失败: {parse_e}")
                     # 如果解析失败但结果是字符串，创建一个简单的chunk
@@ -275,7 +278,7 @@ class DeepResearchTool(BaseSearchTool):
                     chunk_ids = ["text_result"]
                 
                 # 记录结果统计
-                print(f"[KB检索] 结果: {len(chunks)}个chunks, {len(entities)}个实体, {len(relationships)}个关系")
+                self._log(f"[KB检索] 结果: {len(chunks)}个chunks, {len(entities)}个实体, {len(relationships)}个关系")
                 
                 return {
                     "chunks": chunks,
@@ -363,6 +366,11 @@ class DeepResearchTool(BaseSearchTool):
         except Exception as e:
             print(f"[最终答案生成错误] {str(e)}")
             return f"生成最终答案时出错: {str(e)}"
+        
+    def _log(self, message):
+        """记录执行日志"""
+        self.execution_logs.append(message)
+        print(message)  # 同时打印到控制台
     
     def thinking(self, query: str):
         """
@@ -374,7 +382,9 @@ class DeepResearchTool(BaseSearchTool):
         返回:
             Dict: 包含思考过程和最终答案的字典
         """
-        print(f"[深度研究] 开始处理查询: {query}")
+        # 清空执行日志
+        self.execution_logs = []
+        self._log(f"[深度研究] 开始处理查询: {query}")
         
         # 初始化结果容器
         chunk_info = {"chunks": [], "doc_aggs": []}
@@ -388,7 +398,7 @@ class DeepResearchTool(BaseSearchTool):
         
         # 迭代思考过程
         for iteration in range(self.max_iterations):
-            print(f"[深度研究] 开始第{iteration + 1}轮迭代")
+            self._log(f"[深度研究] 开始第{iteration + 1}轮迭代")
             
             # 检查是否达到最大迭代次数
             if iteration >= self.max_iterations - 1:
@@ -406,13 +416,13 @@ class DeepResearchTool(BaseSearchTool):
             
             # 处理生成结果
             if result["status"] == "empty":
-                print("[深度研究] 生成的思考内容为空")
+                self._log("[深度研究] 生成的思考内容为空")
                 continue
             elif result["status"] == "error":
-                print(f"[深度研究] 生成查询出错: {result.get('error', '未知错误')}")
+                self._log(f"[深度研究] 生成查询出错: {result.get('error', '未知错误')}")
                 break
             elif result["status"] == "answer_ready":
-                print("[深度研究] AI认为已有足够信息生成答案")
+                self._log("[深度研究] AI认为已有足够信息生成答案")
                 break
                 
             # 获取生成的思考内容
@@ -427,15 +437,15 @@ class DeepResearchTool(BaseSearchTool):
                 if not self.all_retrieved_info:
                     # 如果还没有检索到任何信息，强制使用原始查询
                     queries = [query]
-                    print("[深度研究] 没有检索到信息，使用原始查询")
+                    self._log("[深度研究] 没有检索到信息，使用原始查询")
                 else:
                     # 已有信息，结束迭代
-                    print("[深度研究] 没有生成新查询且已有信息，结束迭代")
+                    self._log("[深度研究] 没有生成新查询且已有信息，结束迭代")
                     break
             
             # 处理每个搜索查询
             for search_query in queries:
-                print(f"[深度研究] 执行查询: {search_query}")
+                self._log(f"[深度研究] 执行查询: {search_query}")
                 
                 # 检查是否已执行过相同查询
                 if self.thinking_engine.has_executed_query(search_query):
@@ -500,9 +510,9 @@ class DeepResearchTool(BaseSearchTool):
                 if has_useful_info:
                     useful_info = summary_think.split("**Final Information**")[1].strip()
                     self.all_retrieved_info.append(useful_info)
-                    print(f"[深度研究] 发现有用信息: {useful_info[:100]}...")
+                    self._log(f"[深度研究] 发现有用信息: {useful_info}")
                 else:
-                    print("[深度研究] 未发现有用信息")
+                    self._log("[深度研究] 未发现有用信息")
                 
                 # 更新推理历史
                 self.thinking_engine.add_reasoning_step(summary_think)
@@ -519,7 +529,8 @@ class DeepResearchTool(BaseSearchTool):
                 "thinking_process": think,
                 "answer": f"抱歉，我无法回答关于'{query}'的问题，因为没有找到相关信息。",
                 "reference": chunk_info,
-                "retrieved_info": []
+                "retrieved_info": [],
+                "execution_logs": self.execution_logs,
             }
         
         # 使用检索到的信息生成答案
@@ -532,6 +543,7 @@ class DeepResearchTool(BaseSearchTool):
             "answer": final_answer,
             "reference": chunk_info,
             "retrieved_info": self.all_retrieved_info,
+            "execution_logs": self.execution_logs,
         }
         
         return result
@@ -549,7 +561,7 @@ class DeepResearchTool(BaseSearchTool):
         overall_start = time.time()
         
         # 记录开始搜索
-        print(f"[深度搜索] 开始处理查询...")
+        self._log(f"[深度搜索] 开始处理查询...")
         
         # 解析输入
         if isinstance(query_input, dict) and "query" in query_input:
@@ -557,18 +569,18 @@ class DeepResearchTool(BaseSearchTool):
         else:
             query = str(query_input)
         
-        print(f"[深度搜索] 解析后的查询: {query}")
+        self._log(f"[深度搜索] 解析后的查询: {query}")
         
         # 检查缓存
         cache_key = f"deep:{query}"
         cached_result = self.cache_manager.get(cache_key)
         if cached_result:
-            print(f"[深度搜索] 缓存命中，返回缓存结果")
+            self._log(f"[深度搜索] 缓存命中，返回缓存结果")
             return cached_result
         
         try:
             # 执行思考过程
-            print(f"[深度搜索] 开始执行思考过程")
+            self._log(f"[深度搜索] 开始执行思考过程")
             result = self.thinking(query)
             answer = result["answer"]
             chunk_info = result.get("reference", {})
@@ -589,14 +601,14 @@ class DeepResearchTool(BaseSearchTool):
             # 验证答案质量
             validation_results = self.validator.validate(query, answer)
             if validation_results["passed"]:
-                print(f"[深度搜索] 答案验证通过，缓存结果")
+                self._log(f"[深度搜索] 答案验证通过，缓存结果")
                 self.cache_manager.set(cache_key, answer)
             else:
-                print(f"[深度搜索] 答案验证失败，不缓存")
+                self._log(f"[深度搜索] 答案验证失败，不缓存")
             
             # 记录总时间
             total_time = time.time() - overall_start
-            print(f"[深度搜索] 完成，耗时 {total_time:.2f}秒")
+            self._log(f"[深度搜索] 完成，耗时 {total_time:.2f}秒")
             self.performance_metrics["total_time"] = total_time
             
             return answer

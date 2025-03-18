@@ -1,6 +1,4 @@
 import streamlit as st
-import shutup
-shutup.please()
 
 from utils.state import init_session_state
 from components.styles import custom_css
@@ -41,4 +39,6 @@ def main():
         display_chat_interface()
 
 if __name__ == "__main__":
+    import shutup
+    shutup.please()
     main()

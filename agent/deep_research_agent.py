@@ -174,4 +174,10 @@ class DeepResearchAgent(BaseAgent):
             dict: 包含思考过程和答案的字典
         """
         # 直接调用研究工具的thinking方法
-        return self.research_tool.thinking(query)
+        result = self.research_tool.thinking(query)
+        
+        # 确保结果包含执行日志
+        if "execution_logs" not in result:
+            result["execution_logs"] = []
+            
+        return result

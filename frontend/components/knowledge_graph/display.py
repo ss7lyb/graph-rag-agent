@@ -7,8 +7,12 @@ def display_knowledge_graph_tab(tabs):
     with tabs[1]:
         st.markdown('<div class="kg-controls">', unsafe_allow_html=True)
 
+        # 检查当前agent类型，deep_research_agent和naive_rag_agent都禁用图谱
         if st.session_state.agent_type == "naive_rag_agent":
             st.info("Naive RAG 是传统的向量搜索方式，没有知识图谱的可视化。")
+            return
+        elif st.session_state.agent_type == "deep_research_agent":
+            st.info("Deep Research Agent 专注于深度推理过程，没有知识图谱的可视化。请查看执行轨迹标签页了解详细推理过程。")
             return
         
         # 添加获取全局图谱/回答相关图谱的选择

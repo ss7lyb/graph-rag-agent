@@ -22,15 +22,15 @@ def display_source_content_tab(tabs):
 def display_execution_trace_tab(tabs):
     """显示执行轨迹标签页内容"""
     with tabs[0]:
-        # 创建一个标题，使用黑色
-        st.markdown("""
-        <div style="padding:10px 0px; margin:15px 0; border-bottom:1px solid #eee;">
-            <h2 style="margin:0; color:#333333;">深度研究执行过程</h2>
-        </div>
-        """, unsafe_allow_html=True)
-        
         # 显示DeepResearchAgent的执行轨迹
         if st.session_state.agent_type == "deep_research_agent":
+            # 创建一个标题，使用黑色
+            st.markdown("""
+            <div style="padding:10px 0px; margin:15px 0; border-bottom:1px solid #eee;">
+                <h2 style="margin:0; color:#333333;">深度研究执行过程</h2>
+            </div>
+            """, unsafe_allow_html=True)
+
             # 先尝试获取执行日志
             execution_logs = []
             
@@ -47,14 +47,30 @@ def display_execution_trace_tab(tabs):
                             # 分割为行
                             execution_logs = output.strip().split('\n')
             
+            # 如果深度研究消息中有raw_thinking，也可以从中提取执行日志
+            if not execution_logs and len(st.session_state.messages) > 0:
+                for msg in reversed(st.session_state.messages):  # 从最新的消息开始检查
+                    if msg.get("role") == "assistant" and "raw_thinking" in msg:
+                        thinking_text = msg["raw_thinking"]
+                        # 提取日志行
+                        if "[深度研究]" in thinking_text or "[KB检索]" in thinking_text:
+                            execution_logs = thinking_text.strip().split('\n')
+                            break
+            
+            # 确保我们至少检查了会话状态中可能的响应
+            if not execution_logs and 'raw_thinking' in st.session_state:
+                thinking_text = st.session_state.raw_thinking
+                if thinking_text and ("[深度研究]" in thinking_text or "[KB检索]" in thinking_text):
+                    execution_logs = thinking_text.strip().split('\n')
+            
             # 如果仍然没有找到，显示提示信息
             if not execution_logs:
-                st.warning("未找到执行日志。请发送新的查询生成执行轨迹。")
+                st.info("正在等待执行日志。请发送新的查询生成执行轨迹，如果看到此消息但已发送查询，请再试一次。")
             else:
                 # 直接使用日志行列表进行格式化显示
                 display_formatted_logs(execution_logs)
         else:
-            # 原有的执行轨迹显示逻辑
+            # 其他执行轨迹显示逻辑
             if st.session_state.execution_log:
                 for entry in st.session_state.execution_log:
                     with st.expander(f"节点: {entry['node']}", expanded=False):
@@ -84,7 +100,8 @@ def display_formatted_logs(log_lines):
         current_iteration = None
         current_iteration_content = []
         iterations = []
-        
+        current_round = None
+
         for line in log_lines:
             # 检测新的迭代轮次
             if "[深度研究] 开始第" in line and "轮迭代" in line:
@@ -100,6 +117,10 @@ def display_formatted_logs(log_lines):
                 if round_match:
                     current_round = int(round_match.group(1))
                     current_iteration_content = [line]
+            # 即使当前轮为空，也将这一行添加到当前内容中
+            elif current_round is not None:
+                if current_iteration_content is not None:
+                    current_iteration_content.append(line)
             
             # 检测查询执行      
             elif "[深度研究] 执行查询:" in line:
@@ -156,7 +177,7 @@ def display_formatted_logs(log_lines):
             default_key = next((k for k in iteration_options.keys() if "1 轮" in k), list(iteration_options.keys())[0])
             
             selected_round_key = st.selectbox(
-                "", 
+                "选择迭代轮次", 
                 list(iteration_options.keys()),
                 index=list(iteration_options.keys()).index(default_key)
             )

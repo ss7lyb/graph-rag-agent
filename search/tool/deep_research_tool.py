@@ -352,7 +352,7 @@ class DeepResearchTool(BaseSearchTool):
             thinking_process: 思考过程
             
         返回:
-            str: 最终答案
+            str: 最终答案，包含思考过程
         """
         try:
             # 调用LLM生成最终答案
@@ -362,7 +362,12 @@ class DeepResearchTool(BaseSearchTool):
                 thinking_process=thinking_process
             ))
             
-            return response.content if hasattr(response, 'content') else str(response)
+            answer = response.content if hasattr(response, 'content') else str(response)
+            
+            # 将思考过程添加到答案中，使用Markdown引用格式
+            formatted_answer = f"<think>{thinking_process}</think>\n\n{answer}"
+            
+            return formatted_answer
         except Exception as e:
             print(f"[最终答案生成错误] {str(e)}")
             return f"生成最终答案时出错: {str(e)}"
@@ -392,9 +397,8 @@ class DeepResearchTool(BaseSearchTool):
         
         # 初始化思考引擎
         self.thinking_engine.initialize_with_query(query)
-        
-        # 思考过程容器
-        think = "<think>"
+
+        think = ""
         
         # 迭代思考过程
         for iteration in range(self.max_iterations):
@@ -518,9 +522,6 @@ class DeepResearchTool(BaseSearchTool):
                 self.thinking_engine.add_reasoning_step(summary_think)
                 self.thinking_engine.add_human_message(f"\n{BEGIN_SEARCH_RESULT}{summary_think}{END_SEARCH_RESULT}\n")
                 think += self.thinking_engine.remove_result_tags(summary_think)
-        
-        # 完成思考过程
-        think += "</think>\n"
         
         # 生成最终答案
         # 确保至少执行了一次搜索

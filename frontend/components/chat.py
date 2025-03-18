@@ -51,8 +51,12 @@ def display_chat_interface():
                 
                 # 处理deep_research_agent的思考过程
                 if msg["role"] == "assistant":
+                    # 判断是否需要显示思考过程
+                    show_thinking = (st.session_state.agent_type == "deep_research_agent" and 
+                                    st.session_state.get("show_thinking", False))
+                    
                     # 优先使用raw_thinking字段
-                    if "raw_thinking" in msg and st.session_state.agent_type == "deep_research_agent" and st.session_state.get("show_thinking", False):
+                    if "raw_thinking" in msg and show_thinking:
                         # 提取思考过程
                         thinking_process = msg["raw_thinking"]
                         answer_content = msg.get("processed_content", content)
@@ -70,7 +74,7 @@ def display_chat_interface():
                         # 显示答案
                         st.markdown(answer_content)
                     # 检查是否有<think>标签
-                    elif "<think>" in content and "</think>" in content and st.session_state.agent_type == "deep_research_agent" and st.session_state.get("show_thinking", False):
+                    elif "<think>" in content and "</think>" in content:
                         # 提取<think>标签中的内容
                         thinking_match = re.search(r'<think>(.*?)</think>', content, re.DOTALL)
                         
@@ -79,23 +83,29 @@ def display_chat_interface():
                             # 移除思考过程，保留答案
                             answer_content = content.replace(f"<think>{thinking_process}</think>", "").strip()
                             
-                            # 格式化思考过程，使用引用格式
-                            thinking_lines = thinking_process.split('\n')
-                            quoted_thinking = '\n'.join([f"> {line}" for line in thinking_lines])
-                            
-                            # 显示思考过程
-                            st.markdown(quoted_thinking)
-                            
-                            # 添加两行空行间隔
-                            st.markdown("\n\n")
-                            
-                            # 显示答案
-                            st.markdown(answer_content)
+                            if show_thinking:
+                                # 显示思考过程（仅当show_thinking为True时）
+                                # 格式化思考过程，使用引用格式
+                                thinking_lines = thinking_process.split('\n')
+                                quoted_thinking = '\n'.join([f"> {line}" for line in thinking_lines])
+                                
+                                # 显示思考过程
+                                st.markdown(quoted_thinking)
+                                
+                                # 添加两行空行间隔
+                                st.markdown("\n\n")
+                                
+                                # 显示答案
+                                st.markdown(answer_content)
+                            else:
+                                # 只显示答案部分（不显示思考过程）
+                                st.markdown(answer_content)
                         else:
-                            # 如果提取失败，显示完整内容
-                            st.markdown(content)
+                            # 如果提取失败，显示完整内容但移除可能的<think>标签
+                            cleaned_content = re.sub(r'<think>|</think>', '', content)
+                            st.markdown(cleaned_content)
                     else:
-                        # 不显示思考过程，直接显示内容
+                        # 普通回答，无思考过程
                         st.markdown(content)
                 else:
                     # 普通消息直接显示
@@ -279,6 +289,9 @@ def display_chat_interface():
                     
                     # 处理deep_research_agent的思考过程
                     if st.session_state.agent_type == "deep_research_agent":
+                        # 判断是否需要显示思考过程
+                        show_thinking = st.session_state.get("show_thinking", False)
+                        
                         # 优先使用raw_thinking
                         if "raw_thinking" in response:
                             raw_thinking = response["raw_thinking"]
@@ -286,7 +299,7 @@ def display_chat_interface():
                             message_obj["processed_content"] = answer_content
                             
                             # 如果设置了显示思考过程
-                            if st.session_state.get("show_thinking", False):
+                            if show_thinking:
                                 # 直接显示思考过程，使用引用格式
                                 thinking_lines = raw_thinking.split('\n')
                                 quoted_thinking = '\n'.join([f"> {line}" for line in thinking_lines])
@@ -315,7 +328,7 @@ def display_chat_interface():
                                 message_obj["processed_content"] = processed_content
                                 
                                 # 如果设置了显示思考过程
-                                if st.session_state.get("show_thinking", False):
+                                if show_thinking:
                                     # 格式化思考过程，使用引用格式
                                     thinking_lines = thinking_process.split('\n')
                                     quoted_thinking = '\n'.join([f"> {line}" for line in thinking_lines])
@@ -332,8 +345,9 @@ def display_chat_interface():
                                     # 不显示思考过程，直接显示答案
                                     st.markdown(processed_content)
                             else:
-                                # 如果提取失败，显示完整内容
-                                st.markdown(answer_content)
+                                # 如果提取失败，显示完整内容但移除可能的<think>标签
+                                cleaned_content = re.sub(r'<think>|</think>', '', answer_content)
+                                st.markdown(cleaned_content)
                         else:
                             # 普通回答，无思考过程
                             st.markdown(answer_content)

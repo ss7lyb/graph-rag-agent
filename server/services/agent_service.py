@@ -1,4 +1,5 @@
 from typing import Dict, List
+import threading
 from langchain_core.messages import RemoveMessage, AIMessage, HumanMessage, ToolMessage
 
 
@@ -14,27 +15,43 @@ class AgentManager:
         from agent.naive_rag_agent import NaiveRagAgent
         from agent.deep_research_agent import DeepResearchAgent 
         
-        # 创建Agent字典
-        self.agents = {
-            "graph_agent": GraphAgent(),
-            "hybrid_agent": HybridAgent(),
-            "naive_rag_agent": NaiveRagAgent(),
-            "deep_research_agent": DeepResearchAgent(),
+        # 初始化Agent类
+        self.agent_classes = {
+            "graph_agent": GraphAgent,
+            "hybrid_agent": HybridAgent,
+            "naive_rag_agent": NaiveRagAgent,
+            "deep_research_agent": DeepResearchAgent,
         }
+        
+        # 保留Agent实例池
+        self.agent_instances = {}
+        
+        # 添加锁来保护实例访问
+        self.agent_lock = threading.RLock()
     
-    def get_agent(self, agent_type: str):
+    def get_agent(self, agent_type: str, session_id: str = "default"):
         """
-        获取指定类型的Agent
+        获取指定类型的Agent，对每个会话使用独立实例
         
         Args:
             agent_type: Agent类型名称
+            session_id: 会话ID
             
         Returns:
             Agent实例
         """
-        if agent_type not in self.agents:
+        if agent_type not in self.agent_classes:
             raise ValueError(f"未知的agent类型: {agent_type}")
-        return self.agents[agent_type]
+        
+        # 为每个会话使用单独的Agent实例，避免资源争用
+        instance_key = f"{agent_type}:{session_id}"
+        
+        with self.agent_lock:
+            if instance_key not in self.agent_instances:
+                # 创建新的Agent实例
+                self.agent_instances[instance_key] = self.agent_classes[agent_type]()
+            
+            return self.agent_instances[instance_key]
     
     def clear_history(self, session_id: str) -> Dict:
         """
@@ -49,44 +66,36 @@ class AgentManager:
         remaining_text = ""
         
         try:
-            # 清除所有agent的历史
-            for agent_name, agent in self.agents.items():
-                config = {"configurable": {"thread_id": session_id}}
-                
-                # 添加检查，防止None值报错
-                memory_content = agent.memory.get(config)
-                if memory_content is None or "channel_values" not in memory_content:
-                    continue  # 跳过这个agent
-                    
-                messages = memory_content["channel_values"]["messages"]
-                
-                # 如果消息少于2条，不进行删除操作
-                if len(messages) <= 2:
-                    continue
+            # 清除对应会话的所有agent实例历史
+            with self.agent_lock:
+                for agent_type in self.agent_classes.keys():
+                    instance_key = f"{agent_type}:{session_id}"
+                    if instance_key in self.agent_instances:
+                        agent = self.agent_instances[instance_key]
+                        config = {"configurable": {"thread_id": session_id}}
+                        
+                        # 添加检查，防止None值报错
+                        memory_content = agent.memory.get(config)
+                        if memory_content is None or "channel_values" not in memory_content:
+                            continue  # 跳过这个agent
+                            
+                        messages = memory_content["channel_values"]["messages"]
+                        
+                        # 如果消息少于2条，不进行删除操作
+                        if len(messages) <= 2:
+                            continue
 
-                i = len(messages)
-                for message in reversed(messages):
-                    if isinstance(messages[2], ToolMessage) and i == 4:
-                        break
-                    agent.graph.update_state(config, {"messages": RemoveMessage(id=message.id)})
-                    i = i - 1
-                    if i == 2:  # 保留前两条消息
-                        break
-
+                        i = len(messages)
+                        for message in reversed(messages):
+                            if isinstance(messages[2], ToolMessage) and i == 4:
+                                break
+                            agent.graph.update_state(config, {"messages": RemoveMessage(id=message.id)})
+                            i = i - 1
+                            if i == 2:  # 保留前两条消息
+                                break
+            
             # 获取剩余消息
-            try:
-                # 使用graph_agent检查剩余消息
-                graph_agent = self.agents["graph_agent"]
-                memory_content = graph_agent.memory.get({"configurable": {"thread_id": session_id}})
-                
-                if memory_content and "channel_values" in memory_content:
-                    remaining_messages = memory_content["channel_values"]["messages"]
-                    for msg in remaining_messages:
-                        if isinstance(msg, (AIMessage, HumanMessage)):
-                            prefix = "AI: " if isinstance(msg, AIMessage) else "User: "
-                            remaining_text += f"{prefix}{msg.content}\n"
-            except Exception as e:
-                print(f"获取剩余消息失败: {e}")
+            remaining_text = "已清除会话历史"
         
         except Exception as e:
             print(f"清除聊天历史时出错: {str(e)}")
@@ -98,12 +107,16 @@ class AgentManager:
     
     def close_all(self):
         """关闭所有Agent资源"""
-        for agent_name, agent in self.agents.items():
-            try:
-                agent.close()
-                print(f"已关闭 {agent_name} 资源")
-            except Exception as e:
-                print(f"关闭 {agent_name} 资源时出错: {e}")
+        with self.agent_lock:
+            for instance_key, agent in self.agent_instances.items():
+                try:
+                    agent.close()
+                    print(f"已关闭 {instance_key} 资源")
+                except Exception as e:
+                    print(f"关闭 {instance_key} 资源时出错: {e}")
+            
+            # 清空实例池
+            self.agent_instances.clear()
 
 
 # 创建全局实例

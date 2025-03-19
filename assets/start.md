@@ -113,6 +113,13 @@ examples = [
 ]
 ```
 
+项目并发进程数：config/settings.py：
+
+```python
+# fastapi 并发进程数
+workers = 2
+```
+
 前后端项目启动：
 
 ```bash

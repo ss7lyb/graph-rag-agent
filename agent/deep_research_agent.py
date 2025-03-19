@@ -146,7 +146,7 @@ class DeepResearchAgent(BaseAgent):
             thread_id: 会话ID
             recursion_limit: 递归限制
             show_thinking: 是否显示思考过程
-            
+                
         返回:
             str: 生成的回答或包含思考过程的字典
         """

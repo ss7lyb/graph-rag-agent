@@ -167,11 +167,19 @@ async def process_chat(message: str, session_id: str, debug: bool = False, agent
                 }
             else:
                 # 普通模式，使用标准ask方法
-                answer = selected_agent.ask(
-                    message, 
-                    thread_id=session_id,
-                    show_thinking=show_thinking if agent_type == "deep_research_agent" else False
-                )
+                # 检查是否为DeepResearchAgent类型，只有DeepResearchAgent支持show_thinking参数
+                if agent_type == "deep_research_agent":
+                    answer = selected_agent.ask(
+                        message, 
+                        thread_id=session_id,
+                        show_thinking=False  # deep_research_agent支持此参数
+                    )
+                else:
+                    # 其他Agent类型不支持show_thinking参数
+                    answer = selected_agent.ask(
+                        message, 
+                        thread_id=session_id
+                    )
                 return {"answer": answer}
     except Exception as e:
         print(f"处理聊天请求时出错: {str(e)}")

@@ -17,7 +17,7 @@ def send_message(message: str) -> Dict:
                 "debug": st.session_state.debug_mode,
                 "agent_type": st.session_state.agent_type
             },
-            timeout=60  # 增加超时时间
+            timeout=120  # 增加超时时间
         )
         
         # 记录性能

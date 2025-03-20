@@ -30,6 +30,11 @@ class SourceResponse(BaseModel):
     content: str
 
 
+class SourceInfoResponse(BaseModel):
+    """源文件信息响应模型"""
+    file_name: str
+
+
 class ClearRequest(BaseModel):
     """清除聊天历史请求模型"""
     session_id: str

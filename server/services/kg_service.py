@@ -681,6 +681,68 @@ def get_source_content(source_id: str) -> str:
     except Exception as e:
         print(f"获取源内容时出错: {str(e)}")
         return f"检索源内容时发生错误: {str(e)}"
+    
+
+def get_source_file_info(source_id: str) -> dict:
+    """
+    获取源ID对应的文件信息
+    
+    Args:
+        source_id: 源ID
+        
+    Returns:
+        Dict: 包含文件名等信息的字典
+    """
+    try:
+        if not source_id:
+            return {"file_name": "未知文件"}
+        
+        # 检查ID是否为Chunk ID (直接使用)
+        if len(source_id) == 40:  # SHA1哈希的长度
+            query = """
+            MATCH (n:__Chunk__) 
+            WHERE n.id = $id 
+            RETURN n.fileName AS fileName
+            """
+            params = {"id": source_id}
+        else:
+            # 尝试解析复合ID
+            id_parts = source_id.split(",")
+            
+            if len(id_parts) >= 2 and id_parts[0] == "2":  # 文本块查询
+                query = """
+                MATCH (n:__Chunk__) 
+                WHERE n.id = $id 
+                RETURN n.fileName AS fileName
+                """
+                params = {"id": id_parts[-1]}
+            else:  # 社区查询
+                query = """
+                MATCH (n:__Community__) 
+                WHERE n.id = $id 
+                RETURN "社区摘要" AS fileName
+                """
+                params = {"id": id_parts[1] if len(id_parts) > 1 else source_id}
+        
+        from neo4j import Result
+        result = driver.execute_query(
+            query,
+            params,
+            result_transformer_=Result.to_df
+        )
+        
+        if result is not None and result.shape[0] > 0 and "fileName" in result.columns:
+            file_name = result.iloc[0]['fileName']
+            # 获取文件名的基本名称（不含路径）
+            import os
+            base_name = os.path.basename(file_name) if file_name else "未知文件"
+            return {"file_name": base_name}
+        else:
+            return {"file_name": f"源文本 {source_id}"}
+            
+    except Exception as e:
+        print(f"获取源文件信息时出错: {str(e)}")
+        return {"file_name": f"源文本 {source_id}"}
 
 
 def get_chunks(limit: int = 10, offset: int = 0):

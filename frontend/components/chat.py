@@ -2,7 +2,7 @@ import time
 import streamlit as st
 import uuid
 import re
-from utils.api import send_message, send_feedback, get_source_content, get_knowledge_graph_from_message, clear_chat
+from utils.api import send_message, send_feedback, get_source_content, get_knowledge_graph_from_message, get_source_file_info, clear_chat
 from utils.helpers import extract_source_ids
 
 def display_chat_interface():
@@ -217,8 +217,12 @@ def display_chat_interface():
                         if source_ids:
                             with st.expander("查看引用源文本", expanded=False):
                                 for source_id in source_ids:
-                                    if st.button(f"加载源文本 {source_id}", key=f"src_{source_id}_{i}"):
-                                        with st.spinner(f"加载源文本 {source_id}..."):
+                                    # 获取源文本的文件名信息
+                                    source_info = get_source_file_info(source_id)
+                                    display_name = source_info.get("file_name", f"源文本 {source_id}")
+                                    
+                                    if st.button(f"加载 {display_name}", key=f"src_{source_id}_{i}"):
+                                        with st.spinner(f"加载源文本 {display_name}..."):
                                             source_data = get_source_content(source_id)
                                             if source_data and "content" in source_data:
                                                 st.session_state.source_content = source_data["content"]

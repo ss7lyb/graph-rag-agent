@@ -139,6 +139,26 @@ def get_source_content(source_id: str) -> Dict:
         st.error(f"获取源内容时出错: {str(e)}")
         return None
 
+def get_source_file_info(source_id: str) -> dict:
+    """获取源ID对应的文件信息
+    
+    Args:
+        source_id: 源ID
+        
+    Returns:
+        Dict: 包含文件名等信息的字典
+    """
+    try:
+        response = requests.post(
+            f"{API_URL}/source_info",
+            json={"source_id": source_id},
+            timeout=10
+        )
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"获取源文件信息时出错: {str(e)}")
+        return {"file_name": f"源文本 {source_id}"}
+
 def clear_chat():
     """清除聊天历史"""
     try:

@@ -58,6 +58,8 @@ LANGSMITH_PROJECT="项目名称"
 pip install -e .
 ```
 
+知识图谱文件存放：files文件夹下，目前仅支持txt文件，后续会有更多支持。
+
 知识图谱生成配置：config/settings.py:
 
 ```python

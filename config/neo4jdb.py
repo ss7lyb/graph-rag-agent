@@ -2,7 +2,7 @@ import os
 from typing import Dict, Any
 import pandas as pd
 from neo4j import GraphDatabase, Result
-from langchain_community.graphs import Neo4jGraph
+from langchain_neo4j import Neo4jGraph
 from dotenv import load_dotenv
 
 

@@ -31,6 +31,28 @@ def display_execution_trace_tab(tabs):
             </div>
             """, unsafe_allow_html=True)
 
+            # 增加显示当前使用的工具类型
+            tool_type = "增强版(DeeperResearch)" if st.session_state.get("use_deeper_tool", True) else "标准版(DeepResearch)"
+            st.markdown(f"""
+            <div style="background-color:#f0f7ff; padding:8px 15px; border-radius:5px; margin-bottom:15px; border-left:4px solid #4285F4;">
+                <span style="font-weight:500;">当前工具：</span>{tool_type}
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # 如果是增强版，显示增强功能区域
+            if st.session_state.get("use_deeper_tool", True):
+                with st.expander("增强功能详情", expanded=False):
+                    st.markdown("""
+                    #### 社区感知增强
+                    智能识别相关知识社区，自动提取有价值的背景知识和关联信息。
+                    
+                    #### 知识图谱增强
+                    实时构建查询相关的知识图谱，提供结构化推理和关系发现。
+                    
+                    #### 证据链追踪
+                    记录完整的推理路径和证据来源，提供可解释的结论过程。
+                    """)
+
             # 先尝试获取执行日志
             execution_logs = []
             
@@ -62,6 +84,49 @@ def display_execution_trace_tab(tabs):
                 thinking_text = st.session_state.raw_thinking
                 if thinking_text and ("[深度研究]" in thinking_text or "[KB检索]" in thinking_text):
                     execution_logs = thinking_text.strip().split('\n')
+            
+            # 如果是增强版，提取社区和图谱信息 (如果有)
+            if st.session_state.get("use_deeper_tool", True) and "reasoning_chain" in st.session_state:
+                reasoning_chain = st.session_state.reasoning_chain
+                
+                # 显示社区分析和知识图谱统计
+                if reasoning_chain:
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.markdown("#### 社区分析")
+                        steps = reasoning_chain.get("steps", [])
+                        community_step = next((s for s in steps if "knowledge_community_analysis" in s.get("search_query", "")), None)
+                        
+                        if community_step:
+                            st.success(f"✓ 识别到相关社区")
+                            evidence = community_step.get("evidence", [])
+                            
+                            for ev in evidence:
+                                if ev.get("source_type") == "community_knowledge":
+                                    with st.expander(f"社区知识 {ev.get('evidence_id', '')}"):
+                                        st.write(ev.get("content", ""))
+                        else:
+                            st.info("未执行社区分析")
+                    
+                    with col2:
+                        st.markdown("#### 知识图谱")
+                        # 检查是否有知识图谱数据
+                        if "knowledge_graph" in st.session_state:
+                            kg = st.session_state.knowledge_graph
+                            st.metric("实体数量", kg.get("entity_count", 0))
+                            st.metric("关系数量", kg.get("relation_count", 0))
+                            
+                            # 显示核心实体
+                            central_entities = kg.get("central_entities", [])
+                            if central_entities:
+                                st.write("**核心实体:**")
+                                for entity in central_entities[:5]:
+                                    entity_id = entity.get("id", "")
+                                    entity_type = entity.get("type", "未知")
+                                    st.markdown(f"- **{entity_id}** ({entity_type})")
+                        else:
+                            st.info("暂无知识图谱数据")
             
             # 如果仍然没有找到，显示提示信息
             if not execution_logs:
@@ -394,6 +459,21 @@ def display_debug_panel():
     </script>
     """
     
-    # 只有当需要切换标签时才注入JS
     if "current_tab" in st.session_state:
-        st.markdown(tab_js, unsafe_allow_html=True)
+        # 设置当前标签索引
+        tab_index = 0  # 默认显示执行轨迹标签
+            
+        if st.session_state.current_tab == "执行轨迹":
+            tab_index = 0
+        elif st.session_state.current_tab == "知识图谱":
+            tab_index = 1
+        elif st.session_state.current_tab == "源内容":
+            tab_index = 2
+        elif st.session_state.current_tab == "性能监控":
+            tab_index = 3
+
+        # 在会话状态中保存当前标签索引
+        st.session_state.active_tab = tab_index
+
+        # 创建标签页（不带键值）
+        tabs = st.tabs(["执行轨迹", "知识图谱", "源内容", "性能监控"])

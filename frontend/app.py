@@ -5,6 +5,7 @@ from components.styles import custom_css
 from components.chat import display_chat_interface
 from components.sidebar import display_sidebar
 from components.debug import display_debug_panel
+from utils.performance import init_performance_monitoring
 
 def main():
     """主应用入口函数"""
@@ -17,6 +18,9 @@ def main():
     
     # 初始化会话状态
     init_session_state()
+    
+    # 初始化性能监控
+    init_performance_monitoring()
     
     # 添加自定义CSS
     custom_css()

@@ -1,6 +1,9 @@
-from fastapi import APIRouter
-from models.schemas import SourceRequest, SourceResponse, SourceInfoResponse
+from typing import Dict
+from fastapi import APIRouter, HTTPException
+from models.schemas import SourceRequest, SourceResponse, SourceInfoResponse, SourceInfoBatchRequest, ContentBatchRequest
 from services.kg_service import get_source_content, get_source_file_info
+from utils.neo4j_batch import BatchProcessor
+from config.neo4jdb import get_db_manager
 
 # 创建路由器
 router = APIRouter()
@@ -33,3 +36,32 @@ async def source_info(request: SourceRequest):
     """
     info = get_source_file_info(request.source_id)
     return info
+
+@router.post("/content_batch", response_model=Dict)
+async def get_content_batch(request: ContentBatchRequest):
+    """批量获取内容"""
+    try:
+        # 获取数据库驱动
+        db_manager = get_db_manager()
+        driver = db_manager.get_driver()
+        
+        # 使用BatchProcessor批量处理
+        result = BatchProcessor.get_content_batch(request.chunk_ids, driver)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"批量获取内容失败: {str(e)}")
+
+
+@router.post("/source_info_batch", response_model=Dict)
+async def get_source_info_batch(request: SourceInfoBatchRequest):
+    """批量获取源信息"""
+    try:
+        # 获取数据库驱动
+        db_manager = get_db_manager()
+        driver = db_manager.get_driver()
+        
+        # 使用BatchProcessor批量处理
+        result = BatchProcessor.get_source_info_batch(request.source_ids, driver)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"批量获取源信息失败: {str(e)}")

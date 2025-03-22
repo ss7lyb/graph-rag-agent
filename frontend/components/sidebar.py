@@ -25,12 +25,28 @@ def display_sidebar():
 
         # 思考过程选项 - 仅当选择 deep_research_agent 时显示
         if agent_type == "deep_research_agent":
+            # 思考过程选项
             show_thinking = st.checkbox("显示推理过程", 
-                                      value=st.session_state.get("show_thinking", False), 
-                                      key="sidebar_show_thinking",
-                                      help="显示AI的思考过程")
+                                    value=st.session_state.get("show_thinking", False), 
+                                    key="sidebar_show_thinking",
+                                    help="显示AI的思考过程")
             # 更新全局 show_thinking
             st.session_state.show_thinking = show_thinking
+            
+            # 添加增强版工具选择
+            use_deeper = st.checkbox("使用增强版研究工具", 
+                                value=st.session_state.get("use_deeper_tool", True), 
+                                key="sidebar_use_deeper",
+                                help="启用社区感知和知识图谱增强功能")
+            # 更新全局 use_deeper_tool
+            st.session_state.use_deeper_tool = use_deeper
+            
+            # 添加工具说明
+            if use_deeper:
+                st.info("增强版研究工具：整合社区感知和知识图谱增强，实现更深度的多级推理")
+            else:
+                st.info("标准版研究工具：实现基础的多轮推理和搜索")
+                
         elif "show_thinking" in st.session_state:
             # 如果切换到其他Agent类型，重置show_thinking为False
             st.session_state.show_thinking = False

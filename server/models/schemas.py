@@ -7,8 +7,9 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str
     debug: bool = False
-    agent_type: str = "graph_agent"  # 默认采用 graphrag
-    show_thinking: bool = False  # 是否显示思考过程，仅适用于deep_research_agent
+    agent_type: str = "graph_agent"
+    use_deeper_tool: Optional[bool] = True
+    show_thinking: Optional[bool] = False
 
 
 class ChatResponse(BaseModel):
@@ -59,3 +60,9 @@ class FeedbackResponse(BaseModel):
     """反馈响应模型"""
     status: str
     action: str
+
+class SourceInfoBatchRequest(BaseModel):
+    source_ids: List[str]
+
+class ContentBatchRequest(BaseModel):
+    chunk_ids: List[str]

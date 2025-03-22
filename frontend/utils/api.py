@@ -1,23 +1,36 @@
 import time
 import uuid
 import requests
+import queue
+import threading
+import time
 import streamlit as st
 from typing import Dict
 from frontend_config.settings import API_URL
+from utils.performance import monitor_performance
 
+@monitor_performance(endpoint="send_message")
 def send_message(message: str) -> Dict:
     """发送聊天消息到 FastAPI 后端，带性能监控"""
     start_time = time.time()
     try:
+        # 构建请求参数
+        params = {
+            "message": message,
+            "session_id": st.session_state.session_id,
+            "debug": st.session_state.debug_mode,
+            "agent_type": st.session_state.agent_type
+        }
+        
+        # 如果是深度研究代理，添加是否使用增强版工具的参数
+        if st.session_state.agent_type == "deep_research_agent":
+            params["use_deeper_tool"] = st.session_state.get("use_deeper_tool", True)
+            params["show_thinking"] = st.session_state.get("show_thinking", False)
+        
         response = requests.post(
             f"{API_URL}/chat",
-            json={
-                "message": message,
-                "session_id": st.session_state.session_id,
-                "debug": st.session_state.debug_mode,
-                "agent_type": st.session_state.agent_type
-            },
-            timeout=120  # 增加超时时间
+            json=params,
+            # timeout=120  # 增加超时时间
         )
         
         # 记录性能
@@ -44,8 +57,9 @@ def send_message(message: str) -> Dict:
         st.error(f"服务器连接错误: {str(e)}")
         return None
 
+@monitor_performance(endpoint="send_feedback")
 def send_feedback(message_id: str, query: str, is_positive: bool, thread_id: str, agent_type: str = "graph_agent"):
-    """向后端发送用户反馈 - 增加防抖和错误处理，带性能监控"""
+    """向后端发送用户反馈"""
     start_time = time.time()
     try:
         # 确保 agent_type 有值
@@ -92,8 +106,16 @@ def send_feedback(message_id: str, query: str, is_positive: bool, thread_id: str
         st.error(f"发送反馈时出错: {str(e)}")
         return {"status": "error", "action": str(e)}
 
+@monitor_performance(endpoint="get_knowledge_graph")
 def get_knowledge_graph(limit: int = 100, query: str = None) -> Dict:
     """获取知识图谱数据"""
+    # 生成缓存键
+    cache_key = f"kg:limit={limit}:query={query}"
+    
+    # 检查缓存
+    if cache_key in st.session_state.cache.get('knowledge_graphs', {}):
+        return st.session_state.cache['knowledge_graphs'][cache_key]
+    
     try:
         params = {"limit": limit}
         if query:
@@ -104,13 +126,29 @@ def get_knowledge_graph(limit: int = 100, query: str = None) -> Dict:
             params=params,
             timeout=30
         )
-        return response.json()
+        result = response.json()
+        
+        # 缓存结果
+        if 'knowledge_graphs' not in st.session_state.cache:
+            st.session_state.cache['knowledge_graphs'] = {}
+        st.session_state.cache['knowledge_graphs'][cache_key] = result
+        
+        return result
     except requests.exceptions.RequestException as e:
         st.error(f"获取知识图谱时出错: {str(e)}")
         return {"nodes": [], "links": []}
 
 def get_knowledge_graph_from_message(message: str, query: str = None):
     """从AI响应中提取知识图谱数据"""
+    # 生成缓存键 - 使用消息哈希和查询组合
+    import hashlib
+    message_hash = hashlib.md5(message.encode()).hexdigest()
+    cache_key = f"kg_msg:{message_hash}:query={query}"
+    
+    # 检查缓存
+    if cache_key in st.session_state.cache.get('knowledge_graphs', {}):
+        return st.session_state.cache['knowledge_graphs'][cache_key]
+    
     try:
         params = {"message": message}
         if query:
@@ -121,43 +159,94 @@ def get_knowledge_graph_from_message(message: str, query: str = None):
             params=params,
             timeout=30
         )
-        return response.json()
+        result = response.json()
+        
+        # 缓存结果
+        if 'knowledge_graphs' not in st.session_state.cache:
+            st.session_state.cache['knowledge_graphs'] = {}
+        st.session_state.cache['knowledge_graphs'][cache_key] = result
+        
+        return result
     except requests.exceptions.RequestException as e:
         st.error(f"从响应提取知识图谱时出错: {str(e)}")
         return {"nodes": [], "links": []}
 
+@monitor_performance(endpoint="get_source_content")
 def get_source_content(source_id: str) -> Dict:
     """获取源内容"""
+    # 检查缓存
+    cache_key = f"content:{source_id}"
+    if cache_key in st.session_state.cache.get('api_responses', {}):
+        return st.session_state.cache['api_responses'][cache_key]
+    
     try:
         response = requests.post(
             f"{API_URL}/source",
             json={"source_id": source_id},
             timeout=30
         )
-        return response.json()
+        result = response.json()
+        
+        # 缓存结果
+        if 'api_responses' not in st.session_state.cache:
+            st.session_state.cache['api_responses'] = {}
+        st.session_state.cache['api_responses'][cache_key] = result
+        
+        return result
     except requests.exceptions.RequestException as e:
         st.error(f"获取源内容时出错: {str(e)}")
         return None
 
 def get_source_file_info(source_id: str) -> dict:
-    """获取源ID对应的文件信息
+    """获取源ID对应的文件信息"""
+    # 检查缓存
+    if source_id in st.session_state.cache.get('source_info', {}):
+        return st.session_state.cache['source_info'][source_id]
     
-    Args:
-        source_id: 源ID
-        
-    Returns:
-        Dict: 包含文件名等信息的字典
-    """
     try:
         response = requests.post(
             f"{API_URL}/source_info",
             json={"source_id": source_id},
             timeout=10
         )
-        return response.json()
+        result = response.json()
+        
+        # 缓存结果
+        if 'source_info' not in st.session_state.cache:
+            st.session_state.cache['source_info'] = {}
+        st.session_state.cache['source_info'][source_id] = result
+        
+        return result
     except requests.exceptions.RequestException as e:
         st.error(f"获取源文件信息时出错: {str(e)}")
-        return {"file_name": f"源文本 {source_id}"}
+        default_info = {"file_name": f"源文本 {source_id}"}
+        
+        # 缓存默认结果
+        if 'source_info' not in st.session_state.cache:
+            st.session_state.cache['source_info'] = {}
+        st.session_state.cache['source_info'][source_id] = default_info
+        
+        return default_info
+
+def get_source_file_info_batch(source_ids: list) -> dict:
+    """获取多个源ID对应的文件信息
+    
+    Args:
+        source_ids: 源ID列表
+        
+    Returns:
+        Dict: ID到文件信息的映射字典
+    """
+    try:
+        response = requests.post(
+            f"{API_URL}/source_info_batch",
+            json={"source_ids": source_ids},
+            timeout=10
+        )
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"批量获取源文件信息时出错: {str(e)}")
+        return {sid: {"file_name": f"源文本 {sid}"} for sid in source_ids}
 
 def clear_chat():
     """清除聊天历史"""
@@ -188,3 +277,212 @@ def clear_chat():
         
     except Exception as e:
         st.error(f"清除对话时发生错误: {str(e)}")
+
+def clear_cache(cache_type=None):
+    """清除指定类型或所有缓存"""
+    if cache_type and cache_type in st.session_state.cache:
+        st.session_state.cache[cache_type] = {}
+    elif not cache_type:
+        st.session_state.cache = {
+            'source_info': {},
+            'knowledge_graphs': {},
+            'vector_search_results': {},
+            'api_responses': {},
+        }
+
+
+
+class ApiBatchProcessor:
+    """API请求批处理器，合并短时间内的相似请求"""
+    
+    def __init__(self, batch_window=0.5, max_batch_size=10):
+        """
+        初始化批处理器
+        
+        Args:
+            batch_window: 批处理窗口时间(秒)
+            max_batch_size: 最大批量大小
+        """
+        self.batch_window = batch_window
+        self.max_batch_size = max_batch_size
+        self.queues = {}  # 每种请求类型的队列
+        self.locks = {}   # 每种队列的锁
+        self.threads = {} # 处理线程
+        self.running = True
+    
+    def add_request(self, request_type, request_data, callback):
+        """
+        添加请求到队列
+        
+        Args:
+            request_type: 请求类型(例如'source_info', 'kg_data')
+            request_data: 请求数据
+            callback: 回调函数，处理结果返回
+        """
+        # 如果是第一次使用这种请求类型，初始化
+        if request_type not in self.queues:
+            self.queues[request_type] = queue.Queue()
+            self.locks[request_type] = threading.Lock()
+            # 启动处理线程
+            self.threads[request_type] = threading.Thread(
+                target=self._process_queue,
+                args=(request_type,),
+                daemon=True
+            )
+            self.threads[request_type].start()
+        
+        # 添加到队列
+        self.queues[request_type].put((request_data, callback))
+    
+    def _process_queue(self, request_type):
+        """
+        处理特定类型的请求队列
+        
+        Args:
+            request_type: 请求类型
+        """
+        while self.running:
+            batch = []
+            callbacks = []
+            
+            # 尝试在窗口时间内收集请求
+            try:
+                # 获取第一个请求，阻塞等待
+                first_request, first_callback = self.queues[request_type].get(block=True)
+                batch.append(first_request)
+                callbacks.append(first_callback)
+                
+                # 设置批处理结束时间
+                end_time = time.time() + self.batch_window
+                
+                # 收集更多请求直到窗口结束或达到最大批量
+                while time.time() < end_time and len(batch) < self.max_batch_size:
+                    try:
+                        request, callback = self.queues[request_type].get(block=False)
+                        batch.append(request)
+                        callbacks.append(callback)
+                    except queue.Empty:
+                        break
+                
+                # 处理批量请求
+                if len(batch) > 1:
+                    # 执行批量处理
+                    self._execute_batch(request_type, batch, callbacks)
+                else:
+                    # 单个请求，直接处理
+                    self._execute_single(request_type, batch[0], callbacks[0])
+                    
+            except Exception as e:
+                print(f"批处理错误({request_type}): {e}")
+                time.sleep(0.1)  # 避免CPU占用过高
+    
+    def _execute_batch(self, request_type, batch, callbacks):
+        """执行批量请求"""
+        try:
+            if request_type == 'source_info':
+                # 批量获取源信息
+                source_ids = batch
+                results = self._batch_get_source_info(source_ids)
+                
+                # 处理回调
+                for i, callback in enumerate(callbacks):
+                    source_id = source_ids[i]
+                    if source_id in results:
+                        callback(results[source_id])
+                    else:
+                        # 默认结果
+                        callback({"file_name": f"源文本 {source_id}"})
+                        
+            elif request_type == 'content':
+                # 批量获取内容
+                chunk_ids = batch
+                results = self._batch_get_content(chunk_ids)
+                
+                # 处理回调
+                for i, callback in enumerate(callbacks):
+                    chunk_id = chunk_ids[i]
+                    if chunk_id in results:
+                        callback(results[chunk_id])
+                    else:
+                        callback(None)
+                        
+            # 可以添加其他批处理类型...
+            
+        except Exception as e:
+            print(f"执行批量请求错误({request_type}): {e}")
+            # 出错时单独执行每个请求
+            for i, request in enumerate(batch):
+                try:
+                    self._execute_single(request_type, request, callbacks[i])
+                except Exception as single_err:
+                    print(f"单个请求错误({request_type}): {single_err}")
+    
+    def _execute_single(self, request_type, request, callback):
+        """执行单个请求"""
+        try:
+            if request_type == 'source_info':
+                result = get_source_file_info(request)
+                callback(result)
+            elif request_type == 'content':
+                result = get_source_content(request)
+                callback(result)
+            # 可以添加其他请求类型...
+        except Exception as e:
+            print(f"执行单个请求错误({request_type}): {e}")
+            callback(None)
+    
+    def _batch_get_source_info(self, source_ids):
+        """批量获取源信息"""
+        try:
+            response = requests.post(
+                f"{API_URL}/source_info_batch",
+                json={"source_ids": source_ids},
+                timeout=10
+            )
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            print(f"批量获取源信息错误: {e}")
+            return {}
+    
+    def _batch_get_content(self, chunk_ids):
+        """批量获取内容"""
+        try:
+            response = requests.post(
+                f"{API_URL}/content_batch",
+                json={"chunk_ids": chunk_ids},
+                timeout=30
+            )
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            print(f"批量获取内容错误: {e}")
+            return {}
+    
+    def shutdown(self):
+        """关闭批处理器"""
+        self.running = False
+        # 等待所有线程完成
+        for thread in self.threads.values():
+            if thread.is_alive():
+                thread.join(timeout=1.0)
+
+# 初始化批处理器
+def get_batch_processor():
+    if 'api_batch_processor' not in st.session_state:
+        st.session_state.api_batch_processor = ApiBatchProcessor()
+    return st.session_state.api_batch_processor
+
+# 使用批处理器的API函数示例
+def get_source_info_async(source_id, callback):
+    """异步获取源信息，使用批处理器"""
+    processor = get_batch_processor()
+    processor.add_request('source_info', source_id, callback)
+
+def get_content_async(chunk_id, callback):
+    """异步获取内容，使用批处理器"""
+    processor = get_batch_processor()
+    processor.add_request('content', chunk_id, callback)
+
+# 在应用退出时关闭批处理器
+def shutdown_batch_processor():
+    if 'api_batch_processor' in st.session_state:
+        st.session_state.api_batch_processor.shutdown()

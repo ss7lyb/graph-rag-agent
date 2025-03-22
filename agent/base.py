@@ -1,4 +1,4 @@
-from typing import Annotated, Sequence, TypedDict, List, Dict, Any
+from typing import Annotated, Sequence, TypedDict, List, Dict, Any, AsyncGenerator
 from abc import ABC, abstractmethod
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph import END, StateGraph, START
@@ -7,8 +7,9 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.message import add_messages
 import pprint
 import time
+import asyncio
 
-from model.get_models import get_llm_model
+from model.get_models import get_llm_model, get_stream_llm_model, get_embeddings_model
 from CacheManage.manager import (
     CacheManager, 
     ContextAwareCacheKeyStrategy, 
@@ -19,11 +20,20 @@ class BaseAgent(ABC):
     """Agent 基类，定义通用功能和接口"""
     
     def __init__(self, cache_dir="./cache", memory_only=False):
+        """
+        初始化搜索工具
+        
+        参数:
+            cache_dir: 缓存目录，用于存储搜索结果
+        """
+        # 初始化普通 LLM 和流式 LLM
         self.llm = get_llm_model()
+        self.stream_llm = get_stream_llm_model()
+        self.embeddings = get_embeddings_model()
+        
         self.memory = MemorySaver()
         self.execution_log = []
-        
-        # 使用新的缓存框架
+
         self.cache_manager = CacheManager(
             key_strategy=ContextAwareCacheKeyStrategy(),
             storage_backend=HybridCacheBackend(
@@ -81,6 +91,21 @@ class BaseAgent(ABC):
         
         # 编译图
         self.graph = workflow.compile(checkpointer=self.memory)
+    
+    async def _stream_process(self, inputs: Dict[str, Any], config: Dict[str, Any]) -> AsyncGenerator[str, None]:
+        """
+        执行流式处理的默认实现
+        
+        子类应该覆盖此方法以实现特定的流式处理逻辑
+        
+        参数:
+            inputs: 输入消息
+            config: 配置
+            
+        返回:
+            AsyncGenerator[str, None]: 流式响应生成器
+        """
+        yield "当前代理类型不支持流式输出"
     
     @abstractmethod
     def _add_retrieval_edges(self, workflow):
@@ -145,6 +170,28 @@ class BaseAgent(ABC):
     def _generate_node(self, state):
         """生成回答节点逻辑，子类必须实现"""
         pass
+
+    async def _generate_node_stream(self, state):
+        """
+        生成回答节点逻辑的流式版本
+        
+        参数:
+            state: 当前状态
+            
+        返回:
+            AsyncGenerator[str, None]: 流式响应生成器
+        """
+        # 默认实现 - 应由子类覆盖
+        result = self._generate_node(state)
+        if "messages" in result and result["messages"]:
+            message = result["messages"][0]
+            content = message.content if hasattr(message, "content") else str(message)
+            
+            # 模拟流式输出
+            chunk_size = 4  # 每个分块的字符数
+            for i in range(0, len(content), chunk_size):
+                yield content[i:i+chunk_size]
+                await asyncio.sleep(0.01)
     
     def check_fast_cache(self, query: str, thread_id: str = "default") -> str:
         """专用的快速缓存检查方法，用于高性能路径"""
@@ -312,6 +359,91 @@ class BaseAgent(ABC):
             error_time = time.time() - process_start
             print(f"处理查询时出错: {e} ({error_time:.4f}s)")
             return f"抱歉，处理您的问题时遇到了错误。请稍后再试或换一种提问方式。错误详情: {str(e)}"
+    
+    async def ask_stream(self, query: str, thread_id: str = "default", recursion_limit: int = 5) -> AsyncGenerator[str, None]:
+        """
+        向Agent提问，返回流式响应
+        
+        参数:
+            query: 用户问题
+            thread_id: 会话ID
+            recursion_limit: 递归限制
+            
+        返回:
+            AsyncGenerator[str, None]: 流式响应生成器
+        """
+        overall_start = time.time()
+        
+        # 确保查询字符串是干净的
+        safe_query = query.strip()
+        
+        # 首先尝试快速路径 - 跳过验证的高质量缓存
+        fast_cache_start = time.time()
+        fast_result = self.check_fast_cache(safe_query, thread_id)
+        fast_cache_time = time.time() - fast_cache_start
+        
+        if fast_result:
+            print(f"快速路径缓存命中: {safe_query[:30]}... ({fast_cache_time:.4f}s)")
+            # 对于缓存的响应，分块返回以模拟流式输出
+            chunk_size = 4  # 每个分块的字符数
+            for i in range(0, len(fast_result), chunk_size):
+                yield fast_result[i:i+chunk_size]
+                await asyncio.sleep(0.01)  # 小延迟模拟流式输出
+            return
+        
+        # 尝试常规缓存路径
+        cache_start = time.time()
+        cached_response = self.cache_manager.get(safe_query, thread_id=thread_id)
+        cache_time = time.time() - cache_start
+        
+        if cached_response:
+            print(f"常规缓存命中: {safe_query[:30]}... ({cache_time:.4f}s)")
+            # 对于缓存的响应，分块返回以模拟流式输出
+            chunk_size = 4  # 每个分块的字符数
+            for i in range(0, len(cached_response), chunk_size):
+                yield cached_response[i:i+chunk_size]
+                await asyncio.sleep(0.01)
+            return
+        
+        # 未命中缓存，执行标准流程
+        process_start = time.time()
+        
+        config = {
+            "configurable": {
+                "thread_id": thread_id,
+                "recursion_limit": recursion_limit,
+                "stream_mode": True  # 指示流式输出模式
+            }
+        }
+        
+        inputs = {"messages": [HumanMessage(content=query)]}
+        answer = ""
+        
+        try:
+            # 执行流式处理
+            async for chunk in self._stream_process(inputs, config):
+                yield chunk
+                answer += chunk
+            
+            # 缓存完整回答
+            if answer and len(answer) > 10:
+                self.cache_manager.set(safe_query, answer, thread_id=thread_id)
+            
+            process_time = time.time() - process_start
+            print(f"流式处理耗时: {process_time:.4f}s")
+            
+            overall_time = time.time() - overall_start
+            self._log_performance("ask_stream", {
+                "total_duration": overall_time,
+                "cache_check": cache_time,
+                "processing": process_time
+            })
+            
+        except Exception as e:
+            error_time = time.time() - process_start
+            error_msg = f"处理查询时出错: {str(e)} ({error_time:.4f}s)"
+            print(error_msg)
+            yield error_msg
     
     def mark_answer_quality(self, query: str, is_positive: bool, thread_id: str = "default"):
         """标记回答质量，用于缓存质量控制"""

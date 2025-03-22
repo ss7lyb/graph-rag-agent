@@ -25,10 +25,24 @@ def get_llm_model():
     )
     return model
 
+def get_stream_llm_model():
+    model = ChatOpenAI(
+        model=os.getenv('OPENAI_LLM_MODEL'),
+        temperature=os.getenv('TEMPERATURE'),
+        max_tokens=os.getenv('MAX_TOKENS'),
+        api_key=os.getenv('OPENAI_API_KEY'),
+        base_url=os.getenv('OPENAI_BASE_URL'),
+        streaming=True,
+    )
+    return model
+
 if __name__ == '__main__':
     # 测试llm
     llm = get_llm_model()
     print(llm.invoke("你好"))
+
+    llm_stream = get_stream_llm_model()
+    print(llm_stream.invoke("你好"))
 
     # 测试embedding
     test_text = "你好，这是一个测试。"

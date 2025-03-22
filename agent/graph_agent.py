@@ -1,8 +1,10 @@
 from typing import List, Dict
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import END
+from langgraph.prebuilt import tools_condition
+import asyncio
 
 import json
 import re
@@ -235,3 +237,153 @@ class GraphAgent(BaseAgent):
                            response)
         
         return {"messages": [AIMessage(content=response)]}
+    
+    async def _generate_node_stream(self, state):
+        """生成回答节点逻辑的流式版本"""
+        messages = state["messages"]
+        question = messages[-3].content
+        docs = messages[-1].content
+
+        # 检查缓存
+        thread_id = state.get("configurable", {}).get("thread_id", "default")
+        cached_result = self.cache_manager.get(f"generate:{question}", thread_id=thread_id)
+        if cached_result:
+            yield cached_result
+            return
+
+        prompt = ChatPromptTemplate.from_messages([
+        ("system", LC_SYSTEM_PROMPT),
+        ("human", """
+            ---分析报告--- 
+            请注意，下面提供的分析报告按**重要性降序排列**。
+            
+            {context}
+            
+            用户的问题是：
+            {question}
+            
+            请严格按照以下格式输出回答：
+            1. 使用三级标题(###)标记主题
+            2. 主要内容用清晰的段落展示
+            3. 最后必须用"#### 引用数据"标记引用部分，列出用到的数据来源
+            """),
+        ])
+
+        # 使用流式模型
+        rag_chain = prompt | self.stream_llm
+        
+        # 处理流式响应
+        result = ""
+        async for chunk in rag_chain.astream({
+            "context": docs, 
+            "question": question, 
+            "response_type": response_type
+        }):
+            # 从 chunk 中提取内容
+            if hasattr(chunk, "content"):
+                token = chunk.content
+            else:
+                token = str(chunk)
+                
+            # 返回 token 给调用者
+            yield token
+            
+            # 添加到完整结果
+            result += token
+        
+        # 缓存完整结果
+        if result and len(result) > 10:
+            self.cache_manager.set(f"generate:{question}", result, thread_id=thread_id)
+    
+    async def _stream_process(self, inputs, config):
+        """实现流式处理过程"""
+        # 获取会话信息
+        thread_id = config.get("configurable", {}).get("thread_id", "default")
+        query = inputs["messages"][-1].content
+        
+        # 检查缓存先
+        cached_response = self.cache_manager.get(query.strip(), thread_id=thread_id)
+        if cached_response:
+            # 对于缓存的响应，分块返回
+            chunk_size = 4
+            for i in range(0, len(cached_response), chunk_size):
+                yield cached_response[i:i+chunk_size]
+                await asyncio.sleep(0.01)
+            return
+        
+        # 处理工作流
+        workflow_state = {"messages": [HumanMessage(content=query)]}
+        
+        # 执行 agent 节点
+        agent_output = self._agent_node(workflow_state)
+        workflow_state = {"messages": workflow_state["messages"] + agent_output["messages"]}
+        
+        # 检查是否需要使用工具
+        tool_decision = tools_condition(workflow_state)
+        if tool_decision == "tools":
+            # 执行检索节点
+            retrieve_output = await self._retrieve_node_async(workflow_state)
+            workflow_state = {"messages": workflow_state["messages"] + retrieve_output["messages"]}
+            
+            # 流式生成节点输出
+            async for token in self._generate_node_stream(workflow_state):
+                yield token
+        else:
+            # 不需要工具，直接返回代理的响应
+            final_msg = workflow_state["messages"][-1]
+            content = final_msg.content if hasattr(final_msg, "content") else str(final_msg)
+            
+            # 分块返回
+            chunk_size = 4
+            for i in range(0, len(content), chunk_size):
+                yield content[i:i+chunk_size]
+                await asyncio.sleep(0.01)
+    
+    # 异步检索节点辅助方法
+    async def _retrieve_node_async(self, state):
+        """检索节点的异步版本，用于流式处理"""
+        try:
+            # 获取工具调用信息
+            tool_calls = state["messages"][-1].additional_kwargs.get("tool_calls", [])
+            if not tool_calls:
+                # 尝试其他方式获取查询
+                if hasattr(state["messages"][-1], "tool_calls") and state["messages"][-1].tool_calls:
+                    tool_calls = state["messages"][-1].tool_calls
+                    
+            # 如果找到工具调用
+            if tool_calls and len(tool_calls) > 0:
+                # 获取第一个工具调用的信息
+                tool_call = tool_calls[0]
+                query = tool_call.get("args", {}).get("query", "")
+                tool_call_id = tool_call.get("id", "tool_call_0")  # 提供默认ID
+                
+                # 执行搜索
+                tool_result = self.local_tool.search(query)
+                
+                # 创建带有完整属性的工具消息
+                return {
+                    "messages": [
+                        ToolMessage(
+                            content=tool_result,
+                            tool_call_id=tool_call_id,
+                            name=tool_call.get("name", "search_tool")
+                        )
+                    ]
+                }
+            else:
+                # 无法找到工具调用信息，返回错误
+                return {
+                    "messages": [
+                        AIMessage(content="无法获取查询信息，请重试。")
+                    ]
+                }
+        except Exception as e:
+            # 处理错误
+            error_msg = f"处理工具调用时出错: {str(e)}"
+            print(error_msg)
+            return {
+                "messages": [
+                    AIMessage(content=error_msg)
+                ]
+            }
+        

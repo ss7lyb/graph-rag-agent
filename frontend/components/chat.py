@@ -1,7 +1,7 @@
 import streamlit as st
 import uuid
 import re
-from utils.api import send_message, send_feedback, get_source_content, get_knowledge_graph_from_message, get_source_file_info_batch, clear_chat
+from utils.api import send_message, send_feedback, get_source_content, get_knowledge_graph_from_message, get_source_file_info_batch, clear_chat, send_message_stream
 from utils.helpers import extract_source_ids
 
 def reset_processing_lock():
@@ -315,133 +315,75 @@ def display_chat_interface():
             
             with st.chat_message("assistant"):
                 try:
-                    with st.spinner("思考中..."):
-                        response = send_message(prompt)
+                    # 初始化流式响应的占位符
+                    message_placeholder = st.empty()
+                    full_response = ""
+                    thinking_content = ""
                     
-                    if response:
-                        answer_content = response["answer"]
-                        
-                        # 保存迭代信息和原始思考过程到会话状态
-                        if "iterations" in response:
-                            st.session_state.iterations = response["iterations"]
-                        if "raw_thinking" in response:
-                            st.session_state.raw_thinking = response["raw_thinking"]
-                        
-                        # 保存执行日志
-                        if response.get("execution_log"):
-                            st.session_state.execution_log = response["execution_log"]
-                        
-                        # 保存原始执行日志
-                        if response.get("execution_logs"):
-                            st.session_state.execution_logs = response["execution_logs"]
-                        
-                        # 创建消息对象
-                        message_obj = {
-                            "role": "assistant",
-                            "content": answer_content,
-                            "message_id": str(uuid.uuid4())
-                        }
-                        
-                        # 处理deep_research_agent的思考过程
-                        if st.session_state.agent_type == "deep_research_agent":
-                            # 判断是否需要显示思考过程
-                            show_thinking = st.session_state.get("show_thinking", False)
-                            
-                            # 优先使用raw_thinking
-                            if "raw_thinking" in response:
-                                raw_thinking = response["raw_thinking"]
-                                message_obj["raw_thinking"] = raw_thinking
-                                message_obj["processed_content"] = answer_content
-                                
-                                # 如果设置了显示思考过程
-                                if show_thinking:
-                                    # 直接显示思考过程，使用引用格式
-                                    thinking_lines = raw_thinking.split('\n')
-                                    quoted_thinking = '\n'.join([f"> {line}" for line in thinking_lines])
-                                    st.markdown(quoted_thinking)
-                                    
-                                    # 添加两行空行间隔
-                                    st.markdown("\n\n")
-                                    
-                                    # 显示最终答案
-                                    st.markdown(answer_content)
-                                else:
-                                    # 不显示思考过程，直接显示答案
-                                    st.markdown(answer_content)
-                            # 检查answer中是否有<think>标签
-                            elif "<think>" in answer_content and "</think>" in answer_content:
-                                # 提取<think>标签中的内容
-                                thinking_match = re.search(r'<think>(.*?)</think>', answer_content, re.DOTALL)
-                                
-                                if thinking_match:
-                                    thinking_process = thinking_match.group(1)
-                                    # 移除思考过程，保留答案
-                                    processed_content = answer_content.replace(f"<think>{thinking_process}</think>", "").strip()
-                                    
-                                    # 保存处理后的内容和思考过程
-                                    message_obj["raw_thinking"] = thinking_process
-                                    message_obj["processed_content"] = processed_content
-                                    
-                                    # 如果设置了显示思考过程
-                                    if show_thinking:
-                                        # 格式化思考过程，使用引用格式
-                                        thinking_lines = thinking_process.split('\n')
-                                        quoted_thinking = '\n'.join([f"> {line}" for line in thinking_lines])
-                                        
-                                        # 显示思考过程
-                                        st.markdown(quoted_thinking)
-                                        
-                                        # 添加两行空行间隔
-                                        st.markdown("\n\n")
-                                        
-                                        # 显示答案
-                                        st.markdown(processed_content)
-                                    else:
-                                        # 不显示思考过程，直接显示答案
-                                        st.markdown(processed_content)
-                                else:
-                                    # 如果提取失败，显示完整内容但移除可能的<think>标签
-                                    cleaned_content = re.sub(r'<think>|</think>', '', answer_content)
-                                    st.markdown(cleaned_content)
-                            else:
-                                # 普通回答，无思考过程
-                                st.markdown(answer_content)
+                    # 定义令牌处理器
+                    def handle_token(token, is_thinking=False):
+                        nonlocal full_response, thinking_content
+                        if is_thinking:
+                            # 添加到思考内容
+                            thinking_content += token
+                            # 将思考内容格式化为引用文本
+                            thinking_lines = thinking_content.split('\n')
+                            quoted_thinking = '\n'.join([f"> {line}" for line in thinking_lines])
+                            # 在占位符中显示
+                            message_placeholder.markdown(quoted_thinking)
                         else:
-                            # 普通回答
-                            st.markdown(answer_content)
+                            # 添加到完整响应
+                            full_response += token
+                            # 在占位符中显示，添加光标模拟打字效果
+                            message_placeholder.markdown(full_response + "▌")
+                    
+                    # 使用流式 API
+                    with st.spinner("思考中..."):
+                        raw_thinking = send_message_stream(prompt, handle_token)
+                    
+                    # 最后一次更新，移除光标
+                    message_placeholder.markdown(full_response)
+                    
+                    # 创建消息对象
+                    message_obj = {
+                        "role": "assistant",
+                        "content": full_response,
+                        "message_id": str(uuid.uuid4())
+                    }
+                    
+                    # 如果有思考内容，添加到消息中
+                    if thinking_content:
+                        message_obj["raw_thinking"] = thinking_content
+                        message_obj["processed_content"] = full_response
+                    
+                    # 添加到会话状态
+                    st.session_state.messages.append(message_obj)
                         
-                        # 保存引用数据
-                        if "reference" in response:
-                            message_obj["reference"] = response["reference"]
+                    # 从回答中提取知识图谱数据，deep_research_agent禁用此功能
+                    if st.session_state.debug_mode and st.session_state.agent_type != "deep_research_agent":
+                        with st.spinner("提取知识图谱数据..."):
+                            # 获取当前新消息的索引，即最后一条消息
+                            current_msg_index = len(st.session_state.messages) - 1
                             
-                        # 添加消息对象到会话
-                        st.session_state.messages.append(message_obj)
-                        
-                        # 从回答中提取知识图谱数据，deep_research_agent禁用此功能
-                        if st.session_state.debug_mode and st.session_state.agent_type != "deep_research_agent":
-                            with st.spinner("提取知识图谱数据..."):
-                                # 获取当前新消息的索引，即最后一条消息
-                                current_msg_index = len(st.session_state.messages) - 1
+                            # 优先使用后端返回的kg_data
+                            kg_data = response.get("kg_data")
+                            
+                            # 如果后端没有返回kg_data，尝试从回答中提取，并传递用户查询
+                            if not kg_data or len(kg_data.get("nodes", [])) == 0:
+                                kg_data = get_knowledge_graph_from_message(response["answer"], prompt)
+                            
+                            if kg_data and len(kg_data.get("nodes", [])) > 0:
+                                # 更新该消息的kg_data
+                                st.session_state.messages[current_msg_index]["kg_data"] = kg_data
                                 
-                                # 优先使用后端返回的kg_data
-                                kg_data = response.get("kg_data")
+                                # 更新当前处理的图谱消息索引为最新消息的索引
+                                st.session_state.current_kg_message = current_msg_index
                                 
-                                # 如果后端没有返回kg_data，尝试从回答中提取，并传递用户查询
-                                if not kg_data or len(kg_data.get("nodes", [])) == 0:
-                                    kg_data = get_knowledge_graph_from_message(response["answer"], prompt)
-                                
-                                if kg_data and len(kg_data.get("nodes", [])) > 0:
-                                    # 更新该消息的kg_data
-                                    st.session_state.messages[current_msg_index]["kg_data"] = kg_data
-                                    
-                                    # 更新当前处理的图谱消息索引为最新消息的索引
-                                    st.session_state.current_kg_message = current_msg_index
-                                    
-                                    # 自动切换到知识图谱标签
-                                    st.session_state.current_tab = "知识图谱"
-                                    st.rerun()
-                                else:
-                                    st.error("无法提取知识图谱数据")
+                                # 自动切换到知识图谱标签
+                                st.session_state.current_tab = "知识图谱"
+                                st.rerun()
+                            else:
+                                st.error("无法提取知识图谱数据")
                 except Exception as e:
                     st.error(f"处理消息时出错: {str(e)}")
                 finally:

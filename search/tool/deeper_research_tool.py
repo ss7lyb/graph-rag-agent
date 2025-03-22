@@ -1,4 +1,4 @@
-from typing import Dict,Any, List
+from typing import Dict,Any, List, AsyncGenerator
 import json
 import time
 import traceback
@@ -531,8 +531,8 @@ class DeeperResearchTool:
         """获取搜索工具"""
         from langchain_core.tools import BaseTool
         
-        class EnhancedDeepResearchRetrievalTool(BaseTool):
-            name : str = "enhanced_deep_research"
+        class DeeperResearchRetrievalTool(BaseTool):
+            name : str = "deeper_research"
             description : str = "增强版深度研究工具：通过社区感知和知识图谱分析，结合多轮推理和搜索解决复杂问题。"
             
             def _run(self_tool, query: Any) -> str:
@@ -541,4 +541,197 @@ class DeeperResearchTool:
             def _arun(self_tool, query: Any) -> str:
                 raise NotImplementedError("异步执行未实现")
         
-        return EnhancedDeepResearchRetrievalTool()
+        return DeeperResearchRetrievalTool()
+    
+    async def thinking_stream(self, query: str) -> AsyncGenerator[str, None]:
+        """
+        执行带流式输出的增强深度研究
+        
+        Args:
+            query: 用户问题
+                    
+        Yields:
+            思考步骤和最终答案
+        """
+        # 清空执行日志
+        self.execution_logs = []
+        self._log(f"[深度研究] 开始处理查询: {query}")
+        
+        # 提取关键词
+        keywords = self.deep_research.extract_keywords(query)
+        self._log(f"[深度研究] 提取关键词: {keywords}")
+        
+        # 开始新的查询跟踪
+        query_id = self.evidence_tracker.start_new_query(query, keywords)
+        
+        # 步骤1: 社区感知增强
+        community_msg = f"[深度研究] 开始社区感知分析"
+        self._log(community_msg)
+        yield community_msg
+        
+        community_context = self.community_search.enhance_search(query, keywords)
+        
+        # 步骤2: 使用社区信息增强搜索策略
+        search_strategy = community_context.get("search_strategy", {})
+        follow_up_queries = search_strategy.get("follow_up_queries", [])
+        
+        if follow_up_queries:
+            query_msg = f"[深度研究] 社区分析生成的后续查询: {follow_up_queries}"
+            self._log(query_msg)
+            yield query_msg
+        
+        # 添加增强搜索策略的推理步骤
+        strategy_step_id = self.evidence_tracker.add_reasoning_step(
+            query_id, 
+            "knowledge_community_analysis", 
+            f"基于社区分析，识别了关键实体和相关查询策略。将探索以下后续查询: {follow_up_queries}"
+        )
+        
+        # 记录社区信息作为证据
+        community_summaries = community_context.get("community_info", {}).get("summaries", [])
+        if community_summaries:
+            comm_msg = f"[深度研究] 找到 {len(community_summaries)} 个相关社区"
+            self._log(comm_msg)
+            yield comm_msg
+            
+            for i, summary in enumerate(community_summaries):
+                summary_msg = f"[深度研究] 社区 {i+1} 摘要: {summary[:100]}..."
+                self._log(summary_msg)
+                yield summary_msg
+                
+                self.evidence_tracker.add_evidence(
+                    strategy_step_id,
+                    f"community_summary_{i}",
+                    summary,
+                    "community_knowledge"
+                )
+        
+        # 步骤3: 构建初始知识图谱
+        initial_entities = search_strategy.get("focus_entities", [])
+        if initial_entities:
+            kg_msg = f"[深度研究] 构建知识图谱，关注实体: {initial_entities}"
+            self._log(kg_msg)
+            yield kg_msg
+            
+            self.knowledge_builder.build_query_graph(query, initial_entities, depth=1)
+            
+            # 获取核心实体
+            central_entities = self.knowledge_builder.get_central_entities(limit=5)
+            central_entity_ids = [e["id"] for e in central_entities]
+            
+            # 添加知识图谱分析步骤
+            kg_step_id = self.evidence_tracker.add_reasoning_step(
+                query_id,
+                "knowledge_graph_analysis",
+                f"构建了初始知识图谱，识别出核心实体: {central_entity_ids}"
+            )
+            
+            # 记录知识图谱信息作为证据
+            kg_info = {
+                "entity_count": self.knowledge_builder.knowledge_graph.number_of_nodes(),
+                "relation_count": self.knowledge_builder.knowledge_graph.number_of_edges(),
+                "central_entities": central_entity_ids
+            }
+            kg_stats_msg = f"[深度研究] 知识图谱统计: {kg_info['entity_count']} 个实体, {kg_info['relation_count']} 个关系"
+            self._log(kg_stats_msg)
+            yield kg_stats_msg
+            
+            self.evidence_tracker.add_evidence(
+                kg_step_id,
+                "knowledge_graph",
+                json.dumps(kg_info),
+                "graph_structure"
+            )
+        
+        # 步骤4: 使用深度研究工具的流式思考过程
+        deep_msg = f"[深度研究] 初始化思考引擎"
+        self._log(deep_msg)
+        yield deep_msg
+        
+        # 调用deep_research工具的流式API
+        async for chunk in self.deep_research.thinking_stream(query):
+            if isinstance(chunk, dict) and "answer" in chunk:
+                # 这是最终答案
+                final_answer = chunk["answer"]
+                thinking_process = chunk["thinking"]
+                break
+            else:
+                # 其他思考过程
+                yield chunk
+        
+        # 获取知识图谱中的核心实体
+        central_entities = []
+        if hasattr(self.knowledge_builder, 'knowledge_graph') and self.knowledge_builder.knowledge_graph.nodes:
+            central_entities = self.knowledge_builder.get_central_entities(limit=5)
+        
+        # 记录最终回答步骤
+        final_step_id = self.evidence_tracker.add_reasoning_step(
+            query_id,
+            "final_answer",
+            "生成最终答案"
+        )
+        
+        yield {"answer": final_answer, "thinking": thinking_process}
+    
+    async def search_stream(self, query_input: Any) -> AsyncGenerator[str, None]:
+        """
+        执行带流式输出的增强深度研究
+        
+        Args:
+            query_input: 查询或包含查询的字典
+                
+        Yields:
+            流式内容
+        """
+        overall_start = time.time()
+        
+        # 记录开始搜索
+        self._log(f"[深度搜索] 开始处理查询...")
+        
+        # 解析输入
+        if isinstance(query_input, dict) and "query" in query_input:
+            query = query_input["query"]
+        else:
+            query = str(query_input)
+        
+        self._log(f"[深度搜索] 解析后的查询: {query}")
+        
+        try:
+            # 执行思考过程流
+            full_response = ""
+            thinking_content = ""
+            
+            async for chunk in self.thinking_stream(query):
+                if isinstance(chunk, dict) and "answer" in chunk:
+                    # 这是最终结果对象
+                    full_response = chunk["answer"]
+                    thinking_content = chunk["thinking"]
+                else:
+                    # 正常返回流式块
+                    yield chunk
+            
+            # 记录总时间
+            total_time = time.time() - overall_start
+            self._log(f"[深度搜索] 完成，耗时 {total_time:.2f}秒")
+            self.performance_metrics["total_time"] = total_time
+                
+        except Exception as e:
+            error_msg = f"深度研究过程中出错: {str(e)}"
+            self._log(error_msg)
+            yield error_msg
+    
+    def get_stream_tool(self):
+        """获取搜索工具"""
+        from langchain_core.tools import BaseTool
+        
+        class DeeperResearchStreamTool(BaseTool):
+            name : str = "deeper_research_stream"
+            description : str = "增强版流式深度研究工具：通过社区感知和知识图谱分析，结合多轮推理和搜索解决复杂问题，支持流式输出。"
+            
+            def _run(self_tool, query: Any) -> AsyncGenerator:
+                return self.search_stream(query)
+            
+            async def _arun(self_tool, query: Any) -> AsyncGenerator:
+                return await self.search_stream(query)
+        
+        return DeeperResearchStreamTool()

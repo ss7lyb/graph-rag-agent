@@ -1,11 +1,12 @@
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, AsyncGenerator
 import time
 import re
 import logging
 import json
 import traceback
 from langchain_core.tools import BaseTool
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import SystemMessage, HumanMessage
+import asyncio
 
 from search.tool.base import BaseSearchTool
 from search.tool.hybrid_tool import HybridSearchTool
@@ -653,6 +654,300 @@ class DeepResearchTool(BaseSearchTool):
                 raise NotImplementedError("异步执行未实现")
         
         return DeepThinkingTool()
+    
+    async def thinking_stream(self, query: str) -> AsyncGenerator[str, None]:
+        """
+        执行深度研究推理过程，流式返回
+        
+        参数:
+            query: 用户问题
+                    
+        返回:
+            AsyncGenerator: 流式生成的思考和答案内容
+        """
+        # 清空执行日志
+        self.execution_logs = []
+        self._log(f"[深度研究] 开始处理查询: {query}")
+        
+        # 初始化结果容器
+        chunk_info = {"chunks": [], "doc_aggs": []}
+        self.all_retrieved_info = []
+        
+        # 初始化思考引擎
+        self.thinking_engine.initialize_with_query(query)
+
+        think = ""
+        
+        # 迭代思考过程
+        for iteration in range(self.max_iterations):
+            self._log(f"[深度研究] 开始第{iteration + 1}轮迭代")
+            
+            # 检查是否达到最大迭代次数
+            if iteration >= self.max_iterations - 1:
+                summary_think = f"\n搜索次数已达上限。不允许继续搜索。\n"
+                self.thinking_engine.add_reasoning_step(summary_think)
+                self.thinking_engine.add_human_message(summary_think)
+                think += self.thinking_engine.remove_result_tags(summary_think)
+                yield summary_think
+                break
+
+            # 更新消息历史，请求继续推理
+            self.thinking_engine.update_continue_message()
+            
+            # 生成下一个查询
+            result = self.thinking_engine.generate_next_query()
+            
+            # 处理生成结果
+            if result["status"] == "empty":
+                empty_msg = "[深度研究] 生成的思考内容为空"
+                self._log(empty_msg)
+                yield empty_msg
+                continue
+            elif result["status"] == "error":
+                error_msg = f"[深度研究] 生成查询出错: {result.get('error', '未知错误')}"
+                self._log(error_msg)
+                yield error_msg
+                break
+            elif result["status"] == "answer_ready":
+                ready_msg = "[深度研究] AI认为已有足够信息生成答案"
+                self._log(ready_msg)
+                yield ready_msg
+                break
+                
+            # 获取生成的思考内容
+            query_think = result["content"]
+            think_part = self.thinking_engine.remove_query_tags(query_think)
+            think += think_part
+            
+            # 返回思考部分
+            yield think_part
+            
+            # 获取搜索查询
+            queries = result["queries"]
+            
+            # 如果没有生成搜索查询但不是第一轮，考虑结束
+            if not queries and iteration > 0:
+                if not self.all_retrieved_info:
+                    # 如果还没有检索到任何信息，强制使用原始查询
+                    queries = [query]
+                    no_info_msg = "[深度研究] 没有检索到信息，使用原始查询"
+                    self._log(no_info_msg)
+                    yield no_info_msg
+                else:
+                    # 已有信息，结束迭代
+                    end_msg = "[深度研究] 没有生成新查询且已有信息，结束迭代"
+                    self._log(end_msg)
+                    yield end_msg
+                    break
+            
+            # 处理每个搜索查询
+            for search_query in queries:
+                query_msg = f"[深度研究] 执行查询: {search_query}"
+                self._log(query_msg)
+                yield query_msg
+                
+                # 检查是否已执行过相同查询
+                if self.thinking_engine.has_executed_query(search_query):
+                    dupe_msg = f"\n已搜索过该查询 '{search_query}'。请参考前面的结果。\n"
+                    self.thinking_engine.add_reasoning_step(dupe_msg)
+                    self.thinking_engine.add_human_message(dupe_msg)
+                    think += self.thinking_engine.remove_result_tags(dupe_msg)
+                    yield dupe_msg
+                    continue
+                
+                # 记录已执行查询
+                self.thinking_engine.add_executed_query(search_query)
+                
+                # 将搜索查询添加到消息历史
+                self.thinking_engine.add_ai_message(f"{search_query}")
+                think += f"\n\n> {iteration + 1}. {search_query}\n\n"
+                
+                # 执行实际搜索
+                search_msg = f"[KB检索] 开始搜索: {search_query}"
+                self._log(search_msg)
+                yield search_msg
+                
+                kbinfos = self.dual_searcher.search(search_query)
+                
+                # 检查搜索结果是否为空
+                has_results = (
+                    kbinfos.get("chunks", []) or 
+                    kbinfos.get("entities", []) or 
+                    kbinfos.get("relationships", [])
+                )
+                
+                if not has_results:
+                    no_result_msg = f"\n没有找到与'{search_query}'相关的信息。请尝试使用不同的关键词进行搜索。\n"
+                    self.thinking_engine.add_reasoning_step(no_result_msg)
+                    self.thinking_engine.add_human_message(no_result_msg)
+                    think += self.thinking_engine.remove_result_tags(no_result_msg)
+                    yield no_result_msg
+                    continue
+                
+                # 正常处理有结果的情况
+                truncated_prev_reasoning = self.thinking_engine.prepare_truncated_reasoning()
+                
+                # 合并块信息
+                chunk_info = self.dual_searcher._merge_results(chunk_info, kbinfos)
+                
+                # 构建提取相关信息的提示
+                kb_prompt_result = "\n".join(kb_prompt(kbinfos, 4096))
+                extract_prompt = RELEVANT_EXTRACTION_PROMPT.format(
+                    prev_reasoning=truncated_prev_reasoning,
+                    search_query=search_query,
+                    document=kb_prompt_result
+                )
+                
+                # 使用LLM提取有用信息 - 流式LLM更佳但此处保持原实现
+                extraction_msg = self.llm.invoke([
+                    {"role": "system", "content": extract_prompt},
+                    {"role": "user", "content": f'基于当前的搜索查询"{search_query}"和前面的推理步骤，分析每个知识来源并找出有用信息。'}
+                ])
+                
+                summary_think = extraction_msg.content if hasattr(extraction_msg, 'content') else str(extraction_msg)
+                
+                # 保存重要信息
+                has_useful_info = (
+                    "**Final Information**" in summary_think and 
+                    "No helpful information found" not in summary_think
+                )
+                
+                if has_useful_info:
+                    useful_info = summary_think.split("**Final Information**")[1].strip()
+                    self.all_retrieved_info.append(useful_info)
+                    useful_msg = f"[深度研究] 发现有用信息: {useful_info}"
+                    self._log(useful_msg)
+                    yield useful_msg
+                else:
+                    no_useful_msg = "[深度研究] 未发现有用信息"
+                    self._log(no_useful_msg)
+                    yield no_useful_msg
+                
+                # 更新推理历史
+                self.thinking_engine.add_reasoning_step(summary_think)
+                self.thinking_engine.add_human_message(summary_think)
+                think += self.thinking_engine.remove_result_tags(summary_think)
+                
+                # 返回处理后的思考内容
+                yield self.thinking_engine.remove_result_tags(summary_think)
+        
+        # 生成最终答案
+        # 确保至少执行了一次搜索
+        if not self.thinking_engine.executed_search_queries:
+            no_search_msg = f"抱歉，我无法回答关于'{query}'的问题，因为没有找到相关信息。"
+            yield no_search_msg
+            return
+        
+        # 使用检索到的信息生成答案
+        retrieved_content = "\n\n".join(self.all_retrieved_info)
+        final_answer_msg = "[深度研究] 生成最终答案"
+        self._log(final_answer_msg)
+        yield final_answer_msg
+        
+        final_answer = self._generate_final_answer(query, retrieved_content, think)
+        final_answer_with_thinking = f"<think>{think}</think>\n\n{final_answer}"
+        
+        # 最终答案单独返回
+        yield {"answer": final_answer_with_thinking, "thinking": think}
+    
+    async def search_stream(self, query_input: Any) -> AsyncGenerator[str, None]:
+        """
+        执行深度研究搜索，流式返回
+        
+        参数:
+            query_input: 搜索查询或包含查询的字典
+                
+        返回:
+            AsyncGenerator: 流式输出
+        """
+        overall_start = time.time()
+        
+        # 记录开始搜索
+        self._log(f"[深度搜索] 开始处理查询...")
+        
+        # 解析输入
+        if isinstance(query_input, dict) and "query" in query_input:
+            query = query_input["query"]
+        else:
+            query = str(query_input)
+        
+        self._log(f"[深度搜索] 解析后的查询: {query}")
+        
+        # 检查缓存
+        cache_key = f"deep:{query}"
+        cached_result = self.cache_manager.get(cache_key)
+        if cached_result:
+            self._log(f"[深度搜索] 缓存命中，分块返回缓存结果")
+            # 分块返回缓存结果
+            chunk_size = 4
+            for i in range(0, len(cached_result), chunk_size):
+                yield cached_result[i:i+chunk_size]
+                await asyncio.sleep(0.01)
+            return
+        
+        try:
+            # 执行思考过程流
+            full_response = ""
+            thinking_content = ""
+            last_chunk = None
+            
+            async for chunk in self.thinking_stream(query):
+                if isinstance(chunk, dict) and "answer" in chunk:
+                    # 这是最终结果对象
+                    full_response = chunk["answer"]
+                    thinking_content = chunk["thinking"]
+                    last_chunk = chunk
+                else:
+                    # 正常返回流式块
+                    yield chunk
+            
+            # 如果有最终答案，返回它
+            if full_response:
+                # 验证答案质量
+                validation_results = self.validator.validate(query, full_response)
+                if validation_results["passed"]:
+                    self._log(f"[深度搜索] 答案验证通过，缓存结果")
+                    self.cache_manager.set(cache_key, full_response)
+                else:
+                    self._log(f"[深度搜索] 答案验证失败，不缓存")
+            
+            # 记录总时间
+            total_time = time.time() - overall_start
+            self._log(f"[深度搜索] 完成，耗时 {total_time:.2f}秒")
+            self.performance_metrics["total_time"] = total_time
+                
+        except Exception as e:
+            error_msg = f"深度研究过程中出错: {str(e)}"
+            self._log(error_msg)
+            yield error_msg
+    
+    def get_thinking_stream_tool(self) -> BaseTool:
+        """获取流式思考过程工具"""
+        class DeepStreamThinkingTool(BaseTool):
+            name : str = "deep_thinking_stream"
+            description : str = "流式深度思考工具：显示完整思考过程的深度研究，适用于需要查看推理步骤的情况。"
+            
+            def _run(self_tool, query: Any) -> AsyncGenerator:
+                # 解析输入
+                if isinstance(query, dict) and "query" in query:
+                    tk_query = query["query"]
+                else:
+                    tk_query = str(query)
+                
+                # 返回流式生成器
+                return self.thinking_stream(tk_query)
+            
+            async def _arun(self_tool, query: Any) -> AsyncGenerator:
+                # 解析输入
+                if isinstance(query, dict) and "query" in query:
+                    tk_query = query["query"]
+                else:
+                    tk_query = str(query)
+                
+                # 返回流式生成器
+                return await self.thinking_stream(tk_query)
+        
+        return DeepStreamThinkingTool()
     
     def close(self):
         """关闭资源"""

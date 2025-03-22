@@ -2,10 +2,11 @@ import time
 import uuid
 import requests
 import queue
+import json
 import threading
 import time
 import streamlit as st
-from typing import Dict
+from typing import Dict, Callable
 from frontend_config.settings import API_URL
 from utils.performance import monitor_performance
 
@@ -55,6 +56,82 @@ def send_message(message: str) -> Dict:
         print(f"前端API调用错误: {str(e)} ({duration:.4f}s)")
         
         st.error(f"服务器连接错误: {str(e)}")
+        return None
+
+def send_message_stream(message: str, on_token: Callable[[str], None]) -> str:
+    """
+    向 FastAPI 后端发送聊天消息，获取流式响应
+    
+    Args:
+        message: 要发送的消息
+        on_token: 处理令牌的回调函数
+        
+    Returns:
+        str: 收集的思考内容（如果有）
+    """
+    try:
+        # 构建请求参数
+        params = {
+            "message": message,
+            "session_id": st.session_state.session_id,
+            "debug": st.session_state.debug_mode,
+            "agent_type": st.session_state.agent_type
+        }
+        
+        # 如果是深度研究代理，添加特定参数
+        if st.session_state.agent_type == "deep_research_agent":
+            params["use_deeper_tool"] = st.session_state.get("use_deeper_tool", True)
+            params["show_thinking"] = st.session_state.get("show_thinking", False)
+        
+        # 设置 SSE 连接
+        import sseclient
+        import requests
+        
+        # 非阻塞模式发起请求
+        response = requests.post(
+            f"{API_URL}/chat/stream",
+            json=params,
+            stream=True,
+            headers={"Accept": "text/event-stream"}
+        )
+        
+        # 设置 SSE 客户端
+        client = sseclient.SSEClient(response)
+        
+        # 处理每个事件
+        thinking_content = ""
+        for event in client.events():
+            try:
+                data = json.loads(event.data)
+                
+                # 处理不同事件类型
+                if data.get("status") == "token":
+                    # 模型输出的令牌
+                    on_token(data.get("content", ""))
+                elif data.get("status") == "thinking":
+                    # 思考过程块
+                    chunk = data.get("content", "")
+                    thinking_content += chunk
+                    on_token(chunk, is_thinking=True)
+                elif data.get("status") == "done":
+                    # 完成通知
+                    break
+                elif data.get("status") == "error":
+                    # 错误通知
+                    on_token(f"\n\n错误: {data.get('message', '未知错误')}")
+                    break
+                else:
+                    # 其他状态类型处理
+                    pass
+            except json.JSONDecodeError:
+                # 处理格式不正确的 JSON
+                continue
+        
+        # 返回收集的思考内容用于存储
+        return thinking_content
+    except Exception as e:
+        # 处理连接错误
+        on_token(f"\n\n连接错误: {str(e)}")
         return None
 
 @monitor_performance(endpoint="send_feedback")

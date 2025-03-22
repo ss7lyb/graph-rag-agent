@@ -1,8 +1,10 @@
 import time
 import re
 import traceback
-from typing import Dict, List
+from typing import Dict, List, AsyncGenerator
 from fastapi import HTTPException
+import json
+import asyncio
 
 from services.agent_service import agent_manager
 from services.kg_service import extract_kg_from_message
@@ -190,6 +192,124 @@ async def process_chat(message: str, session_id: str, debug: bool = False, agent
         print(f"处理聊天请求时出错: {str(e)}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # 释放锁
+        chat_manager.release_lock(lock_key)
+        
+        # 清理过期的锁
+        chat_manager.cleanup_expired_locks()
+
+async def process_chat_stream(
+    message: str, 
+    session_id: str, 
+    debug: bool = False, 
+    agent_type: str = "graph_agent",
+    use_deeper_tool: bool = True, 
+    show_thinking: bool = False
+) -> AsyncGenerator[str, None]:
+    """
+    处理聊天请求，返回流式输出
+    
+    Args:
+        message: 用户消息
+        session_id: 会话ID
+        debug: 是否为调试模式
+        agent_type: Agent类型
+        use_deeper_tool: 是否使用增强版研究工具
+        show_thinking: 是否显示思考过程
+        
+    Yields:
+        流式文本块
+    """
+    # 生成锁的键
+    lock_key = f"{session_id}_chat"
+    
+    # 非阻塞方式尝试获取锁
+    lock_acquired = chat_manager.try_acquire_lock(lock_key)
+    if not lock_acquired:
+        # 返回错误流
+        yield json.dumps({"status": "error", "message": "当前有其他请求正在处理，请稍后再试"})
+        return
+    
+    try:
+        # 更新操作时间戳
+        chat_manager.update_timestamp(lock_key)
+        
+        # 获取指定的agent
+        try:
+            selected_agent = agent_manager.get_agent(agent_type)
+            if agent_type == "deep_research_agent":
+                selected_agent.is_deeper_tool(use_deeper_tool)
+        except ValueError as e:
+            yield json.dumps({"status": "error", "message": str(e)})
+            return
+        
+        # 首先尝试快速路径缓存
+        try:
+            start_fast = time.time()
+            fast_result = selected_agent.check_fast_cache(message, session_id)
+            
+            if fast_result:
+                print(f"API快速路径命中: {time.time() - start_fast:.4f}s")
+                yield json.dumps({"status": "done", "content": fast_result})
+                return
+        except Exception as e:
+            print(f"快速路径检查失败: {e}")
+        
+        # 对于深度研究代理使用思考流
+        if agent_type == "deep_research_agent" and show_thinking:
+            # 获取思考过程的流处理
+            thinking_step = False
+            thinking_content = ""
+            
+            async for chunk in selected_agent.ask_with_thinking_stream(message, thread_id=session_id):
+                if isinstance(chunk, dict):
+                    # 字典形式包含状态信息
+                    yield json.dumps(chunk)
+                elif "[深度研究]" in chunk or "[KB检索]" in chunk:
+                    # 这是思考步骤
+                    thinking_step = True
+                    thinking_content += chunk
+                    yield json.dumps({"status": "thinking", "content": chunk})
+                else:
+                    # 正常内容
+                    if thinking_step:
+                        thinking_step = False
+                        yield json.dumps({"status": "answer_start"})
+                    
+                    yield json.dumps({"status": "token", "content": chunk})
+            
+            # 发送完成消息
+            yield json.dumps({"status": "done", "thinking_content": thinking_content})
+            
+            return
+        
+        # 对于其他代理类型，使用标准流式处理
+        if agent_type in ["hybrid_agent", "graph_agent", "naive_rag_agent"]:
+            # 使用代理的流式接口
+            async for chunk in selected_agent.ask_stream(message, thread_id=session_id):
+                yield json.dumps({"status": "token", "content": chunk})
+            
+            # 发送完成消息
+            yield json.dumps({"status": "done"})
+        else:
+            # 对于不支持流式处理的代理，回退到非流式处理并模拟流
+            answer = selected_agent.ask(message, thread_id=session_id)
+            
+            # 分块发送响应以模拟流式输出
+            chunk_size = 10  # 每个块的字符数
+            for i in range(0, len(answer), chunk_size):
+                chunk = answer[i:i+chunk_size]
+                yield json.dumps({"status": "token", "content": chunk})
+                await asyncio.sleep(0.01)  # 小延迟模拟流式输出
+            
+            # 发送完成消息
+            yield json.dumps({"status": "done"})
+            
+    except Exception as e:
+        print(f"处理聊天请求时出错: {str(e)}")
+        print(traceback.format_exc())
+        yield json.dumps({"status": "error", "message": str(e)})
     finally:
         # 释放锁
         chat_manager.release_lock(lock_key)

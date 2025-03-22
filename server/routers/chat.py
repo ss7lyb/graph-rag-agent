@@ -24,7 +24,9 @@ async def chat(request: ChatRequest):
         message=request.message,
         session_id=request.session_id,
         debug=request.debug,
-        agent_type=request.agent_type
+        agent_type=request.agent_type,
+        use_deeper_tool=request.use_deeper_tool,
+        show_thinking=request.show_thinking
     )
     
     if request.debug and "execution_log" in result:

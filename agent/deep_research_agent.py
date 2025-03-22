@@ -212,9 +212,6 @@ class DeepResearchAgent(BaseAgent):
         Returns:
             str: 状态消息
         """
-        if use_deeper == self.use_deeper_tool:
-            return f"已经{'启用' if use_deeper else '禁用'}增强版研究工具"
-            
         # 切换工具
         self.use_deeper_tool = use_deeper
         

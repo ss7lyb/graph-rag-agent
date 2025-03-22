@@ -43,6 +43,6 @@ print(result.get('answer'))
 # 切换到标准版研究工具
 agent.is_deeper_tool(False)
 
-standard_answer = agent.ask("我旷课了30学时，我会被退学吗？")
+standard_answer = agent.ask_with_thinking("我旷课了30学时，我会被退学吗？")
 print("\n ===============")
 print(standard_answer)

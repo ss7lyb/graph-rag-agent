@@ -1,5 +1,7 @@
 from typing import Dict,Any, List
 import json
+import time
+import traceback
 
 from model.get_models import get_llm_model, get_embeddings_model
 from graph.core import connection_manager
@@ -55,7 +57,6 @@ class DeeperResearchTool:
         )
         
         # 2. 动态知识图谱构建器
-
         self.knowledge_builder = DynamicKnowledgeGraphBuilder(
             self.graph,
             EntityRelationExtractor(self.llm, system_template_build_graph, human_template_build_graph, entity_types, relationship_types),
@@ -69,12 +70,23 @@ class DeeperResearchTool:
         
         # 缓存设置
         self.enable_cache = True
-        self.cache_dir = "./cache/enhanced_research"
+        self.cache_dir = "./cache/deeper_research"
         
         # 确保缓存目录存在
         import os
         if not os.path.exists(self.cache_dir):
             os.makedirs(self.cache_dir)
+            
+        # 添加执行日志容器
+        self.execution_logs = []
+        
+        # 添加性能指标跟踪
+        self.performance_metrics = {"total_time": 0}
+    
+    def _log(self, message):
+        """记录执行日志"""
+        self.execution_logs.append(message)
+        print(message)  # 同时打印到控制台
     
     def extract_keywords(self, query: str) -> Dict[str, List[str]]:
         """从查询中提取关键词"""
@@ -90,18 +102,27 @@ class DeeperResearchTool:
         Returns:
             Dict: 包含思考过程和最终答案的字典
         """
+        # 清空执行日志
+        self.execution_logs = []
+        self._log(f"[深度研究] 开始处理查询: {query}")
+        
         # 提取关键词
         keywords = self.deep_research.extract_keywords(query)
+        self._log(f"[深度研究] 提取关键词: {keywords}")
         
         # 开始新的查询跟踪
         query_id = self.evidence_tracker.start_new_query(query, keywords)
         
         # 步骤1: 社区感知增强
+        self._log(f"[深度研究] 开始社区感知分析")
         community_context = self.community_search.enhance_search(query, keywords)
         
         # 步骤2: 使用社区信息增强搜索策略
         search_strategy = community_context.get("search_strategy", {})
         follow_up_queries = search_strategy.get("follow_up_queries", [])
+        
+        if follow_up_queries:
+            self._log(f"[深度研究] 社区分析生成的后续查询: {follow_up_queries}")
         
         # 添加增强搜索策略的推理步骤
         strategy_step_id = self.evidence_tracker.add_reasoning_step(
@@ -111,17 +132,22 @@ class DeeperResearchTool:
         )
         
         # 记录社区信息作为证据
-        for i, summary in enumerate(community_context.get("community_info", {}).get("summaries", [])):
-            self.evidence_tracker.add_evidence(
-                strategy_step_id,
-                f"community_summary_{i}",
-                summary,
-                "community_knowledge"
-            )
+        community_summaries = community_context.get("community_info", {}).get("summaries", [])
+        if community_summaries:
+            self._log(f"[深度研究] 找到 {len(community_summaries)} 个相关社区")
+            for i, summary in enumerate(community_summaries):
+                self._log(f"[深度研究] 社区 {i+1} 摘要: {summary[:100]}...")
+                self.evidence_tracker.add_evidence(
+                    strategy_step_id,
+                    f"community_summary_{i}",
+                    summary,
+                    "community_knowledge"
+                )
         
         # 步骤3: 构建初始知识图谱
         initial_entities = search_strategy.get("focus_entities", [])
         if initial_entities:
+            self._log(f"[深度研究] 构建知识图谱，关注实体: {initial_entities}")
             self.knowledge_builder.build_query_graph(query, initial_entities, depth=1)
             
             # 获取核心实体
@@ -136,14 +162,17 @@ class DeeperResearchTool:
             )
             
             # 记录知识图谱信息作为证据
+            kg_info = {
+                "entity_count": self.knowledge_builder.knowledge_graph.number_of_nodes(),
+                "relation_count": self.knowledge_builder.knowledge_graph.number_of_edges(),
+                "central_entities": central_entity_ids
+            }
+            self._log(f"[深度研究] 知识图谱统计: {kg_info['entity_count']} 个实体, {kg_info['relation_count']} 个关系")
+            
             self.evidence_tracker.add_evidence(
                 kg_step_id,
                 "knowledge_graph",
-                json.dumps({
-                    "entity_count": self.knowledge_builder.knowledge_graph.number_of_nodes(),
-                    "relation_count": self.knowledge_builder.knowledge_graph.number_of_edges(),
-                    "central_entities": central_entity_ids
-                }),
+                json.dumps(kg_info),
                 "graph_structure"
             )
         
@@ -153,13 +182,14 @@ class DeeperResearchTool:
         self.deep_research.all_retrieved_info = []
         
         # 初始化思考引擎
+        self._log(f"[深度研究] 初始化思考引擎")
         self.deep_research.thinking_engine.initialize_with_query(query)
         
         # 添加已有的社区信息和知识图谱信息作为上下文
         context_message = ""
-        if community_context.get("community_info", {}).get("summaries", []):
+        if community_summaries:
             context_message += "找到了相关的知识社区信息:\n"
-            context_message += "\n".join(community_context.get("community_info", {}).get("summaries", []))
+            context_message += "\n".join(community_summaries)
             
         # 如果有跟进查询，添加到思考过程
         if follow_up_queries:
@@ -173,6 +203,8 @@ class DeeperResearchTool:
         
         # 迭代思考过程
         for iteration in range(self.deep_research.max_iterations):
+            self._log(f"[深度研究] 开始第{iteration + 1}轮迭代")
+            
             # 跟踪迭代步骤
             iteration_step_id = self.evidence_tracker.add_reasoning_step(
                 query_id,
@@ -186,6 +218,7 @@ class DeeperResearchTool:
                 self.deep_research.thinking_engine.add_reasoning_step(summary_think)
                 self.deep_research.thinking_engine.add_human_message(summary_think)
                 think += self.deep_research.thinking_engine.remove_result_tags(summary_think)
+                self._log("[深度研究] 达到最大迭代次数，结束搜索")
                 break
 
             # 更新消息历史，请求继续推理
@@ -196,6 +229,7 @@ class DeeperResearchTool:
             
             # 处理生成结果
             if result["status"] == "empty":
+                self._log("[深度研究] 生成的思考内容为空")
                 self.evidence_tracker.add_evidence(
                     iteration_step_id,
                     "generation_result",
@@ -204,6 +238,7 @@ class DeeperResearchTool:
                 )
                 continue
             elif result["status"] == "error":
+                self._log(f"[深度研究] 生成查询出错: {result.get('error', '未知错误')}")
                 self.evidence_tracker.add_evidence(
                     iteration_step_id,
                     "generation_error",
@@ -212,6 +247,7 @@ class DeeperResearchTool:
                 )
                 break
             elif result["status"] == "answer_ready":
+                self._log("[深度研究] AI认为已有足够信息生成答案")
                 self.evidence_tracker.add_evidence(
                     iteration_step_id,
                     "reasoning_complete",
@@ -232,6 +268,7 @@ class DeeperResearchTool:
                 if not self.deep_research.all_retrieved_info:
                     # 如果还没有检索到任何信息，强制使用原始查询
                     queries = [query]
+                    self._log("[深度研究] 没有检索到信息，使用原始查询")
                     self.evidence_tracker.add_evidence(
                         iteration_step_id,
                         "query_fallback",
@@ -240,6 +277,7 @@ class DeeperResearchTool:
                     )
                 else:
                     # 已有信息，结束迭代
+                    self._log("[深度研究] 没有生成新查询且已有信息，结束迭代")
                     self.evidence_tracker.add_evidence(
                         iteration_step_id,
                         "iteration_complete",
@@ -250,6 +288,8 @@ class DeeperResearchTool:
             
             # 处理每个搜索查询
             for search_query in queries:
+                self._log(f"[深度研究] 执行查询: {search_query}")
+                
                 # 记录查询步骤
                 search_step_id = self.evidence_tracker.add_reasoning_step(
                     query_id,
@@ -259,6 +299,7 @@ class DeeperResearchTool:
                 
                 # 检查是否已执行过相同查询
                 if self.deep_research.thinking_engine.has_executed_query(search_query):
+                    self._log(f"[深度研究] 已搜索过该查询: {search_query}")
                     summary_think = f"\n已搜索过该查询。请参考前面的结果。\n"
                     self.deep_research.thinking_engine.add_reasoning_step(summary_think)
                     self.deep_research.thinking_engine.add_human_message(summary_think)
@@ -280,7 +321,14 @@ class DeeperResearchTool:
                 think += f"\n\n> {iteration + 1}. {search_query}\n\n"
                 
                 # 执行实际搜索
+                self._log(f"[KB检索] 开始搜索: {search_query}")
                 kbinfos = self.deep_research.dual_searcher.search(search_query)
+                
+                # 记录搜索结果基本信息
+                chunks_count = len(kbinfos.get("chunks", []))
+                entities_count = len(kbinfos.get("entities", []))
+                rels_count = len(kbinfos.get("relationships", []))
+                self._log(f"[KB检索] 结果: {chunks_count}个chunks, {entities_count}个实体, {rels_count}个关系")
                 
                 # 为查询结果更新知识图谱
                 if "chunks" in kbinfos:
@@ -312,6 +360,7 @@ class DeeperResearchTool:
                 )
                 
                 if not has_results:
+                    self._log(f"[KB检索] 没有找到与'{search_query}'相关的信息")
                     no_result_msg = f"\n没有找到与'{search_query}'相关的信息。请尝试使用不同的关键词进行搜索。\n"
                     self.deep_research.thinking_engine.add_reasoning_step(no_result_msg)
                     self.deep_research.thinking_engine.add_human_message(no_result_msg)
@@ -343,6 +392,7 @@ class DeeperResearchTool:
                 )
                 
                 # 使用LLM提取有用信息
+                self._log(f"[深度研究] 分析检索结果，提取有用信息")
                 extraction_msg = self.llm.invoke([
                     {"role": "system", "content": extract_prompt},
                     {"role": "user", "content": f'基于当前的搜索查询"{search_query}"和前面的推理步骤，分析每个知识来源并找出有用信息。'}
@@ -361,6 +411,7 @@ class DeeperResearchTool:
                     self.deep_research.all_retrieved_info.append(useful_info)
                     
                     # 记录有用信息作为证据
+                    self._log(f"[深度研究] 发现有用信息: {useful_info}")
                     self.evidence_tracker.add_evidence(
                         search_step_id,
                         f"useful_info_{search_query}",
@@ -368,6 +419,7 @@ class DeeperResearchTool:
                         "extracted_knowledge"
                     )
                 else:
+                    self._log(f"[深度研究] 未从检索结果中提取到有用信息")
                     self.evidence_tracker.add_evidence(
                         search_step_id,
                         f"no_useful_info_{search_query}",
@@ -383,16 +435,19 @@ class DeeperResearchTool:
         # 生成最终答案
         # 确保至少执行了一次搜索
         if not self.deep_research.thinking_engine.executed_search_queries:
+            self._log("[深度研究] 未执行任何有效搜索，无法生成答案")
             return {
                 "thinking_process": think,
                 "answer": f"抱歉，我无法回答关于'{query}'的问题，因为没有找到相关信息。",
                 "reference": {"chunks": [], "doc_aggs": []},
                 "retrieved_info": [],
                 "reasoning_chain": self.evidence_tracker.get_reasoning_chain(query_id),
+                "execution_logs": self.execution_logs,
             }
         
         # 使用检索到的信息生成答案
         retrieved_content = "\n\n".join(self.deep_research.all_retrieved_info)
+        self._log("[深度研究] 生成最终答案")
         final_answer = self.deep_research._generate_final_answer(query, retrieved_content, think)
         
         # 获取知识图谱中的核心实体
@@ -425,7 +480,8 @@ class DeeperResearchTool:
                 "entity_count": getattr(self.knowledge_builder.knowledge_graph, "number_of_nodes", lambda: 0)(),
                 "relation_count": getattr(self.knowledge_builder.knowledge_graph, "number_of_edges", lambda: 0)(),
                 "central_entities": central_entities
-            }
+            },
+            "execution_logs": self.execution_logs,  # 添加执行日志到返回结果
         }
         
         return result
@@ -440,17 +496,36 @@ class DeeperResearchTool:
         Returns:
             str: 搜索结果
         """
+        overall_start = time.time()
+        
+        # 记录开始搜索
+        self._log(f"[深度搜索] 开始处理查询...")
+        
         # 解析输入
         if isinstance(query_input, dict) and "query" in query_input:
             query = query_input["query"]
         else:
             query = str(query_input)
         
-        # 执行思考过程
-        result = self.thinking(query)
+        self._log(f"[深度搜索] 解析后的查询: {query}")
         
-        # 返回答案部分
-        return result["answer"]
+        try:
+            # 执行思考过程
+            self._log(f"[深度搜索] 开始执行思考过程")
+            result = self.thinking(query)
+            answer = result["answer"]
+            
+            # 记录总时间
+            total_time = time.time() - overall_start
+            self._log(f"[深度搜索] 完成，耗时 {total_time:.2f}秒")
+            self.performance_metrics["total_time"] = total_time
+            
+            return answer
+                
+        except Exception as e:
+            error_msg = f"深度研究过程中出错: {str(e)}\n{traceback.format_exc()}"
+            self._log(error_msg)
+            return f"抱歉，处理您的问题时遇到了错误: {str(e)}"
     
     def get_tool(self):
         """获取搜索工具"""

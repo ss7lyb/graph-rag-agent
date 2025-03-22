@@ -9,7 +9,8 @@ from services.kg_service import extract_kg_from_message
 from utils.concurrent import chat_manager, feedback_manager
 
 
-async def process_chat(message: str, session_id: str, debug: bool = False, agent_type: str = "graph_agent") -> Dict:
+async def process_chat(message: str, session_id: str, debug: bool = False, agent_type: str = "graph_agent", 
+                       use_deeper_tool: bool = True, show_thinking: bool = False) -> Dict:
     """
     处理聊天请求
     
@@ -18,6 +19,8 @@ async def process_chat(message: str, session_id: str, debug: bool = False, agent
         session_id: 会话ID
         debug: 是否为调试模式
         agent_type: Agent类型
+        use_deeper_tool: 是否使用增强版研究工具 (for deep_research_agent)
+        show_thinking: 是否显示思考过程 (for deep_research_agent)
         
     Returns:
         Dict: 聊天响应结果
@@ -41,6 +44,8 @@ async def process_chat(message: str, session_id: str, debug: bool = False, agent
         # 获取指定的agent
         try:
             selected_agent = agent_manager.get_agent(agent_type)
+            if agent_type == "deep_research_agent":
+                selected_agent.is_deeper_tool(use_deeper_tool)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         
@@ -172,7 +177,7 @@ async def process_chat(message: str, session_id: str, debug: bool = False, agent
                     answer = selected_agent.ask(
                         message, 
                         thread_id=session_id,
-                        show_thinking=False  # deep_research_agent支持此参数
+                        show_thinking=show_thinking # deep_research_agent支持此参数
                     )
                 else:
                     # 其他Agent类型不支持show_thinking参数

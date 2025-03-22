@@ -459,21 +459,6 @@ def display_debug_panel():
     </script>
     """
     
+    # 只有当需要切换标签时才注入JS
     if "current_tab" in st.session_state:
-        # 设置当前标签索引
-        tab_index = 0  # 默认显示执行轨迹标签
-            
-        if st.session_state.current_tab == "执行轨迹":
-            tab_index = 0
-        elif st.session_state.current_tab == "知识图谱":
-            tab_index = 1
-        elif st.session_state.current_tab == "源内容":
-            tab_index = 2
-        elif st.session_state.current_tab == "性能监控":
-            tab_index = 3
-
-        # 在会话状态中保存当前标签索引
-        st.session_state.active_tab = tab_index
-
-        # 创建标签页（不带键值）
-        tabs = st.tabs(["执行轨迹", "知识图谱", "源内容", "性能监控"])
+        st.markdown(tab_js, unsafe_allow_html=True)

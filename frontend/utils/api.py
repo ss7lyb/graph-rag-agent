@@ -252,6 +252,7 @@ def clear_chat():
     """清除聊天历史"""
     try:
         # 清除前端状态
+        st.session_state.processing_lock = False
         st.session_state.messages = []
         st.session_state.execution_log = None
         st.session_state.kg_data = None
@@ -276,6 +277,7 @@ def clear_chat():
         st.rerun()
         
     except Exception as e:
+        st.session_state.processing_lock = False
         st.error(f"清除对话时发生错误: {str(e)}")
 
 def clear_cache(cache_type=None):

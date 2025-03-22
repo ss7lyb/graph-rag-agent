@@ -137,6 +137,8 @@ response = requests.post(
 )
 ```
 
+Linux 下中文字体安装：见[教程](https://zhuanlan.zhihu.com/p/571610437)
+
 前后端项目启动：
 
 ```bash

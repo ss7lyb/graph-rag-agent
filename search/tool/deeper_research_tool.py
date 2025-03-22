@@ -1,4 +1,4 @@
-from typing import Dict,Any
+from typing import Dict,Any, List
 import json
 
 from model.get_models import get_llm_model, get_embeddings_model
@@ -75,6 +75,10 @@ class DeeperResearchTool:
         import os
         if not os.path.exists(self.cache_dir):
             os.makedirs(self.cache_dir)
+    
+    def extract_keywords(self, query: str) -> Dict[str, List[str]]:
+        """从查询中提取关键词"""
+        return self.deep_research.extract_keywords(query)
     
     def thinking(self, query: str) -> Dict[str, Any]:
         """

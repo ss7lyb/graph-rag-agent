@@ -1,9 +1,5 @@
 import streamlit as st
 import matplotlib.pyplot as plt
-
-plt.rcParams['font.sans-serif'] = ['WenQuanYi Zen Hei']
-plt.rcParams['axes.unicode_minus'] = False 
-
 import numpy as np
 import pandas as pd
 import time
@@ -222,8 +218,8 @@ def display_enhanced_performance_stats():
                 ax.set_yticks(y_pos)
                 ax.set_yticklabels(endpoints)
                 ax.invert_yaxis()  # 最高的在顶部
-                ax.set_xlabel('调用次数')
-                ax.set_title('API调用分布')
+                ax.set_xlabel('Call Count')
+                ax.set_title('API Call Distribution')
                 
                 st.pyplot(fig)
     
@@ -251,9 +247,9 @@ def display_enhanced_performance_stats():
                 fig, ax = plt.subplots(figsize=(10, 4))
                 x = np.arange(len(message_times))
                 ax.plot(x, message_times, marker='o')
-                ax.set_title('响应时间趋势')
-                ax.set_xlabel('消息ID')
-                ax.set_ylabel('响应时间 (秒)')
+                ax.set_title('Response Time Trend')
+                ax.set_xlabel('Message ID')
+                ax.set_ylabel('Response Time (s)')
                 ax.grid(True)
                 
                 st.pyplot(fig)
@@ -268,9 +264,9 @@ def display_enhanced_performance_stats():
             fig, ax = plt.subplots(figsize=(10, 4))
             x = np.arange(len(memory_data))
             ax.plot(x, memory_data, marker='o', color='green')
-            ax.set_title('内存使用趋势')
-            ax.set_xlabel('检查点')
-            ax.set_ylabel('内存使用 (MB)')
+            ax.set_title('Memory Usage Trend')
+            ax.set_xlabel('Checkpoint')
+            ax.set_ylabel('Memory Usage (MB)')
             ax.grid(True)
             
             st.pyplot(fig)

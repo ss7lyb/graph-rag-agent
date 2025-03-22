@@ -122,6 +122,21 @@ examples = [
 workers = 2
 ```
 
+如果想要使用深度搜索的功能，建议在前端的`frontend/utils/api.py`中禁用前端的超时检查功能：
+
+```python
+response = requests.post(
+    f"{API_URL}/chat",
+    json={
+        "message": message,
+        "session_id": st.session_state.session_id,
+        "debug": st.session_state.debug_mode,
+        "agent_type": st.session_state.agent_type
+    },
+    # timeout=120  # 增加超时时间 如果需要deepresearch，建议禁用
+)
+```
+
 前后端项目启动：
 
 ```bash

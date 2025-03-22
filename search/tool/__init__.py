@@ -7,6 +7,7 @@ from search.tool.global_search_tool import GlobalSearchTool
 from search.tool.hybrid_tool import HybridSearchTool
 from search.tool.naive_search_tool import NaiveSearchTool
 from search.tool.deep_research_tool import DeepResearchTool
+from search.tool.deeper_research_tool import DeeperResearchTool
 
 __all__ = [
     "BaseSearchTool",
@@ -14,5 +15,6 @@ __all__ = [
     "GlobalSearchTool",
     "HybridSearchTool",
     "NaiveSearchTool",
-    "DeepResearchTool"
+    "DeepResearchTool",
+    "DeeperResearchTool",
 ]

@@ -5,7 +5,8 @@ from langchain_core.output_parsers import StrOutputParser
 
 from config.prompt import LC_SYSTEM_PROMPT
 from config.settings import response_type
-from search.tool.deep_research_tool import DeepResearchTool
+from search.tool.deeper_research_tool import DeeperResearchTool
+from search.tool.deep_research_tool import DeepResearchTool 
 
 from agent.base import BaseAgent
 
@@ -20,11 +21,31 @@ class DeepResearchAgent(BaseAgent):
     2. 迭代式搜索
     3. 高质量知识整合
     4. 支持流式输出
+    5. 社区感知和知识图谱增强
     """
     
-    def __init__(self):
-        # 初始化深度研究工具 - 支持流式输出
-        self.research_tool = DeepResearchTool()
+    def __init__(self, use_deeper_tool=True):
+        """
+        初始化深度研究代理
+        
+        Args:
+            use_deeper_tool: 是否使用增强版研究工具
+        """
+        # 初始化研究工具
+        self.use_deeper_tool = use_deeper_tool
+        
+        if use_deeper_tool:
+            # 使用增强版研究工具
+            try:
+                self.research_tool = DeeperResearchTool()
+                print("已加载增强版深度研究工具")
+            except Exception as e:
+                print(f"加载增强版研究工具失败: {e}，将使用标准版")
+                self.research_tool = DeepResearchTool()
+                self.use_deeper_tool = False
+        else:
+            # 使用标准版研究工具
+            self.research_tool = DeepResearchTool()
         
         # 设置缓存目录
         self.cache_dir = "./cache/deep_research_agent"
@@ -85,9 +106,8 @@ class DeepResearchAgent(BaseAgent):
         if cached_result:
             return {"messages": [AIMessage(content=cached_result)]}
 
-        # 检查流式输出的情况 - 流式结果通常是生成器或特殊格式
+        # 检查流式输出的情况
         if isinstance(retrieval_result, (Generator, dict)) and not isinstance(retrieval_result, str):
-            # 如果是流式结果，直接返回，外部处理
             return {"messages": [AIMessage(content=retrieval_result)]}
 
         # 如果检索结果不是思考过程（当使用非思考工具时）
@@ -181,3 +201,36 @@ class DeepResearchAgent(BaseAgent):
             result["execution_logs"] = []
             
         return result
+        
+    def is_deeper_tool(self, use_deeper=True):
+        """
+        切换是否使用增强版研究工具
+        
+        Args:
+            use_deeper: 是否使用增强版
+            
+        Returns:
+            str: 状态消息
+        """
+        if use_deeper == self.use_deeper_tool:
+            return f"已经{'启用' if use_deeper else '禁用'}增强版研究工具"
+            
+        # 切换工具
+        self.use_deeper_tool = use_deeper
+        
+        if use_deeper:
+            # 切换到增强版
+            try:
+                self.research_tool = DeeperResearchTool()
+                # 重新设置工具
+                self._tools = self._setup_tools()
+                return "已切换到增强版研究工具"
+            except Exception as e:
+                self.use_deeper_tool = False
+                return f"切换到增强版失败: {e}"
+        else:
+            # 切换回标准版
+            self.research_tool = DeepResearchTool()
+            # 重新设置工具
+            self._tools = self._setup_tools()
+            return "已切换到标准版研究工具"

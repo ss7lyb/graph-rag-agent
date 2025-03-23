@@ -13,11 +13,13 @@ def init_session_state():
     if 'execution_log' not in st.session_state:
         st.session_state.execution_log = None
     if 'agent_type' not in st.session_state:
-        st.session_state.agent_type = "graph_agent"  # 默认使用graph_agent
+        st.session_state.agent_type = "hybrid_agent"  # 默认使用hybrid_agent
     if 'show_thinking' not in st.session_state:
         st.session_state.show_thinking = False  # 默认不显示思考过程
     if 'use_deeper_tool' not in st.session_state:
         st.session_state.use_deeper_tool = True  # 默认使用增强版研究工具
+    if 'use_stream' not in st.session_state:
+        st.session_state.use_stream = True  # 默认使用流式响应
     if 'kg_data' not in st.session_state:
         st.session_state.kg_data = None
     if 'source_content' not in st.session_state:

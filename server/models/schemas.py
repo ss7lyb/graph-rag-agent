@@ -7,7 +7,7 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str
     debug: bool = False
-    agent_type: str = "graph_agent"
+    agent_type: str = "hybrid_agent"
     use_deeper_tool: Optional[bool] = True
     show_thinking: Optional[bool] = False
 

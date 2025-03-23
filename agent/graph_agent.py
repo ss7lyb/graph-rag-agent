@@ -264,7 +264,7 @@ class GraphAgent(BaseAgent):
             question = messages[-3].content if len(messages) >= 3 else "未找到问题"
             docs = messages[-1].content if messages[-1] else "未找到相关信息"
         except Exception as e:
-            yield f"获取问题或文档时出错: {str(e)}"
+            yield f"**获取问题或文档时出错**: {str(e)}"
             return
 
         # 获取线程ID
@@ -347,7 +347,7 @@ class GraphAgent(BaseAgent):
                 self.cache_manager.set(f"generate:{question}", result, thread_id=thread_id)
                 
         except Exception as e:
-            yield f"生成回答时出错: {str(e)}"
+            yield f"**生成回答时出错**: {str(e)}"
 
     
     async def _stream_process(self, inputs, config):
@@ -381,7 +381,7 @@ class GraphAgent(BaseAgent):
         workflow_state = {"messages": [HumanMessage(content=query)]}
         
         # 执行agent节点 - 提供状态更新
-        yield "正在分析问题..."
+        yield "**正在分析问题**...\n\n"
         agent_output = self._agent_node(workflow_state)
         workflow_state = {"messages": workflow_state["messages"] + agent_output["messages"]}
         
@@ -389,7 +389,7 @@ class GraphAgent(BaseAgent):
         tool_decision = tools_condition(workflow_state)
         if tool_decision == "tools":
             # 执行检索节点
-            yield "正在检索相关信息..."
+            yield "**正在检索相关信息**...\n\n"
             retrieve_output = await self._retrieve_node_async(workflow_state)
             workflow_state = {"messages": workflow_state["messages"] + retrieve_output["messages"]}
             
@@ -400,7 +400,7 @@ class GraphAgent(BaseAgent):
             if not content or len(content) < 100:
                 # 如果检索结果不足，尝试使用本地搜索
                 try:
-                    yield "检索内容不足，正在尝试更深入的搜索..."
+                    yield "**检索内容不足，正在尝试更深入的搜索**...\n\n"
                     local_result = self.local_tool.search(query)
                     if local_result and len(local_result) > 100:
                         # 使用本地搜索结果替换
@@ -409,12 +409,12 @@ class GraphAgent(BaseAgent):
                             tool_call_id="local_search",
                             name="local_search_tool"
                         )
-                        yield "找到更多相关信息，继续生成回答..."
+                        yield "**找到更多相关信息，继续生成回答**...\n\n"
                 except Exception as e:
-                    yield f"尝试深入搜索时出错: {str(e)}"
+                    yield f"**尝试深入搜索时出错**: {str(e)}"
             
             # 流式生成节点输出
-            yield "正在生成回答..."
+            yield "**正在生成回答**...\n\n"
             async for token in self._generate_node_stream(workflow_state):
                 yield token
         else:

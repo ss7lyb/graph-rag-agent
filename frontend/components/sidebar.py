@@ -51,6 +51,15 @@ def display_sidebar():
             # 如果切换到其他Agent类型，重置show_thinking为False
             st.session_state.show_thinking = False
         
+        # 添加流式响应选项（所有Agent共用）
+        st.header("响应设置")
+        use_stream = st.checkbox("使用流式响应", 
+                               value=st.session_state.get("use_stream", True), 
+                               key="sidebar_use_stream",
+                               help="启用流式响应，实时显示生成结果")
+        # 更新全局 use_stream
+        st.session_state.use_stream = use_stream
+        
         st.markdown("---")
         
         # 调试选项

@@ -720,13 +720,13 @@ class DeepResearchTool(BaseSearchTool):
         think = ""
         
         # 向用户发送初始状态提示
-        yield "正在分析您的问题..."
+        yield "\n**正在分析您的问题**...\n"
         
         # 迭代思考过程
         for iteration in range(self.max_iterations):
             # 发送迭代进度
             if iteration > 0:
-                yield f"正在进行第{iteration + 1}轮思考..."
+                yield f"\n\n**正在进行第{iteration + 1}轮思考**...\n\n"
                 
             self._log(f"\n[深度研究] 开始第{iteration + 1}轮迭代")
             
@@ -736,7 +736,7 @@ class DeepResearchTool(BaseSearchTool):
                 self.thinking_engine.add_reasoning_step(summary_think)
                 self.thinking_engine.add_human_message(summary_think)
                 think += self.thinking_engine.remove_result_tags(summary_think)
-                yield "已达到最大搜索次数限制，准备生成最终答案..."
+                yield "**\n已达到最大搜索次数限制，准备生成最终答案**...\n"
                 break
 
             # 更新消息历史，请求继续推理
@@ -792,25 +792,25 @@ class DeepResearchTool(BaseSearchTool):
                 if not self.all_retrieved_info:
                     # 如果还没有检索到任何信息，强制使用原始查询
                     queries = [query]
-                    no_info_msg = "没有检索到信息，尝试使用原始问题直接查询..."
+                    no_info_msg = "\n\n**没有检索到信息，尝试使用原始问题直接查询**...\n\n"
                     self._log(no_info_msg)
                     yield no_info_msg
                 else:
                     # 已有信息，结束迭代
-                    end_msg = "没有发现新的查询角度，基于已有信息生成回答..."
+                    end_msg = "\n\n**没有发现新的查询角度，基于已有信息生成回答**...\n\n"
                     self._log(end_msg)
                     yield end_msg
                     break
             
             # 处理每个搜索查询
             for search_query in queries:
-                search_start_msg = f"正在搜索: {search_query}"
+                search_start_msg = f"\n**正在搜索: {search_query}**\n"
                 self._log(search_start_msg)
                 yield search_start_msg
                     
                 # 检查是否已执行过相同查询
                 if self.thinking_engine.has_executed_query(search_query):
-                    dupe_msg = f"已搜索过类似查询，跳过重复执行"
+                    dupe_msg = f"\n**已搜索过类似查询，跳过重复执行**\n"
                     self._log(dupe_msg)
                     yield dupe_msg
                     continue
@@ -826,7 +826,7 @@ class DeepResearchTool(BaseSearchTool):
                 await asyncio.sleep(0)
                     
                 # 执行实际搜索
-                yield "正在查询知识库..."
+                yield "\n**正在查询知识库**...\n"
                 kbinfos = await self._async_search(search_query)
                     
                 # 检查搜索结果是否为空
@@ -837,7 +837,7 @@ class DeepResearchTool(BaseSearchTool):
                 )
                     
                 if not has_results:
-                    no_result_msg = f"没有找到与{search_query}相关的信息，尝试其他角度..."
+                    no_result_msg = f"\n**没有找到与{search_query}相关的信息，尝试其他角度**...\n"
                     self._log(no_result_msg)
                     yield no_result_msg
                     self.thinking_engine.add_reasoning_step(f"\n没有找到与'{search_query}'相关的信息。请尝试使用不同的关键词进行搜索。\n")
@@ -855,7 +855,7 @@ class DeepResearchTool(BaseSearchTool):
                 kb_prompt_result = "\n".join(kb_prompt(kbinfos, 4096))
                     
                 # 告知用户正在分析结果
-                yield "正在分析搜索结果..."
+                yield "\n**正在分析搜索结果**...\n"
                     
                 # 使用异步LLM提取有用信息
                 summary_think = await self._async_extract_info(search_query, truncated_prev_reasoning, kb_prompt_result)
@@ -871,9 +871,9 @@ class DeepResearchTool(BaseSearchTool):
                     self.all_retrieved_info.append(useful_info)
                     info_msg = f"发现有用信息: {useful_info[:100]}..."
                     self._log(info_msg)
-                    yield "找到相关信息！"
+                    yield "\n**找到相关信息！**\n"
                 else:
-                    no_useful_msg = "未从搜索结果中发现特别有价值的信息"
+                    no_useful_msg = "**\n未从搜索结果中发现特别有价值的信息**\n"
                     self._log(no_useful_msg)
                     yield no_useful_msg
                     
@@ -898,12 +898,12 @@ class DeepResearchTool(BaseSearchTool):
             
         # 确保至少执行了一次搜索
         if not self.thinking_engine.executed_search_queries:
-            no_search_msg = f"无法找到与{query}相关的信息，尝试给出基础回答..."
+            no_search_msg = f"\n**无法找到与{query}相关的信息，尝试给出基础回答**...\n"
             yield no_search_msg
             return
         
         # 生成最终答案
-        yield "正在根据所有收集的信息生成最终答案..."
+        yield "\n**正在根据所有收集的信息生成最终答案**...\n"
         
         # 使用检索到的信息生成答案
         retrieved_content = "\n\n".join(self.all_retrieved_info)
@@ -964,7 +964,7 @@ class DeepResearchTool(BaseSearchTool):
             thinking_content = ""
             
             # 提示用户处理开始
-            yield "开始深度分析您的问题..."
+            yield "\n**开始深度分析您的问题**...\n"
             
             # 使用更高级的流式思考过程
             async for chunk in self.thinking_stream(query):
@@ -987,7 +987,7 @@ class DeepResearchTool(BaseSearchTool):
                             yield full_response
                     else:
                         self._log(f"\n[深度搜索] 答案验证失败，尝试修复")
-                        yield "正在完善最终答案..."
+                        yield "\n**正在完善最终答案**...\n"
                         
                         # 尝试修复答案
                         fixed_answer = await self._fix_answer(query, full_response)
@@ -1004,7 +1004,7 @@ class DeepResearchTool(BaseSearchTool):
         except Exception as e:
             error_msg = f"深度研究过程中出错: {str(e)}"
             self._log(error_msg)
-            yield f"很抱歉，在处理您的问题时遇到了错误: {str(e)}"
+            yield f"**很抱歉，在处理您的问题时遇到了错误**: {str(e)}"
     
     def get_thinking_stream_tool(self) -> BaseTool:
         """获取流式思考过程工具"""

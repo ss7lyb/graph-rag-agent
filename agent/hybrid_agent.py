@@ -265,7 +265,7 @@ class HybridAgent(BaseAgent):
         workflow_state = {"messages": [HumanMessage(content=query)]}
         
         # 输出一个处理开始的提示
-        yield "正在分析问题..."
+        yield "**正在分析问题**...\n\n"
         
         # 执行 agent 节点
         agent_output = await self._agent_node_async(workflow_state)
@@ -275,14 +275,14 @@ class HybridAgent(BaseAgent):
         tool_decision = tools_condition(workflow_state)
         if tool_decision == "tools":
             # 告知用户正在检索
-            yield "正在检索相关信息..."
+            yield "**正在检索相关信息**...\n\n"
             
             # 执行检索节点
             retrieve_output = await self._retrieve_node_async(workflow_state)
             workflow_state = {"messages": workflow_state["messages"] + retrieve_output["messages"]}
             
             # 告知用户正在生成回答
-            yield "正在生成回答..."
+            yield "**正在生成回答**...\n\n"
             
             # 流式生成节点输出
             async for token in self._generate_node_stream(workflow_state):

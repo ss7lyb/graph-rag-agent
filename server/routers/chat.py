@@ -44,6 +44,10 @@ async def chat_stream(request: Request):
     data = await request.json()
     message = data.get("message")
     session_id = data.get("session_id")
+    debug = data.get("debug", False)
+    agent_type = data.get("agent_type", "hybrid_agent")
+    use_deeper_tool = data.get("use_deeper_tool", True)
+    show_thinking = data.get("show_thinking", False)
     
     # 设置流式响应
     async def event_generator():
@@ -52,13 +56,48 @@ async def chat_stream(request: Request):
             yield "data: " + json.dumps({"status": "start"}) + "\n\n"
             
             # 处理消息流
+            execution_log = []
+            
             async for chunk in process_chat_stream(
                 message=message,
                 session_id=session_id,
-                # ...其他参数
+                debug=debug,
+                agent_type=agent_type,
+                use_deeper_tool=use_deeper_tool,
+                show_thinking=show_thinking
             ):
-                # 确保每个事件都正确格式化为SSE
-                yield "data: " + chunk + "\n\n"
+                # 检查是否是字典格式
+                if isinstance(chunk, dict):
+                    # 提取执行轨迹（如果有）
+                    if "execution_log" in chunk and debug:
+                        log_entry = chunk["execution_log"]
+                        execution_log.append(log_entry)
+                        yield "data: " + json.dumps({
+                            "status": "execution_log",
+                            "content": log_entry
+                        }) + "\n\n"
+                    # 继续正常流程
+                    elif "status" in chunk:
+                        yield "data: " + json.dumps(chunk) + "\n\n"
+                    else:
+                        # 转换为文本块
+                        yield "data: " + json.dumps({
+                            "status": "token", 
+                            "content": str(chunk)
+                        }) + "\n\n"
+                else:
+                    # 普通文本块
+                    yield "data: " + json.dumps({
+                        "status": "token", 
+                        "content": chunk
+                    }) + "\n\n"
+                
+            # 最后发送完整的执行日志
+            if debug and execution_log:
+                yield "data: " + json.dumps({
+                    "status": "execution_logs",
+                    "content": execution_log
+                }) + "\n\n"
                 
             # 发送完成事件
             yield "data: " + json.dumps({"status": "done"}) + "\n\n"
@@ -76,7 +115,6 @@ async def chat_stream(request: Request):
             "X-Accel-Buffering": "no"  # 阻止Nginx缓冲
         }
     )
-
 
 @router.post("/clear", response_model=ClearResponse)
 async def clear_chat(request: ClearRequest):

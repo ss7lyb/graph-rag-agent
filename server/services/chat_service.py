@@ -11,7 +11,7 @@ from services.kg_service import extract_kg_from_message
 from utils.concurrent import chat_manager, feedback_manager
 
 
-async def process_chat(message: str, session_id: str, debug: bool = False, agent_type: str = "graph_agent", 
+async def process_chat(message: str, session_id: str, debug: bool = False, agent_type: str = "hybrid_agent", 
                        use_deeper_tool: bool = True, show_thinking: bool = False) -> Dict:
     """
     处理聊天请求
@@ -203,7 +203,7 @@ async def process_chat_stream(
     message: str, 
     session_id: str, 
     debug: bool = False, 
-    agent_type: str = "graph_agent",
+    agent_type: str = "hybrid_agent",
     use_deeper_tool: bool = True, 
     show_thinking: bool = False
 ) -> AsyncGenerator[str, None]:
@@ -219,7 +219,7 @@ async def process_chat_stream(
         show_thinking: 是否显示思考过程
         
     Yields:
-        流式文本块
+        流式文本块或状态更新
     """
     # 生成锁的键
     lock_key = f"{session_id}_chat"
@@ -251,10 +251,24 @@ async def process_chat_stream(
             
             if fast_result:
                 print(f"API快速路径命中: {time.time() - start_fast:.4f}s")
-                yield json.dumps({"status": "done", "content": fast_result})
+                # 如果是调试模式，生成模拟执行日志
+                if debug:
+                    mock_log = {
+                        "node": "fast_cache_hit", 
+                        "timestamp": time.time(), 
+                        "input": message, 
+                        "output": "高质量缓存命中，跳过完整处理"
+                    }
+                    yield {"execution_log": mock_log}
+                
+                yield json.dumps({"status": "token", "content": fast_result})
+                yield json.dumps({"status": "done"})
                 return
         except Exception as e:
             print(f"快速路径检查失败: {e}")
+        
+        # 保存执行轨迹（针对调试模式）
+        execution_log = []
         
         # 对于深度研究代理使用思考流
         if agent_type == "deep_research_agent" and show_thinking:
@@ -262,10 +276,14 @@ async def process_chat_stream(
             thinking_step = False
             thinking_content = ""
             
-            async for chunk in selected_agent.ask_with_thinking_stream(message, thread_id=session_id):
+            async for chunk in selected_agent.ask_stream(message, thread_id=session_id):
                 if isinstance(chunk, dict):
                     # 字典形式包含状态信息
-                    yield json.dumps(chunk)
+                    if "execution_log" in chunk and debug:
+                        execution_log.append(chunk["execution_log"])
+                        yield {"execution_log": chunk["execution_log"]}
+                    else:
+                        yield chunk
                 elif "[深度研究]" in chunk or "[KB检索]" in chunk:
                     # 这是思考步骤
                     thinking_step = True
@@ -286,22 +304,68 @@ async def process_chat_stream(
         
         # 对于其他代理类型，使用标准流式处理
         if agent_type in ["hybrid_agent", "graph_agent", "naive_rag_agent"]:
-            # 使用代理的流式接口
-            async for chunk in selected_agent.ask_stream(message, thread_id=session_id):
-                yield json.dumps({"status": "token", "content": chunk})
+            # 为调试模式收集执行轨迹
+            if debug:
+                # 首先获取执行轨迹
+                trace_result = await asyncio.to_thread(
+                    selected_agent.ask_with_trace,
+                    message,
+                    thread_id=session_id
+                )
+                
+                # 发送执行轨迹
+                if "execution_log" in trace_result:
+                    for log_entry in trace_result["execution_log"]:
+                        yield {"execution_log": log_entry}
+                        execution_log.append(log_entry)
+                
+                # 发送答案，模拟流式输出
+                answer = trace_result["answer"]
+                chunk_size = 10  # 每个块的字符数
+                for i in range(0, len(answer), chunk_size):
+                    chunk = answer[i:i+chunk_size]
+                    yield json.dumps({"status": "token", "content": chunk})
+                    await asyncio.sleep(0.01)  # 小延迟模拟流式输出
+            else:
+                # 使用代理的流式接口
+                async for chunk in selected_agent.ask_stream(message, thread_id=session_id):
+                    yield json.dumps({"status": "token", "content": chunk})
             
             # 发送完成消息
             yield json.dumps({"status": "done"})
         else:
             # 对于不支持流式处理的代理，回退到非流式处理并模拟流
-            answer = selected_agent.ask(message, thread_id=session_id)
-            
-            # 分块发送响应以模拟流式输出
-            chunk_size = 10  # 每个块的字符数
-            for i in range(0, len(answer), chunk_size):
-                chunk = answer[i:i+chunk_size]
-                yield json.dumps({"status": "token", "content": chunk})
-                await asyncio.sleep(0.01)  # 小延迟模拟流式输出
+            if debug:
+                # 首先获取执行轨迹
+                trace_result = await asyncio.to_thread(
+                    selected_agent.ask_with_trace,
+                    message,
+                    thread_id=session_id
+                )
+                
+                # 发送执行轨迹
+                if "execution_log" in trace_result:
+                    for log_entry in trace_result["execution_log"]:
+                        yield {"execution_log": log_entry}
+                        execution_log.append(log_entry)
+                
+                # 发送答案，模拟流式输出
+                answer = trace_result["answer"]
+                chunk_size = 10  # 每个块的字符数
+                for i in range(0, len(answer), chunk_size):
+                    chunk = answer[i:i+chunk_size]
+                    yield json.dumps({"status": "token", "content": chunk})
+                    await asyncio.sleep(0.01)  # 小延迟模拟流式输出
+            else:
+                # 非调试模式，简单获取答案
+                answer = selected_agent.ask(message, thread_id=session_id)
+                
+                # 分块发送响应以模拟流式输出
+                chunk_size = 10  # 每个块的字符数
+                for i in range(0, len(answer), chunk_size):
+                    chunk = answer[i:i+chunk_size]
+                    yield json.dumps({"status": "token", "content": chunk})
+                    await asyncio.sleep(0.01)  # 小延迟模拟流式输出
             
             # 发送完成消息
             yield json.dumps({"status": "done"})

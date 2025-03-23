@@ -205,13 +205,13 @@ class DeeperResearchTool:
         
         # 迭代思考过程
         for iteration in range(self.deep_research.max_iterations):
-            self._log(f"\n[深度研究] 开始第{iteration + 1}轮迭代")
+            self._log(f"\n[深度研究] 开始第{iteration + 1}轮迭代\n")
             
             # 跟踪迭代步骤
             iteration_step_id = self.evidence_tracker.add_reasoning_step(
                 query_id,
                 f"iteration_{iteration}",
-                f"开始第 {iteration + 1} 轮迭代思考"
+                f"\n开始第 {iteration + 1} 轮迭代思考\n"
             )
             
             # 检查是否达到最大迭代次数
@@ -575,7 +575,7 @@ class DeeperResearchTool:
         self._log(f"\n[深度研究] 开始处理查询: {query}")
         
         # 向用户发送初始状态消息
-        yield "正在分析您的问题..."
+        yield "\n**正在分析您的问题**...\n"
         
         # 提取关键词
         keywords = self.deep_research.extract_keywords(query)
@@ -585,7 +585,7 @@ class DeeperResearchTool:
         query_id = self.evidence_tracker.start_new_query(query, keywords)
         
         # 步骤1: 社区感知增强
-        yield "正在分析相关知识社区..."
+        yield "\n**正在分析相关知识社区**...\n"
         community_context = await self._async_enhance_search(query, keywords)
         
         # 步骤2: 使用社区信息增强搜索策略
@@ -593,7 +593,7 @@ class DeeperResearchTool:
         follow_up_queries = search_strategy.get("follow_up_queries", [])
         
         if follow_up_queries:
-            query_msg = f"发现潜在的深入探索方向: {', '.join(follow_up_queries[:2])}"
+            query_msg = f"\n**发现潜在的深入探索方向**: {', '.join(follow_up_queries[:2])}\n"
             self._log(query_msg)
             yield query_msg
         
@@ -607,7 +607,7 @@ class DeeperResearchTool:
         # 记录社区信息作为证据
         community_summaries = community_context.get("community_info", {}).get("summaries", [])
         if community_summaries:
-            comm_msg = f"找到 {len(community_summaries)} 个相关知识社区"
+            comm_msg = f"\n**找到 {len(community_summaries)} 个相关知识社区**\n"
             self._log(comm_msg)
             yield comm_msg
             
@@ -625,7 +625,7 @@ class DeeperResearchTool:
         # 步骤3: 构建初始知识图谱
         initial_entities = search_strategy.get("focus_entities", [])
         if initial_entities:
-            kg_msg = f"正在构建相关知识图谱..."
+            kg_msg = f"\n**正在构建相关知识图谱**...\n"
             self._log(kg_msg)
             yield kg_msg
             
@@ -637,7 +637,7 @@ class DeeperResearchTool:
             central_entity_ids = [e["id"] for e in central_entities]
             
             if central_entity_ids:
-                central_msg = f"识别出核心相关实体: {', '.join(central_entity_ids[:3])}"
+                central_msg = f"\n**识别出核心相关实体**: {', '.join(central_entity_ids[:3])}\n"
                 yield central_msg
             
             # 添加知识图谱分析步骤
@@ -662,7 +662,7 @@ class DeeperResearchTool:
             )
         
         # 步骤4: 使用深度研究工具的流式思考过程
-        yield "正在进行深度研究..."
+        yield "\n**正在进行深度研究**...\n"
         
         # 调用deep_research工具的流式API
         async for chunk in self.deep_research.thinking_stream(query):
@@ -751,7 +751,7 @@ class DeeperResearchTool:
             last_chunk = None
             
             # 提示用户处理开始
-            yield "开始深度分析您的问题..."
+            yield "\n**开始深度分析您的问题**...\n"
             
             async for chunk in self.thinking_stream(query):
                 if isinstance(chunk, dict) and "answer" in chunk:

@@ -117,7 +117,7 @@ class NaiveRagAgent(BaseAgent):
         query = inputs["messages"][-1].content
         
         # 开始处理提示
-        yield "开始处理查询..."
+        yield "**开始处理查询**...\n\n"
         
         try:
             # 执行Naive搜索
@@ -125,7 +125,7 @@ class NaiveRagAgent(BaseAgent):
             
             # 分块返回结果
             if search_result:
-                yield "已找到相关信息，正在生成回答..."
+                yield "**已找到相关信息，正在生成回答**...\n\n"
                 
                 # 分块返回
                 sentences = re.split(r'([.!?。！？]\s*)', search_result)
@@ -147,7 +147,7 @@ class NaiveRagAgent(BaseAgent):
                 yield "未找到与您问题相关的信息。请尝试更换关键词或提供更多细节。"
         
         except Exception as e:
-            yield f"处理查询时出错: {str(e)}"
+            yield f"**处理查询时出错**: {str(e)}"
     
     def close(self):
         """关闭资源"""

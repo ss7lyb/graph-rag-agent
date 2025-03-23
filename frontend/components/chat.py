@@ -1,6 +1,8 @@
 import streamlit as st
 import uuid
 import re
+import json
+import traceback
 from utils.api import send_message, send_feedback, get_source_content, get_knowledge_graph_from_message, get_source_file_info_batch, clear_chat, send_message_stream
 from utils.helpers import extract_source_ids
 
@@ -18,7 +20,7 @@ def display_chat_interface():
     
     # 设置栏
     with st.container():
-        col1, col2 = st.columns([3, 1])
+        col1, col2, col3 = st.columns([3, 1, 1])  # 修改为三列布局
         
         with col1:
             # 添加重置锁的功能到 selectbox 的 on_change 参数
@@ -59,6 +61,15 @@ def display_chat_interface():
                 st.session_state.use_deeper_tool = use_deeper
     
         with col2:
+            # 添加流式响应选项
+            use_stream = st.checkbox("使用流式响应", 
+                                     value=st.session_state.get("use_stream", True),
+                                     key="header_use_stream",
+                                     help="启用流式响应，实时显示生成结果",
+                                     on_change=reset_processing_lock)
+            st.session_state.use_stream = use_stream
+            
+        with col3:
             # 修改清除聊天按钮，添加重置锁的功能
             st.button("🗑️ 清除聊天", key="header_clear_chat", on_click=clear_chat_with_lock_reset)
     
@@ -320,41 +331,117 @@ def display_chat_interface():
                     full_response = ""
                     thinking_content = ""
                     
-                    # 定义令牌处理器
-                    def handle_token(token, is_thinking=False):
-                        nonlocal full_response, thinking_content
-                        if is_thinking:
-                            # 添加到思考内容
-                            thinking_content += token
-                            # 将思考内容格式化为引用文本
-                            thinking_lines = thinking_content.split('\n')
-                            quoted_thinking = '\n'.join([f"> {line}" for line in thinking_lines])
-                            # 在占位符中显示
-                            message_placeholder.markdown(quoted_thinking)
+                    # 检查是否使用流式响应
+                    use_stream = st.session_state.get("use_stream", True)
+                    
+                    if use_stream:
+                        # 定义令牌处理器
+                        def handle_token(token, is_thinking=False):
+                            nonlocal full_response, thinking_content
+                            try:
+                                # 检查token是否是JSON字符串
+                                if isinstance(token, str) and token.startswith("{") and token.endswith("}"):
+                                    try:
+                                        # 尝试解析JSON
+                                        json_data = json.loads(token)
+                                        if "content" in json_data:
+                                            token = json_data["content"]
+                                        elif "status" in json_data:
+                                            # 跳过状态消息
+                                            return
+                                    except json.JSONDecodeError:
+                                        # 不是有效的JSON，保持原样
+                                        pass
+                                
+                                if is_thinking:
+                                    # 添加到思考内容
+                                    thinking_content += token
+                                    # 将思考内容格式化为引用文本
+                                    thinking_lines = thinking_content.split('\n')
+                                    quoted_thinking = '\n'.join([f"> {line}" for line in thinking_lines])
+                                    # 在占位符中显示
+                                    message_placeholder.markdown(quoted_thinking)
+                                else:
+                                    # 添加到完整响应
+                                    full_response += token
+                                    # 在占位符中显示，添加光标模拟打字效果
+                                    message_placeholder.markdown(full_response + "▌")
+                            except Exception as e:
+                                print(f"处理令牌出错: {str(e)}")
+                        
+                        # 使用流式 API
+                        with st.spinner("思考中..."):
+                            try:
+                                raw_thinking = send_message_stream(prompt, handle_token)
+                                # 检查是否有响应
+                                if not full_response or full_response.startswith("{") and full_response.endswith("}"):
+                                    print("流式响应格式不正确，使用非流式API")
+                                    response = send_message(prompt)
+                                    if response:
+                                        full_response = response.get("answer", "")
+                                        message_placeholder.markdown(full_response)
+                                        # 如果有执行日志，保存到会话状态
+                                        if "execution_log" in response and st.session_state.debug_mode:
+                                            st.session_state.execution_log = response["execution_log"]
+                            except Exception as e:
+                                print(f"流式API失败: {str(e)}")
+                                response = send_message(prompt)
+                                if response:
+                                    full_response = response.get("answer", "")
+                                    message_placeholder.markdown(full_response)
+                                    # 如果有执行日志，保存到会话状态
+                                    if "execution_log" in response and st.session_state.debug_mode:
+                                        st.session_state.execution_log = response["execution_log"]
+                        
+                        # 最后一次更新，移除光标
+                        message_placeholder.markdown(full_response)
+                        
+                        # 创建消息对象
+                        message_obj = {
+                            "role": "assistant",
+                            "content": full_response,
+                            "message_id": str(uuid.uuid4())
+                        }
+                        
+                        # 如果有思考内容，添加到消息中
+                        if thinking_content:
+                            message_obj["raw_thinking"] = thinking_content
+                            message_obj["processed_content"] = full_response
+                    else:
+                        # 使用非流式 API
+                        with st.spinner("思考中..."):
+                            response = send_message(prompt)
+                        
+                        if response:
+                            answer = response.get("answer", "抱歉，我无法处理您的请求。")
+                            
+                            # 在占位符中显示内容
+                            message_placeholder.markdown(answer)
+                            
+                            # 创建消息对象
+                            message_obj = {
+                                "role": "assistant", 
+                                "content": answer,
+                                "message_id": str(uuid.uuid4())
+                            }
+                            
+                            # 如果有思考内容，添加到消息中
+                            if "raw_thinking" in response:
+                                message_obj["raw_thinking"] = response["raw_thinking"]
+                                message_obj["processed_content"] = answer
+                                
+                            # 添加执行轨迹到消息对象
+                            if "execution_log" in response and st.session_state.debug_mode:
+                                st.session_state.execution_log = response["execution_log"]
                         else:
-                            # 添加到完整响应
-                            full_response += token
-                            # 在占位符中显示，添加光标模拟打字效果
-                            message_placeholder.markdown(full_response + "▌")
-                    
-                    # 使用流式 API
-                    with st.spinner("思考中..."):
-                        raw_thinking = send_message_stream(prompt, handle_token)
-                    
-                    # 最后一次更新，移除光标
-                    message_placeholder.markdown(full_response)
-                    
-                    # 创建消息对象
-                    message_obj = {
-                        "role": "assistant",
-                        "content": full_response,
-                        "message_id": str(uuid.uuid4())
-                    }
-                    
-                    # 如果有思考内容，添加到消息中
-                    if thinking_content:
-                        message_obj["raw_thinking"] = thinking_content
-                        message_obj["processed_content"] = full_response
+                            # 处理响应为空的情况
+                            error_message = "抱歉，服务器没有返回有效响应。"
+                            message_placeholder.markdown(error_message)
+                            message_obj = {
+                                "role": "assistant", 
+                                "content": error_message,
+                                "message_id": str(uuid.uuid4())
+                            }
                     
                     # 添加到会话状态
                     st.session_state.messages.append(message_obj)
@@ -366,11 +453,12 @@ def display_chat_interface():
                             current_msg_index = len(st.session_state.messages) - 1
                             
                             # 优先使用后端返回的kg_data
-                            kg_data = response.get("kg_data")
+                            kg_data = response.get("kg_data") if not use_stream else None
                             
                             # 如果后端没有返回kg_data，尝试从回答中提取，并传递用户查询
                             if not kg_data or len(kg_data.get("nodes", [])) == 0:
-                                kg_data = get_knowledge_graph_from_message(response["answer"], prompt)
+                                answer_content = message_obj["content"]
+                                kg_data = get_knowledge_graph_from_message(answer_content, prompt)
                             
                             if kg_data and len(kg_data.get("nodes", [])) > 0:
                                 # 更新该消息的kg_data
@@ -383,9 +471,11 @@ def display_chat_interface():
                                 st.session_state.current_tab = "知识图谱"
                                 st.rerun()
                             else:
-                                st.error("无法提取知识图谱数据")
+                                if st.session_state.agent_type != "deep_research_agent":
+                                    st.warning("无法提取知识图谱数据")
                 except Exception as e:
                     st.error(f"处理消息时出错: {str(e)}")
+                    traceback.print_exc()
                 finally:
                     # 确保请求处理完成后释放锁
                     st.session_state.processing_lock = False

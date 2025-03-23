@@ -20,7 +20,7 @@ def display_chat_interface():
     
     # 设置栏
     with st.container():
-        col1, col2, col3 = st.columns([3, 1, 1])  # 修改为三列布局
+        col1, col2, col3 = st.columns([3, 1, 1])
         
         with col1:
             # 添加重置锁的功能到 selectbox 的 on_change 参数
@@ -61,13 +61,18 @@ def display_chat_interface():
                 st.session_state.use_deeper_tool = use_deeper
     
         with col2:
-            # 添加流式响应选项
-            use_stream = st.checkbox("使用流式响应", 
-                                     value=st.session_state.get("use_stream", True),
-                                     key="header_use_stream",
-                                     help="启用流式响应，实时显示生成结果",
-                                     on_change=reset_processing_lock)
-            st.session_state.use_stream = use_stream
+            # 添加流式响应选项 - 仅当调试模式未启用时显示
+            if not st.session_state.debug_mode:
+                use_stream = st.checkbox("使用流式响应", 
+                                        value=st.session_state.get("use_stream", True),
+                                        key="header_use_stream",
+                                        help="启用流式响应，实时显示生成结果",
+                                        on_change=reset_processing_lock)
+                st.session_state.use_stream = use_stream
+            else:
+                # 在调试模式下自动禁用流式响应
+                st.session_state.use_stream = False
+                st.info("调试模式下已禁用流式响应")
             
         with col3:
             # 修改清除聊天按钮，添加重置锁的功能
@@ -331,8 +336,8 @@ def display_chat_interface():
                     full_response = ""
                     thinking_content = ""
                     
-                    # 检查是否使用流式响应
-                    use_stream = st.session_state.get("use_stream", True)
+                    # 检查流式响应是否启用 (当调试模式禁用时)
+                    use_stream = st.session_state.get("use_stream", True) and not st.session_state.debug_mode
                     
                     if use_stream:
                         # 定义令牌处理器
@@ -382,44 +387,12 @@ def display_chat_interface():
                                     if response:
                                         full_response = response.get("answer", "")
                                         message_placeholder.markdown(full_response)
-                                        # 如果有执行日志，保存到会话状态
-                                        if "execution_log" in response and st.session_state.debug_mode:
-                                            # 确保获取到的执行日志是可用的
-                                            if isinstance(response["execution_log"], list):
-                                                st.session_state.execution_log = response["execution_log"]
-                                            elif isinstance(response["execution_log"], dict):
-                                                # 可能是单个日志条目
-                                                st.session_state.execution_log = [response["execution_log"]]
-                                            else:
-                                                # 尝试将其他格式转换为字符串
-                                                try:
-                                                    import json
-                                                    log_str = json.dumps(response["execution_log"])
-                                                    st.session_state.execution_log = [{"node": "parse_error", "input": "N/A", "output": log_str}]
-                                                except:
-                                                    st.session_state.execution_log = [{"node": "error", "input": "N/A", "output": "无法解析执行日志"}]
                             except Exception as e:
                                 print(f"流式API失败: {str(e)}")
                                 response = send_message(prompt)
                                 if response:
                                     full_response = response.get("answer", "")
                                     message_placeholder.markdown(full_response)
-                                    # 如果有执行日志，保存到会话状态
-                                    if "execution_log" in response and st.session_state.debug_mode:
-                                            # 确保获取到的执行日志是可用的
-                                            if isinstance(response["execution_log"], list):
-                                                st.session_state.execution_log = response["execution_log"]
-                                            elif isinstance(response["execution_log"], dict):
-                                                # 可能是单个日志条目
-                                                st.session_state.execution_log = [response["execution_log"]]
-                                            else:
-                                                # 尝试将其他格式转换为字符串
-                                                try:
-                                                    import json
-                                                    log_str = json.dumps(response["execution_log"])
-                                                    st.session_state.execution_log = [{"node": "parse_error", "input": "N/A", "output": log_str}]
-                                                except:
-                                                    st.session_state.execution_log = [{"node": "error", "input": "N/A", "output": "无法解析执行日志"}]
                         
                         # 最后一次更新，移除光标
                         message_placeholder.markdown(full_response)

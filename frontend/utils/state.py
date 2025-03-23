@@ -18,8 +18,14 @@ def init_session_state():
         st.session_state.show_thinking = False  # 默认不显示思考过程
     if 'use_deeper_tool' not in st.session_state:
         st.session_state.use_deeper_tool = True  # 默认使用增强版研究工具
+    
+    # 流式响应设置 - 默认启用，但调试模式下自动禁用
     if 'use_stream' not in st.session_state:
-        st.session_state.use_stream = True  # 默认使用流式响应
+        st.session_state.use_stream = True
+    elif st.session_state.debug_mode:
+        # 确保调试模式下禁用流式响应
+        st.session_state.use_stream = False
+        
     if 'kg_data' not in st.session_state:
         st.session_state.kg_data = None
     if 'source_content' not in st.session_state:
@@ -36,10 +42,6 @@ def init_session_state():
         st.session_state.processing_lock = False
     if 'current_kg_message' not in st.session_state:
         st.session_state.current_kg_message = None
-    if 'deep_research_iterations' not in st.session_state:
-        st.session_state.deep_research_iterations = []
-    if 'iterations' not in st.session_state:
-        st.session_state.iterations = []
 
     if 'cache' not in st.session_state:
         st.session_state.cache = {

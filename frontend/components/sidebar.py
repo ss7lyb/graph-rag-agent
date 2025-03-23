@@ -51,25 +51,38 @@ def display_sidebar():
             # 如果切换到其他Agent类型，重置show_thinking为False
             st.session_state.show_thinking = False
         
-        # 添加流式响应选项（所有Agent共用）
-        st.header("响应设置")
-        use_stream = st.checkbox("使用流式响应", 
-                               value=st.session_state.get("use_stream", True), 
-                               key="sidebar_use_stream",
-                               help="启用流式响应，实时显示生成结果")
-        # 更新全局 use_stream
-        st.session_state.use_stream = use_stream
-        
         st.markdown("---")
         
+        # 系统设置部分 - 组合调试模式和响应设置
+        st.header("系统设置")
+        
         # 调试选项
-        st.header("调试选项")
         debug_mode = st.checkbox("启用调试模式", 
                                value=st.session_state.debug_mode, 
                                key="sidebar_debug_mode",
                                help="显示执行轨迹、知识图谱和源内容")
+        
+        # 当调试模式切换时，处理流式响应状态
+        previous_debug_mode = st.session_state.debug_mode
+        if debug_mode != previous_debug_mode:
+            if debug_mode:
+                # 启用调试模式时，禁用流式响应
+                st.session_state.use_stream = False
+        
         # 更新全局debug_mode
         st.session_state.debug_mode = debug_mode
+        
+        # 添加流式响应选项（仅当调试模式未启用时显示）
+        if not debug_mode:
+            use_stream = st.checkbox("使用流式响应", 
+                                   value=st.session_state.get("use_stream", True), 
+                                   key="sidebar_use_stream",
+                                   help="启用流式响应，实时显示生成结果")
+            # 更新全局 use_stream
+            st.session_state.use_stream = use_stream
+        else:
+            # 在调试模式下显示提示
+            st.info("调试模式下已禁用流式响应")
         
         st.markdown("---")
         
@@ -80,7 +93,7 @@ def display_sidebar():
         for question in example_questions:
             st.markdown(f"""
             <div style="background-color: #f7f7f7; padding: 8px; 
-                 border-radius: 4px; margin: 5px 0; font-size: 14px;">
+                 border-radius: 4px; margin: 5px 0; font-size: 14px; cursor: pointer;">
                 {question}
             </div>
             """, unsafe_allow_html=True)

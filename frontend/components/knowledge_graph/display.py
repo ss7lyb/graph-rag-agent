@@ -38,20 +38,44 @@ def display_knowledge_graph_tab(tabs):
         if not should_load_kg:
             if kg_display_mode == "回答相关图谱" and "kg_related_cached" in st.session_state:
                 st.success(st.session_state.kg_related_message)
-                st.session_state.kg_related_cached()
+                try:
+                    st.session_state.kg_related_cached()
+                except Exception as e:
+                    st.error(f"显示图谱时出错: {str(e)}")
+                    # 重置相关缓存
+                    if "kg_related_cached" in st.session_state:
+                        del st.session_state.kg_related_cached
+                    # 尝试显示全局图谱
+                    st.warning("无法显示相关图谱，尝试加载全局知识图谱...")
+                    with st.spinner("加载全局知识图谱..."):
+                        kg_data = get_knowledge_graph(limit=100)
+                        if kg_data and len(kg_data.get("nodes", [])) > 0:
+                            visualize_knowledge_graph(kg_data)
                 return
             elif kg_display_mode == "全局知识图谱" and "kg_global_cached" in st.session_state:
                 st.success("显示全局知识图谱")
-                st.session_state.kg_global_cached()
+                try:
+                    st.session_state.kg_global_cached()
+                except Exception as e:
+                    st.error(f"显示全局图谱时出错: {str(e)}")
+                    # 重置相关缓存
+                    if "kg_global_cached" in st.session_state:
+                        del st.session_state.kg_global_cached
+                    # 重新加载全局图谱
+                    with st.spinner("重新加载全局知识图谱..."):
+                        kg_data = get_knowledge_graph(limit=100)
+                        if kg_data and len(kg_data.get("nodes", [])) > 0:
+                            visualize_knowledge_graph(kg_data)
                 return
         
         # 需要重新加载图谱数据
         if kg_display_mode == "回答相关图谱" and "current_kg_message" in st.session_state and st.session_state.current_kg_message is not None:
             msg_idx = st.session_state.current_kg_message
             
-            # 安全地检查索引是否有效
+            # 安全地检查索引是否有效以及kg_data是否存在
             if (0 <= msg_idx < len(st.session_state.messages) and 
                 "kg_data" in st.session_state.messages[msg_idx] and 
+                st.session_state.messages[msg_idx]["kg_data"] is not None and
                 len(st.session_state.messages[msg_idx]["kg_data"].get("nodes", [])) > 0):
                 
                 # 获取相关回答的消息内容前20个字符用于显示
@@ -63,10 +87,10 @@ def display_knowledge_graph_tab(tabs):
                 
                 # 使用缓存机制记住可视化函数
                 def display_cached_kg():
-                    if msg_idx >= 0 and msg_idx < len(st.session_state.messages):
+                    if msg_idx >= 0 and msg_idx < len(st.session_state.messages) and "kg_data" in st.session_state.messages[msg_idx]:
                         visualize_knowledge_graph(st.session_state.messages[msg_idx]["kg_data"])
                     else:
-                        st.error("无法显示知识图谱：消息索引无效")
+                        st.error("无法显示知识图谱：消息索引无效或缺少图谱数据")
                         # 重置相关状态
                         if "kg_related_cached" in st.session_state:
                             del st.session_state.kg_related_cached
@@ -75,7 +99,16 @@ def display_knowledge_graph_tab(tabs):
                 st.session_state.kg_related_cached = display_cached_kg
                 
                 # 显示图谱
-                display_cached_kg()
+                try:
+                    display_cached_kg()
+                except Exception as e:
+                    st.error(f"显示图谱时出错: {str(e)}")
+                    # 尝试显示全局图谱
+                    st.warning("尝试加载全局知识图谱...")
+                    with st.spinner("加载全局知识图谱..."):
+                        kg_data = get_knowledge_graph(limit=100)
+                        if kg_data and len(kg_data.get("nodes", [])) > 0:
+                            visualize_knowledge_graph(kg_data)
             else:
                 st.info("未找到与当前回答相关的知识图谱数据")
                 # 如果没有相关的图谱数据，默认显示全局图谱
@@ -108,17 +141,21 @@ def display_knowledge_graph_tab(tabs):
                 else:
                     st.warning("未能加载全局知识图谱数据")
         
-        if ("current_kg_message" in st.session_state and 
-            st.session_state.current_kg_message is not None and
-            0 <= st.session_state.current_kg_message < len(st.session_state.messages) and
-            "kg_data" in st.session_state.messages[st.session_state.current_kg_message]):
-            
-            kg_data = st.session_state.messages[st.session_state.current_kg_message]["kg_data"]
-            if kg_data and len(kg_data.get("nodes", [])) > 0:
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("节点数量", len(kg_data["nodes"]))
-                with col2:
-                    st.metric("关系数量", len(kg_data["links"]))
-        elif kg_display_mode == "回答相关图谱":
-            st.info("在调试模式下发送查询获取相关的知识图谱")
+        # 显示当前图谱的节点和关系数量
+        try:
+            if ("current_kg_message" in st.session_state and 
+                st.session_state.current_kg_message is not None and
+                0 <= st.session_state.current_kg_message < len(st.session_state.messages) and
+                "kg_data" in st.session_state.messages[st.session_state.current_kg_message]):
+                
+                kg_data = st.session_state.messages[st.session_state.current_kg_message]["kg_data"]
+                if kg_data and len(kg_data.get("nodes", [])) > 0:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("节点数量", len(kg_data["nodes"]))
+                    with col2:
+                        st.metric("关系数量", len(kg_data["links"]))
+            elif kg_display_mode == "回答相关图谱":
+                st.info("在调试模式下发送查询获取相关的知识图谱")
+        except Exception as e:
+            st.error(f"显示图谱统计信息时出错: {str(e)}")

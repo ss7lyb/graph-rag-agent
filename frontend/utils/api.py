@@ -69,6 +69,16 @@ def send_message_stream(message: str, on_token: Callable[[str, bool], None]) -> 
     Returns:
         str: 收集的思考内容（如果有）
     """
+    # 如果调试模式启用，直接回退到非流式API
+    if st.session_state.debug_mode:
+        print("调试模式已启用，使用非流式API")
+        response = send_message(message)
+        if response and "answer" in response:
+            on_token(response["answer"])
+            # 如果有思考内容，返回它
+            return response.get("raw_thinking", "")
+        return ""
+        
     try:
         # 构建请求参数
         params = {

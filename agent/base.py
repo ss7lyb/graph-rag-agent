@@ -105,7 +105,44 @@ class BaseAgent(ABC):
         返回:
             AsyncGenerator[str, None]: 流式响应生成器
         """
-        yield "当前代理类型不支持流式输出"
+        # 获取消息
+        messages = inputs.get("messages", [])
+        query = messages[-1].content if messages else ""
+        
+        # 构建状态字典
+        state = {
+            "messages": messages,
+            "configurable": config.get("configurable", {})
+        }
+        
+        # 获取生成结果
+        result = await self._generate_node_async(state)
+        
+        if "messages" in result and result["messages"]:
+            message = result["messages"][0]
+            content = message.content if hasattr(message, "content") else str(message)
+            
+            # 按句子或段落分块，更自然
+            import re
+            chunks = re.split(r'([.!?。！？]\s*)', content)
+            buffer = ""
+            
+            for i in range(0, len(chunks)):
+                if i < len(chunks):
+                    buffer += chunks[i]
+                    
+                    # 当缓冲区包含完整句子或达到合理大小时输出
+                    if (i % 2 == 1) or len(buffer) >= 40:
+                        yield buffer
+                        buffer = ""
+                        await asyncio.sleep(0.01)  # 微小延迟确保流畅显示
+            
+            # 输出任何剩余内容
+            if buffer:
+                yield buffer
+        else:
+            yield "无法生成响应。"
+
     
     @abstractmethod
     def _add_retrieval_edges(self, workflow):
@@ -192,6 +229,24 @@ class BaseAgent(ABC):
             for i in range(0, len(content), chunk_size):
                 yield content[i:i+chunk_size]
                 await asyncio.sleep(0.01)
+    
+    async def _generate_node_async(self, state):
+        """
+        生成回答节点逻辑的异步版本
+        
+        参数:
+            state: 当前状态
+            
+        返回:
+            Dict: 包含消息的结果字典
+        """
+        # 这个默认实现只是调用同步版本
+        # 子类应该提供真正的异步实现
+        def sync_generate():
+            return self._generate_node(state)
+            
+        # 在线程池中运行同步代码，避免阻塞事件循环
+        return await asyncio.get_event_loop().run_in_executor(None, sync_generate)
     
     def check_fast_cache(self, query: str, thread_id: str = "default") -> str:
         """专用的快速缓存检查方法，用于高性能路径"""
@@ -378,17 +433,25 @@ class BaseAgent(ABC):
         safe_query = query.strip()
         
         # 首先尝试快速路径 - 跳过验证的高质量缓存
-        fast_cache_start = time.time()
         fast_result = self.check_fast_cache(safe_query, thread_id)
-        fast_cache_time = time.time() - fast_cache_start
-        
         if fast_result:
-            print(f"快速路径缓存命中: {safe_query[:30]}... ({fast_cache_time:.4f}s)")
-            # 对于缓存的响应，分块返回以模拟流式输出
-            chunk_size = 4  # 每个分块的字符数
-            for i in range(0, len(fast_result), chunk_size):
-                yield fast_result[i:i+chunk_size]
-                await asyncio.sleep(0.01)  # 小延迟模拟流式输出
+            # 对于缓存响应，按自然语言单位分块返回
+            import re
+            chunks = re.split(r'([.!?。！？]\s*)', fast_result)
+            buffer = ""
+            
+            for i in range(0, len(chunks)):
+                buffer += chunks[i]
+                
+                # 当缓冲区包含完整句子或达到合理大小时输出
+                if (i % 2 == 1) or len(buffer) >= 40:
+                    yield buffer
+                    buffer = ""
+                    await asyncio.sleep(0.01)
+            
+            # 输出任何剩余内容
+            if buffer:
+                yield buffer
             return
         
         # 尝试常规缓存路径
@@ -397,17 +460,26 @@ class BaseAgent(ABC):
         cache_time = time.time() - cache_start
         
         if cached_response:
-            print(f"常规缓存命中: {safe_query[:30]}... ({cache_time:.4f}s)")
-            # 对于缓存的响应，分块返回以模拟流式输出
-            chunk_size = 4  # 每个分块的字符数
-            for i in range(0, len(cached_response), chunk_size):
-                yield cached_response[i:i+chunk_size]
-                await asyncio.sleep(0.01)
+            # 同样按自然语言单位分块
+            import re
+            chunks = re.split(r'([.!?。！？]\s*)', cached_response)
+            buffer = ""
+            
+            for i in range(0, len(chunks)):
+                buffer += chunks[i]
+                
+                # 当缓冲区包含完整句子或达到合理大小时输出
+                if (i % 2 == 1) or len(buffer) >= 40:
+                    yield buffer
+                    buffer = ""
+                    await asyncio.sleep(0.01)
+            
+            # 输出任何剩余内容
+            if buffer:
+                yield buffer
             return
         
         # 未命中缓存，执行标准流程
-        process_start = time.time()
-        
         config = {
             "configurable": {
                 "thread_id": thread_id,
@@ -429,18 +501,14 @@ class BaseAgent(ABC):
             if answer and len(answer) > 10:
                 self.cache_manager.set(safe_query, answer, thread_id=thread_id)
             
-            process_time = time.time() - process_start
-            print(f"流式处理耗时: {process_time:.4f}s")
-            
-            overall_time = time.time() - overall_start
+            process_time = time.time() - overall_start
             self._log_performance("ask_stream", {
-                "total_duration": overall_time,
-                "cache_check": cache_time,
+                "total_duration": process_time,
                 "processing": process_time
             })
             
         except Exception as e:
-            error_time = time.time() - process_start
+            error_time = time.time() - overall_start
             error_msg = f"处理查询时出错: {str(e)} ({error_time:.4f}s)"
             print(error_msg)
             yield error_msg

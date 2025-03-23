@@ -99,8 +99,13 @@ python build/main.py
 测试对知识图谱的搜索：
 
 ```bash
-cd graph-rag-agent/
-python search_test.py
+cd graph-rag-agent/test
+
+# 非流式
+python search_without_stream.py
+
+# 流式
+python search_with_stream.py
 ```
 
 前端的示例问题修改：config/settings.py:

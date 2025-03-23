@@ -4,6 +4,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langgraph.prebuilt import tools_condition
 import asyncio
+import re
 
 from config.prompt import LC_SYSTEM_PROMPT
 from config.settings import response_type
@@ -156,7 +157,22 @@ class HybridAgent(BaseAgent):
         # 检查缓存
         cached_result = self.cache_manager.get(f"generate:{question}", thread_id=thread_id)
         if cached_result:
-            yield cached_result
+            # 按句子分块输出
+            chunks = re.split(r'([.!?。！？]\s*)', cached_result)
+            buffer = ""
+            
+            for i in range(0, len(chunks)):
+                buffer += chunks[i]
+                
+                # 当缓冲区包含完整句子或达到合理大小时输出
+                if (i % 2 == 1) or len(buffer) >= 40:
+                    yield buffer
+                    buffer = ""
+                    await asyncio.sleep(0.01)
+            
+            # 输出任何剩余内容
+            if buffer:
+                yield buffer
             return
 
         prompt = ChatPromptTemplate.from_messages([
@@ -182,6 +198,8 @@ class HybridAgent(BaseAgent):
         
         # 处理流式响应
         result = ""
+        buffer = ""
+        
         try:
             async for chunk in rag_chain.astream({
                 "context": docs, 
@@ -194,47 +212,77 @@ class HybridAgent(BaseAgent):
                 else:
                     token = str(chunk)
                     
-                # 返回 token 给调用者
-                yield token
-                
-                # 添加到完整结果
+                # 添加到完整结果和缓冲区
                 result += token
+                buffer += token
+                
+                # 当缓冲区达到一定大小或含有自然断句时输出
+                if len(buffer) >= 40 or re.search(r'[.!?。！？]\s*$', buffer):
+                    yield buffer
+                    buffer = ""
+                    await asyncio.sleep(0.01)
+            
+            # 输出剩余内容
+            if buffer:
+                yield buffer
             
             # 缓存完整结果
             if result and len(result) > 10:
                 self.cache_manager.set(f"generate:{question}", result, thread_id=thread_id)
+        
         except Exception as e:
             error_msg = f"生成回答时出错: {str(e)}"
             yield error_msg
-    
+
     async def _stream_process(self, inputs, config):
         """实现流式处理过程"""
         # 实现与 GraphAgent 类似，但针对 HybridAgent 的特性
         thread_id = config.get("configurable", {}).get("thread_id", "default")
         query = inputs["messages"][-1].content
         
-        # 缓存检查与 GraphAgent 相同
+        # 缓存检查与处理同GraphAgent相同
         cached_response = self.cache_manager.get(query.strip(), thread_id=thread_id)
         if cached_response:
-            chunk_size = 4
-            for i in range(0, len(cached_response), chunk_size):
-                yield cached_response[i:i+chunk_size]
-                await asyncio.sleep(0.01)
+            # 对于缓存的响应，按自然语言单位分块返回
+            chunks = re.split(r'([.!?。！？]\s*)', cached_response)
+            buffer = ""
+            
+            for i in range(0, len(chunks)):
+                buffer += chunks[i]
+                
+                # 当缓冲区包含完整句子或达到合理大小时输出
+                if (i % 2 == 1) or len(buffer) >= 40:
+                    yield buffer
+                    buffer = ""
+                    await asyncio.sleep(0.01)
+            
+            # 输出任何剩余内容
+            if buffer:
+                yield buffer
             return
         
-        # 工作流处理与 GraphAgent 相同
+        # 工作流处理与GraphAgent相同，但添加进度提示
         workflow_state = {"messages": [HumanMessage(content=query)]}
         
+        # 输出一个处理开始的提示
+        yield "正在分析问题..."
+        
         # 执行 agent 节点
-        agent_output = self._agent_node(workflow_state)
+        agent_output = await self._agent_node_async(workflow_state)
         workflow_state = {"messages": workflow_state["messages"] + agent_output["messages"]}
         
         # 检查是否需要使用工具
         tool_decision = tools_condition(workflow_state)
         if tool_decision == "tools":
+            # 告知用户正在检索
+            yield "正在检索相关信息..."
+            
             # 执行检索节点
             retrieve_output = await self._retrieve_node_async(workflow_state)
             workflow_state = {"messages": workflow_state["messages"] + retrieve_output["messages"]}
+            
+            # 告知用户正在生成回答
+            yield "正在生成回答..."
             
             # 流式生成节点输出
             async for token in self._generate_node_stream(workflow_state):
@@ -244,10 +292,22 @@ class HybridAgent(BaseAgent):
             final_msg = workflow_state["messages"][-1]
             content = final_msg.content if hasattr(final_msg, "content") else str(final_msg)
             
-            chunk_size = 4
-            for i in range(0, len(content), chunk_size):
-                yield content[i:i+chunk_size]
-                await asyncio.sleep(0.01)
+            # 按自然语言单位分块
+            chunks = re.split(r'([.!?。！？]\s*)', content)
+            buffer = ""
+            
+            for i in range(0, len(chunks)):
+                buffer += chunks[i]
+                
+                # 当缓冲区包含完整句子或达到合理大小时输出
+                if (i % 2 == 1) or len(buffer) >= 40:
+                    yield buffer
+                    buffer = ""
+                    await asyncio.sleep(0.01)
+            
+            # 输出任何剩余内容
+            if buffer:
+                yield buffer
     
     async def _retrieve_node_async(self, state):
         """检索节点的异步版本"""
@@ -256,27 +316,79 @@ class HybridAgent(BaseAgent):
             last_message = state["messages"][-1]
             
             # 安全获取工具调用信息
-            tool_info = self._get_tool_call_info(last_message)
+            tool_calls = []
             
-            # 获取查询
-            query = tool_info["args"].get("query", "")
-            if not query:
+            # 检查additional_kwargs中的tool_calls
+            if hasattr(last_message, 'additional_kwargs') and last_message.additional_kwargs:
+                tool_calls = last_message.additional_kwargs.get('tool_calls', [])
+            
+            # 检查直接的tool_calls属性
+            if not tool_calls and hasattr(last_message, 'tool_calls') and last_message.tool_calls:
+                tool_calls = last_message.tool_calls
+                
+            # 如果没有找到工具调用
+            if not tool_calls:
                 return {
                     "messages": [
                         AIMessage(content="无法获取查询信息，请重试。")
                     ]
                 }
             
+            # 获取第一个工具调用
+            tool_call = tool_calls[0]
+            
+            # 安全获取查询
+            query = ""
+            tool_id = "tool_call_0"
+            tool_name = "search_tool"
+            
+            # 根据工具调用格式提取参数
+            if isinstance(tool_call, dict):
+                # 提取ID
+                tool_id = tool_call.get("id", tool_id)
+                
+                # 提取函数名称
+                if "function" in tool_call and isinstance(tool_call["function"], dict):
+                    tool_name = tool_call["function"].get("name", tool_name)
+                    
+                    # 提取参数
+                    args = tool_call["function"].get("arguments", {})
+                    if isinstance(args, str):
+                        # 尝试解析JSON
+                        try:
+                            import json
+                            args_dict = json.loads(args)
+                            query = args_dict.get("query", "")
+                        except:
+                            query = args  # 如果解析失败，使用整个字符串作为查询
+                    elif isinstance(args, dict):
+                        query = args.get("query", "")
+                # 直接在root级别检查
+                elif "name" in tool_call:
+                    tool_name = tool_call.get("name", tool_name)
+                
+                # 检查args字段
+                if not query and "args" in tool_call:
+                    args = tool_call["args"]
+                    if isinstance(args, dict):
+                        query = args.get("query", "")
+                    elif isinstance(args, str):
+                        query = args
+            
+            # 如果仍然没有查询，尝试使用最简单的提取
+            if not query and hasattr(last_message, 'content'):
+                query = last_message.content
+                
             # 执行搜索
-            tool_result = self.local_tool.search(query)
+            tool_result = self.search_tool.search(query)
             
             # 返回正确格式的工具消息
             return {
                 "messages": [
                     ToolMessage(
                         content=tool_result,
-                        tool_call_id=tool_info["id"],
-                        name=tool_info["name"]
+                        tool_call_id=tool_id,
+                        name=tool_name
                     )
                 ]
             }
@@ -289,6 +401,51 @@ class HybridAgent(BaseAgent):
                     AIMessage(content=error_msg)
                 ]
             }
+    
+    async def _agent_node_async(self, state):
+        """Agent 节点的异步版本"""
+        def sync_agent():
+            return self._agent_node(state)
+            
+        # 在线程池中运行同步代码，避免阻塞事件循环
+        return await asyncio.get_event_loop().run_in_executor(None, sync_agent)
+    
+    def _get_tool_call_info(self, message):
+        """
+        从消息中提取工具调用信息
+        
+        参数:
+            message: 包含工具调用的消息
+            
+        返回:
+            Dict: 工具调用信息，包括id、name和args
+        """
+        # 检查additional_kwargs中的tool_calls
+        if hasattr(message, 'additional_kwargs') and message.additional_kwargs:
+            tool_calls = message.additional_kwargs.get('tool_calls', [])
+            if tool_calls and len(tool_calls) > 0:
+                tool_call = tool_calls[0]
+                return {
+                    "id": tool_call.get("id", "tool_call_0"),
+                    "name": tool_call.get("function", {}).get("name", "search_tool"),
+                    "args": tool_call.get("function", {}).get("arguments", {})
+                }
+        
+        # 检查直接的tool_calls属性
+        if hasattr(message, 'tool_calls') and message.tool_calls:
+            tool_call = message.tool_calls[0]
+            return {
+                "id": tool_call.get("id", "tool_call_0"),
+                "name": tool_call.get("name", "search_tool"),
+                "args": tool_call.get("args", {})
+            }
+        
+        # 默认返回
+        return {
+            "id": "tool_call_0",
+            "name": "search_tool",
+            "args": {"query": ""}
+        }
     
     def close(self):
         """关闭资源"""

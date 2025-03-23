@@ -175,15 +175,15 @@ class DeepResearchTool(BaseSearchTool):
             """基于问题检索知识库内容"""
             try:
                 # 记录开始检索
-                self._log(f"[KB检索] 开始搜索: {question}")
+                self._log(f"\n[KB检索] 开始搜索: {question}")
 
                 # 使用本地搜索工具
                 result = self.local_tool.search(question)
-                self._log(f"[KB检索] 原始结果: {result}" if isinstance(result, str) else f"[KB检索] 原始结果类型: {type(result)}")
+                self._log(f"\n[KB检索] 原始结果: {result}" if isinstance(result, str) else f"\n[KB检索] 原始结果类型: {type(result)}")
                 
                 # 检查结果是否为空
                 if not result:
-                    print("[KB检索] 搜索结果为空")
+                    print("\n[KB检索] 搜索结果为空")
                     return {
                         "chunks": [],
                         "doc_aggs": [],
@@ -195,9 +195,9 @@ class DeepResearchTool(BaseSearchTool):
                 # 解析结果
                 try:
                     data_dict = self._parse_search_result(result)
-                    self._log(f"[KB检索] 解析结果: {data_dict.keys()}")
+                    self._log(f"\n[KB检索] 解析结果: {data_dict.keys()}")
                 except Exception as parse_e:
-                    print(f"[KB检索] 解析结果失败: {parse_e}")
+                    print(f"\n[KB检索] 解析结果失败: {parse_e}")
                     # 如果解析失败但结果是字符串，创建一个简单的chunk
                     if isinstance(result, str) and len(result) > 10:
                         return {
@@ -279,7 +279,7 @@ class DeepResearchTool(BaseSearchTool):
                     chunk_ids = ["text_result"]
                 
                 # 记录结果统计
-                self._log(f"[KB检索] 结果: {len(chunks)}个chunks, {len(entities)}个实体, {len(relationships)}个关系")
+                self._log(f"\n[KB检索] 结果: {len(chunks)}个chunks, {len(entities)}个实体, {len(relationships)}个关系")
                 
                 return {
                     "chunks": chunks,
@@ -290,7 +290,7 @@ class DeepResearchTool(BaseSearchTool):
                     "Chunks": [c.get("chunk_id") for c in chunks]
                 }
             except Exception as e:
-                print(f"[KB检索错误] {str(e)}")
+                print(f"\n[KB检索错误] {str(e)}")
                 print(traceback.format_exc())
                 return {
                     "chunks": [],
@@ -372,6 +372,47 @@ class DeepResearchTool(BaseSearchTool):
         except Exception as e:
             print(f"[最终答案生成错误] {str(e)}")
             return f"生成最终答案时出错: {str(e)}"
+    
+    async def _async_generate_next_query(self):
+        """异步生成下一个查询"""
+        def sync_generate():
+            return self.thinking_engine.generate_next_query()
+            
+        # 在线程池中运行同步代码，避免阻塞事件循环
+        return await asyncio.get_event_loop().run_in_executor(None, sync_generate)
+
+    async def _async_search(self, query: str):
+        """异步执行搜索，避免阻塞事件循环"""
+        def search_wrapper():
+            return self.dual_searcher.search(query)
+        
+        # 在线程池中运行同步代码，避免阻塞事件循环
+        return await asyncio.get_event_loop().run_in_executor(None, search_wrapper)
+
+    async def _async_extract_info(self, search_query, prev_reasoning, kb_prompt_result):
+        """异步提取信息，避免阻塞"""
+        extract_prompt = RELEVANT_EXTRACTION_PROMPT.format(
+            prev_reasoning=prev_reasoning,
+            search_query=search_query,
+            document=kb_prompt_result
+        )
+        
+        def llm_invoke():
+            response = self.llm.invoke([
+                {"role": "system", "content": extract_prompt},
+                {"role": "user", "content": f'基于当前的搜索查询"{search_query}"和前面的推理步骤，分析每个知识来源并找出有用信息。'}
+            ])
+            return response.content if hasattr(response, 'content') else str(response)
+        
+        # 在线程池中运行同步LLM调用
+        return await asyncio.get_event_loop().run_in_executor(None, llm_invoke)
+
+    async def _async_generate_final_answer(self, query, retrieved_content, thinking):
+        """异步生成最终答案"""
+        def generate_wrapper():
+            return self._generate_final_answer(query, retrieved_content, thinking)
+        
+        return await asyncio.get_event_loop().run_in_executor(None, generate_wrapper)
         
     def _log(self, message):
         """记录执行日志"""
@@ -390,7 +431,7 @@ class DeepResearchTool(BaseSearchTool):
         """
         # 清空执行日志
         self.execution_logs = []
-        self._log(f"[深度研究] 开始处理查询: {query}")
+        self._log(f"\n[深度研究] 开始处理查询: {query}")
         
         # 初始化结果容器
         chunk_info = {"chunks": [], "doc_aggs": []}
@@ -403,7 +444,7 @@ class DeepResearchTool(BaseSearchTool):
         
         # 迭代思考过程
         for iteration in range(self.max_iterations):
-            self._log(f"[深度研究] 开始第{iteration + 1}轮迭代")
+            self._log(f"\n[深度研究] 开始第{iteration + 1}轮迭代")
             
             # 检查是否达到最大迭代次数
             if iteration >= self.max_iterations - 1:
@@ -421,13 +462,13 @@ class DeepResearchTool(BaseSearchTool):
             
             # 处理生成结果
             if result["status"] == "empty":
-                self._log("[深度研究] 生成的思考内容为空")
+                self._log("\n[深度研究] 生成的思考内容为空")
                 continue
             elif result["status"] == "error":
-                self._log(f"[深度研究] 生成查询出错: {result.get('error', '未知错误')}")
+                self._log(f"\n[深度研究] 生成查询出错: {result.get('error', '未知错误')}")
                 break
             elif result["status"] == "answer_ready":
-                self._log("[深度研究] AI认为已有足够信息生成答案")
+                self._log("\n[深度研究] AI认为已有足够信息生成答案")
                 break
                 
             # 获取生成的思考内容
@@ -442,15 +483,15 @@ class DeepResearchTool(BaseSearchTool):
                 if not self.all_retrieved_info:
                     # 如果还没有检索到任何信息，强制使用原始查询
                     queries = [query]
-                    self._log("[深度研究] 没有检索到信息，使用原始查询")
+                    self._log("\n[深度研究] 没有检索到信息，使用原始查询")
                 else:
                     # 已有信息，结束迭代
-                    self._log("[深度研究] 没有生成新查询且已有信息，结束迭代")
+                    self._log("\n[深度研究] 没有生成新查询且已有信息，结束迭代")
                     break
             
             # 处理每个搜索查询
             for search_query in queries:
-                self._log(f"[深度研究] 执行查询: {search_query}")
+                self._log(f"\n[深度研究] 执行查询: {search_query}")
                 
                 # 检查是否已执行过相同查询
                 if self.thinking_engine.has_executed_query(search_query):
@@ -515,9 +556,9 @@ class DeepResearchTool(BaseSearchTool):
                 if has_useful_info:
                     useful_info = summary_think.split("**Final Information**")[1].strip()
                     self.all_retrieved_info.append(useful_info)
-                    self._log(f"[深度研究] 发现有用信息: {useful_info}")
+                    self._log(f"\n[深度研究] 发现有用信息: {useful_info}")
                 else:
-                    self._log("[深度研究] 未发现有用信息")
+                    self._log("\n[深度研究] 未发现有用信息")
                 
                 # 更新推理历史
                 self.thinking_engine.add_reasoning_step(summary_think)
@@ -563,7 +604,7 @@ class DeepResearchTool(BaseSearchTool):
         overall_start = time.time()
         
         # 记录开始搜索
-        self._log(f"[深度搜索] 开始处理查询...")
+        self._log(f"\n[深度搜索] 开始处理查询...")
         
         # 解析输入
         if isinstance(query_input, dict) and "query" in query_input:
@@ -571,18 +612,18 @@ class DeepResearchTool(BaseSearchTool):
         else:
             query = str(query_input)
         
-        self._log(f"[深度搜索] 解析后的查询: {query}")
+        self._log(f"\n[深度搜索] 解析后的查询: {query}")
         
         # 检查缓存
         cache_key = f"deep:{query}"
         cached_result = self.cache_manager.get(cache_key)
         if cached_result:
-            self._log(f"[深度搜索] 缓存命中，返回缓存结果")
+            self._log(f"\n[深度搜索] 缓存命中，返回缓存结果")
             return cached_result
         
         try:
             # 执行思考过程
-            self._log(f"[深度搜索] 开始执行思考过程")
+            self._log(f"\n[深度搜索] 开始执行思考过程")
             result = self.thinking(query)
             answer = result["answer"]
             chunk_info = result.get("reference", {})
@@ -603,14 +644,14 @@ class DeepResearchTool(BaseSearchTool):
             # 验证答案质量
             validation_results = self.validator.validate(query, answer)
             if validation_results["passed"]:
-                self._log(f"[深度搜索] 答案验证通过，缓存结果")
+                self._log(f"\n[深度搜索] 答案验证通过，缓存结果")
                 self.cache_manager.set(cache_key, answer)
             else:
-                self._log(f"[深度搜索] 答案验证失败，不缓存")
+                self._log(f"\n[深度搜索] 答案验证失败，不缓存")
             
             # 记录总时间
             total_time = time.time() - overall_start
-            self._log(f"[深度搜索] 完成，耗时 {total_time:.2f}秒")
+            self._log(f"\n[深度搜索] 完成，耗时 {total_time:.2f}秒")
             self.performance_metrics["total_time"] = total_time
             
             return answer
@@ -667,7 +708,7 @@ class DeepResearchTool(BaseSearchTool):
         """
         # 清空执行日志
         self.execution_logs = []
-        self._log(f"[深度研究] 开始处理查询: {query}")
+        self._log(f"\n[深度研究] 开始处理查询: {query}")
         
         # 初始化结果容器
         chunk_info = {"chunks": [], "doc_aggs": []}
@@ -678,9 +719,16 @@ class DeepResearchTool(BaseSearchTool):
 
         think = ""
         
+        # 向用户发送初始状态提示
+        yield "正在分析您的问题..."
+        
         # 迭代思考过程
         for iteration in range(self.max_iterations):
-            self._log(f"[深度研究] 开始第{iteration + 1}轮迭代")
+            # 发送迭代进度
+            if iteration > 0:
+                yield f"正在进行第{iteration + 1}轮思考..."
+                
+            self._log(f"\n[深度研究] 开始第{iteration + 1}轮迭代")
             
             # 检查是否达到最大迭代次数
             if iteration >= self.max_iterations - 1:
@@ -688,39 +736,53 @@ class DeepResearchTool(BaseSearchTool):
                 self.thinking_engine.add_reasoning_step(summary_think)
                 self.thinking_engine.add_human_message(summary_think)
                 think += self.thinking_engine.remove_result_tags(summary_think)
-                yield summary_think
+                yield "已达到最大搜索次数限制，准备生成最终答案..."
                 break
 
             # 更新消息历史，请求继续推理
             self.thinking_engine.update_continue_message()
             
+            # 让事件循环有机会执行其他任务
+            await asyncio.sleep(0)
+            
             # 生成下一个查询
-            result = self.thinking_engine.generate_next_query()
+            result = await self._async_generate_next_query()
             
             # 处理生成结果
             if result["status"] == "empty":
-                empty_msg = "[深度研究] 生成的思考内容为空"
+                empty_msg = "未能产生新的思考角度，尝试其他方向..."
                 self._log(empty_msg)
                 yield empty_msg
                 continue
             elif result["status"] == "error":
-                error_msg = f"[深度研究] 生成查询出错: {result.get('error', '未知错误')}"
+                error_msg = f"生成查询时遇到错误: {result.get('error', '未知错误')}"
                 self._log(error_msg)
                 yield error_msg
                 break
             elif result["status"] == "answer_ready":
-                ready_msg = "[深度研究] AI认为已有足够信息生成答案"
+                ready_msg = "已收集足够信息，准备生成答案..."
                 self._log(ready_msg)
                 yield ready_msg
                 break
-                
+                    
             # 获取生成的思考内容
             query_think = result["content"]
             think_part = self.thinking_engine.remove_query_tags(query_think)
             think += think_part
             
-            # 返回思考部分
-            yield think_part
+            # 分组返回思考内容，提高可读性
+            thoughts = re.split(r'(\n\n)', think_part)
+            thought_buffer = ""
+            
+            for part in thoughts:
+                thought_buffer += part
+                if len(thought_buffer) >= 80 or "\n\n" in thought_buffer:
+                    yield thought_buffer
+                    thought_buffer = ""
+                    await asyncio.sleep(0.01)
+                    
+            if thought_buffer:
+                yield thought_buffer
             
             # 获取搜索查询
             queries = result["queries"]
@@ -730,125 +792,125 @@ class DeepResearchTool(BaseSearchTool):
                 if not self.all_retrieved_info:
                     # 如果还没有检索到任何信息，强制使用原始查询
                     queries = [query]
-                    no_info_msg = "[深度研究] 没有检索到信息，使用原始查询"
+                    no_info_msg = "没有检索到信息，尝试使用原始问题直接查询..."
                     self._log(no_info_msg)
                     yield no_info_msg
                 else:
                     # 已有信息，结束迭代
-                    end_msg = "[深度研究] 没有生成新查询且已有信息，结束迭代"
+                    end_msg = "没有发现新的查询角度，基于已有信息生成回答..."
                     self._log(end_msg)
                     yield end_msg
                     break
             
             # 处理每个搜索查询
             for search_query in queries:
-                query_msg = f"[深度研究] 执行查询: {search_query}"
-                self._log(query_msg)
-                yield query_msg
-                
+                search_start_msg = f"正在搜索: {search_query}"
+                self._log(search_start_msg)
+                yield search_start_msg
+                    
                 # 检查是否已执行过相同查询
                 if self.thinking_engine.has_executed_query(search_query):
-                    dupe_msg = f"\n已搜索过该查询 '{search_query}'。请参考前面的结果。\n"
-                    self.thinking_engine.add_reasoning_step(dupe_msg)
-                    self.thinking_engine.add_human_message(dupe_msg)
-                    think += self.thinking_engine.remove_result_tags(dupe_msg)
+                    dupe_msg = f"已搜索过类似查询，跳过重复执行"
+                    self._log(dupe_msg)
                     yield dupe_msg
                     continue
-                
+                    
                 # 记录已执行查询
                 self.thinking_engine.add_executed_query(search_query)
-                
+                    
                 # 将搜索查询添加到消息历史
                 self.thinking_engine.add_ai_message(f"{search_query}")
                 think += f"\n\n> {iteration + 1}. {search_query}\n\n"
-                
+                    
+                # 让事件循环有机会执行其他任务
+                await asyncio.sleep(0)
+                    
                 # 执行实际搜索
-                search_msg = f"[KB检索] 开始搜索: {search_query}"
-                self._log(search_msg)
-                yield search_msg
-                
-                kbinfos = self.dual_searcher.search(search_query)
-                
+                yield "正在查询知识库..."
+                kbinfos = await self._async_search(search_query)
+                    
                 # 检查搜索结果是否为空
                 has_results = (
                     kbinfos.get("chunks", []) or 
                     kbinfos.get("entities", []) or 
                     kbinfos.get("relationships", [])
                 )
-                
+                    
                 if not has_results:
-                    no_result_msg = f"\n没有找到与'{search_query}'相关的信息。请尝试使用不同的关键词进行搜索。\n"
-                    self.thinking_engine.add_reasoning_step(no_result_msg)
-                    self.thinking_engine.add_human_message(no_result_msg)
-                    think += self.thinking_engine.remove_result_tags(no_result_msg)
+                    no_result_msg = f"没有找到与{search_query}相关的信息，尝试其他角度..."
+                    self._log(no_result_msg)
                     yield no_result_msg
+                    self.thinking_engine.add_reasoning_step(f"\n没有找到与'{search_query}'相关的信息。请尝试使用不同的关键词进行搜索。\n")
+                    self.thinking_engine.add_human_message(f"\n没有找到与'{search_query}'相关的信息。请尝试使用不同的关键词进行搜索。\n")
+                    think += no_result_msg
                     continue
-                
+                    
                 # 正常处理有结果的情况
                 truncated_prev_reasoning = self.thinking_engine.prepare_truncated_reasoning()
-                
+                    
                 # 合并块信息
                 chunk_info = self.dual_searcher._merge_results(chunk_info, kbinfos)
-                
+                    
                 # 构建提取相关信息的提示
                 kb_prompt_result = "\n".join(kb_prompt(kbinfos, 4096))
-                extract_prompt = RELEVANT_EXTRACTION_PROMPT.format(
-                    prev_reasoning=truncated_prev_reasoning,
-                    search_query=search_query,
-                    document=kb_prompt_result
-                )
-                
-                # 使用LLM提取有用信息 - 流式LLM更佳但此处保持原实现
-                extraction_msg = self.llm.invoke([
-                    {"role": "system", "content": extract_prompt},
-                    {"role": "user", "content": f'基于当前的搜索查询"{search_query}"和前面的推理步骤，分析每个知识来源并找出有用信息。'}
-                ])
-                
-                summary_think = extraction_msg.content if hasattr(extraction_msg, 'content') else str(extraction_msg)
-                
+                    
+                # 告知用户正在分析结果
+                yield "正在分析搜索结果..."
+                    
+                # 使用异步LLM提取有用信息
+                summary_think = await self._async_extract_info(search_query, truncated_prev_reasoning, kb_prompt_result)
+                    
                 # 保存重要信息
                 has_useful_info = (
                     "**Final Information**" in summary_think and 
                     "No helpful information found" not in summary_think
                 )
-                
+                    
                 if has_useful_info:
                     useful_info = summary_think.split("**Final Information**")[1].strip()
                     self.all_retrieved_info.append(useful_info)
-                    useful_msg = f"[深度研究] 发现有用信息: {useful_info}"
-                    self._log(useful_msg)
-                    yield useful_msg
+                    info_msg = f"发现有用信息: {useful_info[:100]}..."
+                    self._log(info_msg)
+                    yield "找到相关信息！"
                 else:
-                    no_useful_msg = "[深度研究] 未发现有用信息"
+                    no_useful_msg = "未从搜索结果中发现特别有价值的信息"
                     self._log(no_useful_msg)
                     yield no_useful_msg
-                
+                    
                 # 更新推理历史
                 self.thinking_engine.add_reasoning_step(summary_think)
                 self.thinking_engine.add_human_message(summary_think)
                 think += self.thinking_engine.remove_result_tags(summary_think)
+                    
+                # 分组返回处理后的思考内容
+                result_parts = re.split(r'(\n\n)', self.thinking_engine.remove_result_tags(summary_think))
+                result_buffer = ""
                 
-                # 返回处理后的思考内容
-                yield self.thinking_engine.remove_result_tags(summary_think)
-        
-        # 生成最终答案
+                for part in result_parts:
+                    result_buffer += part
+                    if len(result_buffer) >= 80 or "\n\n" in result_buffer:
+                        yield result_buffer
+                        result_buffer = ""
+                        await asyncio.sleep(0.01)
+                        
+                if result_buffer:
+                    yield result_buffer
+            
         # 确保至少执行了一次搜索
         if not self.thinking_engine.executed_search_queries:
-            no_search_msg = f"抱歉，我无法回答关于'{query}'的问题，因为没有找到相关信息。"
+            no_search_msg = f"无法找到与{query}相关的信息，尝试给出基础回答..."
             yield no_search_msg
             return
         
+        # 生成最终答案
+        yield "正在根据所有收集的信息生成最终答案..."
+        
         # 使用检索到的信息生成答案
         retrieved_content = "\n\n".join(self.all_retrieved_info)
-        final_answer_msg = "[深度研究] 生成最终答案"
-        self._log(final_answer_msg)
-        yield final_answer_msg
+        final_answer = await self._async_generate_final_answer(query, retrieved_content, think)
         
-        final_answer = self._generate_final_answer(query, retrieved_content, think)
-        final_answer_with_thinking = f"<think>{think}</think>\n\n{final_answer}"
-        
-        # 最终答案单独返回
-        yield {"answer": final_answer_with_thinking, "thinking": think}
+        # 向用户发送最终答案（一次性发送，因为前端会替换整个响应）
+        yield {"answer": final_answer, "thinking": think}
     
     async def search_stream(self, query_input: Any) -> AsyncGenerator[str, None]:
         """
@@ -863,7 +925,7 @@ class DeepResearchTool(BaseSearchTool):
         overall_start = time.time()
         
         # 记录开始搜索
-        self._log(f"[深度搜索] 开始处理查询...")
+        self._log(f"\n[深度搜索] 开始处理查询...")
         
         # 解析输入
         if isinstance(query_input, dict) and "query" in query_input:
@@ -871,55 +933,78 @@ class DeepResearchTool(BaseSearchTool):
         else:
             query = str(query_input)
         
-        self._log(f"[深度搜索] 解析后的查询: {query}")
+        self._log(f"\n[深度搜索] 解析后的查询: {query}")
         
         # 检查缓存
         cache_key = f"deep:{query}"
         cached_result = self.cache_manager.get(cache_key)
         if cached_result:
-            self._log(f"[深度搜索] 缓存命中，分块返回缓存结果")
-            # 分块返回缓存结果
-            chunk_size = 4
-            for i in range(0, len(cached_result), chunk_size):
-                yield cached_result[i:i+chunk_size]
-                await asyncio.sleep(0.01)
+            self._log(f"\n[深度搜索] 缓存命中，分块返回缓存结果")
+            # 分块返回缓存结果 - 更自然的分块
+            chunks = re.split(r'([.!?。！？]\s*)', cached_result)
+            buffer = ""
+            
+            for i in range(0, len(chunks)):
+                buffer += chunks[i]
+                
+                # 当缓冲区包含完整句子或达到合理大小时输出
+                if (i % 2 == 1) or len(buffer) >= 80:
+                    yield buffer
+                    buffer = ""
+                    await asyncio.sleep(0.01)
+            
+            # 输出任何剩余内容
+            if buffer:
+                yield buffer
             return
         
         try:
             # 执行思考过程流
             full_response = ""
             thinking_content = ""
-            last_chunk = None
             
+            # 提示用户处理开始
+            yield "开始深度分析您的问题..."
+            
+            # 使用更高级的流式思考过程
             async for chunk in self.thinking_stream(query):
                 if isinstance(chunk, dict) and "answer" in chunk:
                     # 这是最终结果对象
                     full_response = chunk["answer"]
                     thinking_content = chunk["thinking"]
-                    last_chunk = chunk
+                    
+                    # 不立即返回，而是检查并处理
+                    validation_results = self.validator.validate(query, full_response)
+                    if validation_results["passed"]:
+                        self._log(f"\n[深度搜索] 答案验证通过，缓存结果")
+                        self.cache_manager.set(cache_key, full_response)
+                        
+                        # 将思考过程和最终答案分离
+                        if "<think>" in full_response and "</think>" in full_response:
+                            clean_answer = re.sub(r'<think>.*?</think>\s*', '', full_response, flags=re.DOTALL)
+                            yield clean_answer
+                        else:
+                            yield full_response
+                    else:
+                        self._log(f"\n[深度搜索] 答案验证失败，尝试修复")
+                        yield "正在完善最终答案..."
+                        
+                        # 尝试修复答案
+                        fixed_answer = await self._fix_answer(query, full_response)
+                        yield fixed_answer
                 else:
-                    # 正常返回流式块
+                    # 返回思考过程，避免发送太小的片段
                     yield chunk
-            
-            # 如果有最终答案，返回它
-            if full_response:
-                # 验证答案质量
-                validation_results = self.validator.validate(query, full_response)
-                if validation_results["passed"]:
-                    self._log(f"[深度搜索] 答案验证通过，缓存结果")
-                    self.cache_manager.set(cache_key, full_response)
-                else:
-                    self._log(f"[深度搜索] 答案验证失败，不缓存")
             
             # 记录总时间
             total_time = time.time() - overall_start
-            self._log(f"[深度搜索] 完成，耗时 {total_time:.2f}秒")
+            self._log(f"\n[深度搜索] 完成，耗时 {total_time:.2f}秒")
             self.performance_metrics["total_time"] = total_time
                 
         except Exception as e:
             error_msg = f"深度研究过程中出错: {str(e)}"
             self._log(error_msg)
-            yield error_msg
+            yield f"很抱歉，在处理您的问题时遇到了错误: {str(e)}"
     
     def get_thinking_stream_tool(self) -> BaseTool:
         """获取流式思考过程工具"""
@@ -948,6 +1033,28 @@ class DeepResearchTool(BaseSearchTool):
                 return await self.thinking_stream(tk_query)
         
         return DeepStreamThinkingTool()
+    
+    async def _fix_answer(self, query, answer):
+        """尝试修复低质量答案"""
+        fix_prompt = f"""
+        原问题是: {query}
+        
+        生成的答案可能存在问题: {answer}
+        
+        请提供一个修正后、质量更高的答案，更好地回应用户的问题。
+        确保答案:
+        1. 直接回答问题核心
+        2. 删除不必要的重复内容
+        3. 去除表示不确定的语言
+        4. 结构清晰，重点突出
+        """
+        
+        def llm_fix():
+            response = self.llm.invoke(fix_prompt)
+            return response.content if hasattr(response, 'content') else str(response)
+        
+        # 在线程池中运行同步LLM调用  
+        return await asyncio.get_event_loop().run_in_executor(None, llm_fix)
     
     def close(self):
         """关闭资源"""

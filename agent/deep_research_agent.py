@@ -3,6 +3,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 import asyncio
+import re
 
 from config.prompt import LC_SYSTEM_PROMPT
 from config.settings import response_type

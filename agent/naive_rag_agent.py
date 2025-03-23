@@ -2,6 +2,8 @@ from typing import List, Dict
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+import re
+import asyncio
 
 from config.prompt import NAIVE_PROMPT
 from config.settings import response_type
@@ -107,6 +109,45 @@ class NaiveRagAgent(BaseAgent):
                               {"question": question, "docs_length": len(docs)}, 
                               error_msg)
             return {"messages": [AIMessage(content=f"抱歉，我无法回答这个问题。技术原因: {str(e)}")]}
+    
+    async def _stream_process(self, inputs, config):
+        """实现流式处理过程"""
+        # 获取会话信息
+        thread_id = config.get("configurable", {}).get("thread_id", "default")
+        query = inputs["messages"][-1].content
+        
+        # 开始处理提示
+        yield "开始处理查询..."
+        
+        try:
+            # 执行Naive搜索
+            search_result = self.search_tool.search(query)
+            
+            # 分块返回结果
+            if search_result:
+                yield "已找到相关信息，正在生成回答..."
+                
+                # 分块返回
+                sentences = re.split(r'([.!?。！？]\s*)', search_result)
+                buffer = ""
+                
+                for i in range(0, len(sentences)):
+                    buffer += sentences[i]
+                    
+                    # 当缓冲区包含完整句子或达到合理大小时输出
+                    if (i % 2 == 1) or len(buffer) >= 40:
+                        yield buffer
+                        buffer = ""
+                        await asyncio.sleep(0.01)
+                
+                # 输出任何剩余内容
+                if buffer:
+                    yield buffer
+            else:
+                yield "未找到与您问题相关的信息。请尝试更换关键词或提供更多细节。"
+        
+        except Exception as e:
+            yield f"处理查询时出错: {str(e)}"
     
     def close(self):
         """关闭资源"""

@@ -118,9 +118,26 @@ class GraphAgent(BaseAgent):
             self._log_execution("grade_documents", messages, "reduce")
             return "reduce"
 
-        # 简化的相关性评分 - 总是返回 "generate"，避免 "rewrite" 状态
-        question = messages[-3].content
-        docs = messages[-1].content
+        # 获取问题和文档内容
+        try:
+            question = messages[-3].content
+            docs = messages[-1].content
+        except Exception as e:
+            # 如果出错，默认为 generate 模式
+            print(f"文档评分出错: {e}")
+            return "generate"
+        
+        # 检查文档内容是否足够
+        if not docs or len(docs) < 100:
+            print("文档内容不足，尝试使用本地搜索")
+            # 尝试使用local_tool进行更精确搜索
+            try:
+                local_result = self.local_tool.search(question)
+                if local_result and len(local_result) > 100:
+                    # 替换原来的结果
+                    messages[-1].content = local_result
+            except Exception as e:
+                print(f"本地搜索失败: {e}")
         
         # 从问题中提取关键词
         keywords = []
@@ -134,20 +151,20 @@ class GraphAgent(BaseAgent):
             keywords = [word for word in question.lower().split() if len(word) > 2]
         
         # 计算关键词匹配率
-        docs_text = docs.lower()
+        docs_text = docs.lower() if docs else ""
         matches = sum(1 for keyword in keywords if keyword.lower() in docs_text)
         match_rate = matches / len(keywords) if keywords else 0
         
-        # 始终返回 "generate" 而不是 "rewrite"，避免路由错误
-        result = "generate"
-        
+        # 记录匹配情况
         self._log_execution("grade_documents", {
             "question": question,
             "keywords": keywords,
-            "match_rate": match_rate
-        }, result)
+            "match_rate": match_rate,
+            "docs_length": len(docs_text)
+        }, f"匹配率: {match_rate}")
         
-        return result
+        # 总是返回 "generate" 而不是 "rewrite"，避免路由错误
+        return "generate"
 
     def _generate_node(self, state):
         """生成回答节点逻辑"""
@@ -239,18 +256,42 @@ class GraphAgent(BaseAgent):
         return {"messages": [AIMessage(content=response)]}
     
     async def _generate_node_stream(self, state):
-        """生成回答节点逻辑的流式版本"""
+        """生成回答节点逻辑的流式版本"""        
         messages = state["messages"]
-        question = messages[-3].content
-        docs = messages[-1].content
-
-        # 检查缓存
-        thread_id = state.get("configurable", {}).get("thread_id", "default")
-        cached_result = self.cache_manager.get(f"generate:{question}", thread_id=thread_id)
-        if cached_result:
-            yield cached_result
+        
+        # 安全获取问题和文档内容
+        try:
+            question = messages[-3].content if len(messages) >= 3 else "未找到问题"
+            docs = messages[-1].content if messages[-1] else "未找到相关信息"
+        except Exception as e:
+            yield f"获取问题或文档时出错: {str(e)}"
             return
 
+        # 获取线程ID
+        thread_id = state.get("configurable", {}).get("thread_id", "default")
+        
+        # 检查缓存
+        cached_result = self.cache_manager.get(f"generate:{question}", thread_id=thread_id)
+        if cached_result:
+            # 分块输出缓存内容
+            sentences = re.split(r'([.!?。！？]\s*)', cached_result)
+            buffer = ""
+            
+            for i in range(0, len(sentences)):
+                buffer += sentences[i]
+                
+                # 当缓冲区包含完整句子或达到合理大小时输出
+                if (i % 2 == 1) or len(buffer) >= 40:
+                    yield buffer
+                    buffer = ""
+                    await asyncio.sleep(0.01)
+            
+            # 输出任何剩余内容
+            if buffer:
+                yield buffer
+            return
+
+        # 构建提示模板
         prompt = ChatPromptTemplate.from_messages([
         ("system", LC_SYSTEM_PROMPT),
         ("human", """
@@ -271,50 +312,76 @@ class GraphAgent(BaseAgent):
 
         # 使用流式模型
         rag_chain = prompt | self.stream_llm
-        
-        # 处理流式响应
         result = ""
-        async for chunk in rag_chain.astream({
-            "context": docs, 
-            "question": question, 
-            "response_type": response_type
-        }):
-            # 从 chunk 中提取内容
-            if hasattr(chunk, "content"):
-                token = chunk.content
-            else:
-                token = str(chunk)
-                
-            # 返回 token 给调用者
-            yield token
-            
-            # 添加到完整结果
-            result += token
+        buffer = ""
         
-        # 缓存完整结果
-        if result and len(result) > 10:
-            self.cache_manager.set(f"generate:{question}", result, thread_id=thread_id)
+        try:
+            # 处理流式响应
+            async for chunk in rag_chain.astream({
+                "context": docs, 
+                "question": question, 
+                "response_type": response_type
+            }):
+                # 从chunk中提取内容
+                if hasattr(chunk, "content"):
+                    token = chunk.content
+                else:
+                    token = str(chunk)
+                    
+                # 添加到完整结果和缓冲区
+                result += token
+                buffer += token
+                
+                # 当缓冲区包含完整句子或达到合理大小时输出
+                if len(buffer) >= 40 or re.search(r'[.!?。！？]\s*$', buffer):
+                    yield buffer
+                    buffer = ""
+                    await asyncio.sleep(0.01)
+            
+            # 输出剩余内容
+            if buffer:
+                yield buffer
+                
+            # 缓存完整结果
+            if result and len(result) > 10:
+                self.cache_manager.set(f"generate:{question}", result, thread_id=thread_id)
+                
+        except Exception as e:
+            yield f"生成回答时出错: {str(e)}"
+
     
     async def _stream_process(self, inputs, config):
-        """实现流式处理过程"""
+        """实现流式处理过程"""        
         # 获取会话信息
         thread_id = config.get("configurable", {}).get("thread_id", "default")
         query = inputs["messages"][-1].content
         
-        # 检查缓存先
+        # 首先检查缓存
         cached_response = self.cache_manager.get(query.strip(), thread_id=thread_id)
         if cached_response:
-            # 对于缓存的响应，分块返回
-            chunk_size = 4
-            for i in range(0, len(cached_response), chunk_size):
-                yield cached_response[i:i+chunk_size]
-                await asyncio.sleep(0.01)
+            # 分块返回缓存结果
+            sentences = re.split(r'([.!?。！？]\s*)', cached_response)
+            buffer = ""
+            
+            for i in range(0, len(sentences)):
+                buffer += sentences[i]
+                
+                # 当缓冲区包含完整句子或达到合理大小时输出
+                if (i % 2 == 1) or len(buffer) >= 40:
+                    yield buffer
+                    buffer = ""
+                    await asyncio.sleep(0.01)
+            
+            # 输出任何剩余内容
+            if buffer:
+                yield buffer
             return
         
         # 处理工作流
         workflow_state = {"messages": [HumanMessage(content=query)]}
         
-        # 执行 agent 节点
+        # 执行agent节点 - 提供状态更新
+        yield "正在分析问题..."
         agent_output = self._agent_node(workflow_state)
         workflow_state = {"messages": workflow_state["messages"] + agent_output["messages"]}
         
@@ -322,10 +389,32 @@ class GraphAgent(BaseAgent):
         tool_decision = tools_condition(workflow_state)
         if tool_decision == "tools":
             # 执行检索节点
+            yield "正在检索相关信息..."
             retrieve_output = await self._retrieve_node_async(workflow_state)
             workflow_state = {"messages": workflow_state["messages"] + retrieve_output["messages"]}
             
+            # 确保检索到内容
+            last_message = workflow_state["messages"][-1]
+            content = last_message.content if hasattr(last_message, 'content') else ""
+            
+            if not content or len(content) < 100:
+                # 如果检索结果不足，尝试使用本地搜索
+                try:
+                    yield "检索内容不足，正在尝试更深入的搜索..."
+                    local_result = self.local_tool.search(query)
+                    if local_result and len(local_result) > 100:
+                        # 使用本地搜索结果替换
+                        workflow_state["messages"][-1] = ToolMessage(
+                            content=local_result,
+                            tool_call_id="local_search",
+                            name="local_search_tool"
+                        )
+                        yield "找到更多相关信息，继续生成回答..."
+                except Exception as e:
+                    yield f"尝试深入搜索时出错: {str(e)}"
+            
             # 流式生成节点输出
+            yield "正在生成回答..."
             async for token in self._generate_node_stream(workflow_state):
                 yield token
         else:
@@ -334,56 +423,137 @@ class GraphAgent(BaseAgent):
             content = final_msg.content if hasattr(final_msg, "content") else str(final_msg)
             
             # 分块返回
-            chunk_size = 4
-            for i in range(0, len(content), chunk_size):
-                yield content[i:i+chunk_size]
-                await asyncio.sleep(0.01)
+            sentences = re.split(r'([.!?。！？]\s*)', content)
+            buffer = ""
+            
+            for i in range(0, len(sentences)):
+                buffer += sentences[i]
+                
+                # 当缓冲区包含完整句子或达到合理大小时输出
+                if (i % 2 == 1) or len(buffer) >= 40:
+                    yield buffer
+                    buffer = ""
+                    await asyncio.sleep(0.01)
+            
+            # 输出任何剩余内容
+            if buffer:
+                yield buffer
     
     # 异步检索节点辅助方法
     async def _retrieve_node_async(self, state):
         """检索节点的异步版本，用于流式处理"""
         try:
             # 获取工具调用信息
-            tool_calls = state["messages"][-1].additional_kwargs.get("tool_calls", [])
+            last_message = state["messages"][-1]
+            
+            # 安全获取工具调用信息
+            tool_calls = []
+            
+            # 检查additional_kwargs中的tool_calls
+            if hasattr(last_message, 'additional_kwargs') and last_message.additional_kwargs:
+                tool_calls = last_message.additional_kwargs.get('tool_calls', [])
+            
+            # 检查直接的tool_calls属性
+            if not tool_calls and hasattr(last_message, 'tool_calls') and last_message.tool_calls:
+                tool_calls = last_message.tool_calls
+                
+            # 如果没有找到工具调用
             if not tool_calls:
-                # 尝试其他方式获取查询
-                if hasattr(state["messages"][-1], "tool_calls") and state["messages"][-1].tool_calls:
-                    tool_calls = state["messages"][-1].tool_calls
-                    
-            # 如果找到工具调用
-            if tool_calls and len(tool_calls) > 0:
-                # 获取第一个工具调用的信息
-                tool_call = tool_calls[0]
-                query = tool_call.get("args", {}).get("query", "")
-                tool_call_id = tool_call.get("id", "tool_call_0")  # 提供默认ID
-                
-                # 执行搜索
-                tool_result = self.local_tool.search(query)
-                
-                # 创建带有完整属性的工具消息
-                return {
-                    "messages": [
-                        ToolMessage(
-                            content=tool_result,
-                            tool_call_id=tool_call_id,
-                            name=tool_call.get("name", "search_tool")
-                        )
-                    ]
-                }
-            else:
-                # 无法找到工具调用信息，返回错误
+                print("无法获取工具调用信息")
                 return {
                     "messages": [
                         AIMessage(content="无法获取查询信息，请重试。")
                     ]
                 }
-        except Exception as e:
-            # 处理错误
-            error_msg = f"处理工具调用时出错: {str(e)}"
-            print(error_msg)
+            
+            # 获取第一个工具调用
+            tool_call = tool_calls[0]
+            
+            # 安全获取查询
+            query = ""
+            tool_id = "tool_call_0"
+            tool_name = "search_tool"
+            
+            # 根据工具调用格式提取参数
+            if isinstance(tool_call, dict):
+                # 提取ID
+                tool_id = tool_call.get("id", tool_id)
+                
+                # 提取函数名称
+                if "function" in tool_call and isinstance(tool_call["function"], dict):
+                    tool_name = tool_call["function"].get("name", tool_name)
+                    
+                    # 提取参数
+                    args = tool_call["function"].get("arguments", {})
+                    if isinstance(args, str):
+                        # 尝试解析JSON
+                        try:
+                            import json
+                            args_dict = json.loads(args)
+                            query = args_dict.get("query", "")
+                        except:
+                            query = args  # 如果解析失败，使用整个字符串作为查询
+                    elif isinstance(args, dict):
+                        query = args.get("query", "")
+                # 直接在root级别检查
+                elif "name" in tool_call:
+                    tool_name = tool_call.get("name", tool_name)
+                
+                # 检查args字段
+                if not query and "args" in tool_call:
+                    args = tool_call["args"]
+                    if isinstance(args, dict):
+                        query = args.get("query", "")
+                    elif isinstance(args, str):
+                        query = args
+            
+            # 如果仍然没有查询，尝试使用最简单的提取
+            if not query and hasattr(last_message, 'content'):
+                query = last_message.content
+                
+            # 执行搜索
+            if tool_name == "global_retriever":
+                # 使用全局搜索
+                tool_result = self.global_tool.search(query)
+            else:
+                # 使用本地搜索
+                tool_result = self.local_tool.search(query)
+            
+            # 检查搜索结果
+            if not tool_result or (isinstance(tool_result, str) and len(tool_result.strip()) < 50):
+                print("搜索结果内容不足，使用备用方法")
+                # 尝试使用另一种搜索方法
+                backup_result = self.local_tool.search(query)
+                if backup_result and len(backup_result.strip()) > 50:
+                    tool_result = backup_result
+            
+            # 返回正确格式的工具消息
             return {
                 "messages": [
-                    AIMessage(content=error_msg)
+                    ToolMessage(
+                        content=tool_result,
+                        tool_call_id=tool_id,
+                        name=tool_name
+                    )
                 ]
             }
+        except Exception as e:
+            # 处理错误
+            import traceback
+            error_msg = f"处理工具调用时出错: {str(e)}"
+            print(error_msg)
+            print(traceback.format_exc())
+            return {
+                "messages": [
+                    AIMessage(content=f"搜索过程中出现错误: {str(e)}")
+                ]
+            }
+    
+    async def _agent_node_async(self, state):
+        """Agent 节点的异步版本"""
+        def sync_agent():
+            return self._agent_node(state)
+            
+        # 在线程池中运行同步代码，避免阻塞事件循环
+        return await asyncio.get_event_loop().run_in_executor(None, sync_agent)
         

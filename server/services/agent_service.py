@@ -153,30 +153,57 @@ def format_execution_log(log: List[Dict]) -> List[Dict]:
     """
     formatted_log = []
     for entry in log:
-        if isinstance(entry["input"], dict):
-            input_str = {}
-            for k, v in entry["input"].items():
-                if isinstance(v, str):
-                    input_str[k] = v
-                else:
-                    input_str[k] = str(v)
-        else:
-            input_str = str(entry["input"])
+        formatted_entry = {"node": entry["node"]}
+        
+        # 处理输入
+        if "input" in entry:
+            if isinstance(entry["input"], dict):
+                input_str = {}
+                for k, v in entry["input"].items():
+                    if hasattr(v, "content"):
+                        # 处理消息对象
+                        input_str[k] = {"content": v.content}
+                    elif isinstance(v, str):
+                        input_str[k] = v
+                    else:
+                        # 安全处理其他类型
+                        try:
+                            import json
+                            json.dumps(v)  # 测试是否可序列化
+                            input_str[k] = v
+                        except:
+                            input_str[k] = str(v)
+            elif hasattr(entry["input"], "content"):
+                # 直接处理消息对象
+                input_str = {"content": entry["input"].content}
+            else:
+                input_str = str(entry["input"])
+            formatted_entry["input"] = input_str
             
-        if isinstance(entry["output"], dict):
-            output_str = {}
-            for k, v in entry["output"].items():
-                if isinstance(v, str):
-                    output_str[k] = v
-                else:
-                    output_str[k] = str(v)
-        else:
-            output_str = str(entry["output"])
-
-        formatted_entry = {
-            "node": entry["node"],
-            "input": input_str,
-            "output": output_str
-        }
+        # 处理输出
+        if "output" in entry:
+            if isinstance(entry["output"], dict):
+                output_str = {}
+                for k, v in entry["output"].items():
+                    if hasattr(v, "content"):
+                        # 处理消息对象
+                        output_str[k] = {"content": v.content}
+                    elif isinstance(v, str):
+                        output_str[k] = v
+                    else:
+                        # 安全处理其他类型
+                        try:
+                            import json
+                            json.dumps(v)  # 测试是否可序列化
+                            output_str[k] = v
+                        except:
+                            output_str[k] = str(v)
+            elif hasattr(entry["output"], "content"):
+                # 直接处理消息对象
+                output_str = {"content": entry["output"].content}
+            else:
+                output_str = str(entry["output"])
+            formatted_entry["output"] = output_str
+        
         formatted_log.append(formatted_entry)
     return formatted_log

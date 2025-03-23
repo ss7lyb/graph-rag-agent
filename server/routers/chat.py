@@ -37,6 +37,46 @@ async def chat(request: ChatRequest):
     
     return ChatResponse(**result)
 
+def serialize_log_entry(log_entry):
+    """将日志条目转换为可序列化的格式"""
+    if isinstance(log_entry, dict):
+        result = {}
+        for key, value in log_entry.items():
+            # 处理输入字段
+            if key == "input":
+                if hasattr(value, "content"):
+                    # 处理 Message 对象
+                    result[key] = {"content": value.content}
+                elif isinstance(value, dict):
+                    # 处理字典，但需要确保内部没有不可序列化的对象
+                    result[key] = {}
+                    for k, v in value.items():
+                        if hasattr(v, "content"):
+                            result[key][k] = {"content": v.content}
+                        else:
+                            try:
+                                # 验证可序列化性 - 使用导入的 json 模块
+                                json.dumps(v)
+                                result[key][k] = v
+                            except:
+                                result[key][k] = str(v)
+                else:
+                    # 其他情况，使用字符串表示
+                    result[key] = str(value)
+            # 处理输出字段
+            elif key == "output":
+                if hasattr(value, "content"):
+                    # 处理 Message 对象
+                    result[key] = {"content": value.content}
+                else:
+                    # 使用字符串表示
+                    result[key] = str(value)
+            # 处理其他字段
+            else:
+                result[key] = value
+        return result
+    return str(log_entry)
+
 @router.post("/chat/stream")
 async def chat_stream(request: Request):
     """流式响应聊天请求"""
@@ -52,7 +92,7 @@ async def chat_stream(request: Request):
     # 设置流式响应
     async def event_generator():
         try:
-            # 确保明确设置格式为SSE
+            # 确保明确设置格式为SSE，并且使用已导入的 json 模块
             yield "data: " + json.dumps({"status": "start"}) + "\n\n"
             
             # 处理消息流
@@ -72,37 +112,70 @@ async def chat_stream(request: Request):
                     if "execution_log" in chunk and debug:
                         log_entry = chunk["execution_log"]
                         execution_log.append(log_entry)
-                        yield "data: " + json.dumps({
-                            "status": "execution_log",
-                            "content": log_entry
-                        }) + "\n\n"
+                        # 序列化日志条目，避免非JSON可序列化对象
+                        serialized_log = serialize_log_entry(log_entry)
+                        try:
+                            yield "data: " + json.dumps({
+                                "status": "execution_log",
+                                "content": serialized_log
+                            }) + "\n\n"
+                        except Exception as json_error:
+                            print(f"执行日志序列化错误: {json_error}")
+                            # 尝试一个更简单的方法
+                            yield "data: " + json.dumps({
+                                "status": "execution_log",
+                                "content": {"simplified": str(log_entry)}
+                            }) + "\n\n"
                     # 继续正常流程
                     elif "status" in chunk:
-                        yield "data: " + json.dumps(chunk) + "\n\n"
+                        try:
+                            yield "data: " + json.dumps(chunk) + "\n\n"
+                        except Exception as json_error:
+                            print(f"状态序列化错误: {json_error}")
+                            yield "data: " + json.dumps({
+                                "status": "error", 
+                                "message": "状态序列化错误"
+                            }) + "\n\n"
                     else:
                         # 转换为文本块
-                        yield "data: " + json.dumps({
-                            "status": "token", 
-                            "content": str(chunk)
-                        }) + "\n\n"
+                        try:
+                            yield "data: " + json.dumps({
+                                "status": "token", 
+                                "content": str(chunk)
+                            }) + "\n\n"
+                        except Exception as json_error:
+                            print(f"令牌序列化错误: {json_error}")
                 else:
                     # 普通文本块
-                    yield "data: " + json.dumps({
-                        "status": "token", 
-                        "content": chunk
-                    }) + "\n\n"
+                    try:
+                        yield "data: " + json.dumps({
+                            "status": "token", 
+                            "content": chunk
+                        }) + "\n\n"
+                    except Exception as json_error:
+                        print(f"普通文本序列化错误: {json_error}")
                 
             # 最后发送完整的执行日志
             if debug and execution_log:
-                yield "data: " + json.dumps({
-                    "status": "execution_logs",
-                    "content": execution_log
-                }) + "\n\n"
+                try:
+                    # 序列化执行日志
+                    serialized_logs = [serialize_log_entry(log) for log in execution_log]
+                    yield "data: " + json.dumps({
+                        "status": "execution_logs",
+                        "content": serialized_logs
+                    }) + "\n\n"
+                except Exception as json_error:
+                    print(f"执行日志组序列化错误: {json_error}")
+                    yield "data: " + json.dumps({
+                        "status": "execution_logs",
+                        "content": [{"simplified": "日志序列化失败"}]
+                    }) + "\n\n"
                 
             # 发送完成事件
             yield "data: " + json.dumps({"status": "done"}) + "\n\n"
         except Exception as e:
             # 发送错误事件
+            print(f"事件生成器错误: {e}")
             yield "data: " + json.dumps({"status": "error", "message": str(e)}) + "\n\n"
     
     # 返回流式响应

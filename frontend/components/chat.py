@@ -342,6 +342,7 @@ def display_chat_interface():
                                 # 检查token是否是JSON字符串
                                 if isinstance(token, str) and token.startswith("{") and token.endswith("}"):
                                     try:
+                                        import json
                                         # 尝试解析JSON
                                         json_data = json.loads(token)
                                         if "content" in json_data:
@@ -349,8 +350,9 @@ def display_chat_interface():
                                         elif "status" in json_data:
                                             # 跳过状态消息
                                             return
-                                    except json.JSONDecodeError:
+                                    except json.JSONDecodeError as json_error:
                                         # 不是有效的JSON，保持原样
+                                        print(f"JSON解析错误: {str(json_error)}")
                                         pass
                                 
                                 if is_thinking:
@@ -382,7 +384,20 @@ def display_chat_interface():
                                         message_placeholder.markdown(full_response)
                                         # 如果有执行日志，保存到会话状态
                                         if "execution_log" in response and st.session_state.debug_mode:
-                                            st.session_state.execution_log = response["execution_log"]
+                                            # 确保获取到的执行日志是可用的
+                                            if isinstance(response["execution_log"], list):
+                                                st.session_state.execution_log = response["execution_log"]
+                                            elif isinstance(response["execution_log"], dict):
+                                                # 可能是单个日志条目
+                                                st.session_state.execution_log = [response["execution_log"]]
+                                            else:
+                                                # 尝试将其他格式转换为字符串
+                                                try:
+                                                    import json
+                                                    log_str = json.dumps(response["execution_log"])
+                                                    st.session_state.execution_log = [{"node": "parse_error", "input": "N/A", "output": log_str}]
+                                                except:
+                                                    st.session_state.execution_log = [{"node": "error", "input": "N/A", "output": "无法解析执行日志"}]
                             except Exception as e:
                                 print(f"流式API失败: {str(e)}")
                                 response = send_message(prompt)
@@ -391,7 +406,20 @@ def display_chat_interface():
                                     message_placeholder.markdown(full_response)
                                     # 如果有执行日志，保存到会话状态
                                     if "execution_log" in response and st.session_state.debug_mode:
-                                        st.session_state.execution_log = response["execution_log"]
+                                            # 确保获取到的执行日志是可用的
+                                            if isinstance(response["execution_log"], list):
+                                                st.session_state.execution_log = response["execution_log"]
+                                            elif isinstance(response["execution_log"], dict):
+                                                # 可能是单个日志条目
+                                                st.session_state.execution_log = [response["execution_log"]]
+                                            else:
+                                                # 尝试将其他格式转换为字符串
+                                                try:
+                                                    import json
+                                                    log_str = json.dumps(response["execution_log"])
+                                                    st.session_state.execution_log = [{"node": "parse_error", "input": "N/A", "output": log_str}]
+                                                except:
+                                                    st.session_state.execution_log = [{"node": "error", "input": "N/A", "output": "无法解析执行日志"}]
                         
                         # 最后一次更新，移除光标
                         message_placeholder.markdown(full_response)

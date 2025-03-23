@@ -11,7 +11,7 @@ def init_session_state():
     if 'debug_mode' not in st.session_state:
         st.session_state.debug_mode = False
     if 'execution_log' not in st.session_state:
-        st.session_state.execution_log = None
+        st.session_state.execution_log = []
     if 'agent_type' not in st.session_state:
         st.session_state.agent_type = "hybrid_agent"  # 默认使用hybrid_agent
     if 'show_thinking' not in st.session_state:

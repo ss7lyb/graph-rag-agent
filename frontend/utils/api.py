@@ -58,7 +58,7 @@ def send_message(message: str) -> Dict:
         st.error(f"服务器连接错误: {str(e)}")
         return None
 
-def send_message_stream(message: str, on_token: Callable[[str], None]) -> str:
+def send_message_stream(message: str, on_token: Callable[[str, bool], None]) -> str:
     """
     向 FastAPI 后端发送聊天消息，获取流式响应
     
@@ -86,6 +86,7 @@ def send_message_stream(message: str, on_token: Callable[[str], None]) -> str:
         # 设置 SSE 连接
         import sseclient
         import requests
+        import json
         
         # 非阻塞模式发起请求
         response = requests.post(
@@ -100,9 +101,15 @@ def send_message_stream(message: str, on_token: Callable[[str], None]) -> str:
         
         # 处理每个事件
         thinking_content = ""
+        
         for event in client.events():
             try:
-                data = json.loads(event.data)
+                # 确保解析 JSON 时捕获所有可能的异常
+                try:
+                    data = json.loads(event.data)
+                except json.JSONDecodeError as e:
+                    print(f"JSON解析错误: {str(e)}, 原始数据: {event.data[:100]}")
+                    continue
                 
                 # 处理不同事件类型
                 if data.get("status") == "token":
@@ -113,6 +120,11 @@ def send_message_stream(message: str, on_token: Callable[[str], None]) -> str:
                     chunk = data.get("content", "")
                     thinking_content += chunk
                     on_token(chunk, is_thinking=True)
+                elif data.get("status") == "execution_log" and st.session_state.debug_mode:
+                    # 处理执行日志
+                    if "execution_log" not in st.session_state:
+                        st.session_state.execution_log = []
+                    st.session_state.execution_log.append(data.get("content", {}))
                 elif data.get("status") == "done":
                     # 完成通知
                     break
@@ -123,8 +135,9 @@ def send_message_stream(message: str, on_token: Callable[[str], None]) -> str:
                 else:
                     # 其他状态类型处理
                     pass
-            except json.JSONDecodeError:
-                # 处理格式不正确的 JSON
+            except Exception as e:
+                # 处理任何未捕获的异常
+                print(f"处理SSE事件时出错: {str(e)}")
                 continue
         
         # 返回收集的思考内容用于存储
@@ -132,6 +145,7 @@ def send_message_stream(message: str, on_token: Callable[[str], None]) -> str:
     except Exception as e:
         # 处理连接错误
         on_token(f"\n\n连接错误: {str(e)}")
+        print(f"流式API连接错误: {str(e)}")
         return None
 
 @monitor_performance(endpoint="send_feedback")

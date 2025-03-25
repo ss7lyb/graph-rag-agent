@@ -3,8 +3,6 @@ import json
 from abc import ABC, abstractmethod
 from typing import Dict, Any
 
-from model.get_models import get_llm_model
-
 class BaseMetric(ABC):
     """所有评估指标的基类"""
     
@@ -64,9 +62,6 @@ class BaseEvaluator(ABC):
             else:
                 print(f"{metric} 评估指标未实现!")
                 raise NotImplementedError
-        
-        # 初始化LLM (如果需要)
-        self.llm = get_llm_model() if config.get('use_llm', False) else None
     
     def _collect_metrics(self):
         """收集所有继承自BaseMetric的评估指标类"""

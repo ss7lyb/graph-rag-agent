@@ -1,19 +1,13 @@
-import os
-import json
-import re
-from typing import Dict, List, Any, Optional, Tuple, Set
+from typing import Dict, List, Any, Tuple
 from dataclasses import dataclass, field, asdict
+import re
+import time
+import json
 
 from evaluator.base import BaseEvaluator, BaseMetric
-from evaluator.utils import (
-    normalize_answer,
-    extract_entities_from_neo4j_response,
-    extract_relationships_from_neo4j_response,
-    extract_referenced_entities,
-    extract_referenced_relationships,
-    extract_json_from_text
-)
-
+from evaluator.graph_metrics import GraphCoverageMetric, CommunityRelevanceMetric, SubgraphQualityMetric
+from evaluator.preprocessing import clean_thinking_process, extract_references_from_answer, clean_references
+from evaluator.utils import normalize_answer, extract_relationships_from_neo4j_response, extract_entities_from_neo4j_response, extract_referenced_entities, extract_referenced_relationships
 
 @dataclass
 class RetrievalEvaluationSample:
@@ -26,12 +20,29 @@ class RetrievalEvaluationSample:
     referenced_entities: List[str] = field(default_factory=list)
     referenced_relationships: List[Tuple[str, str, str]] = field(default_factory=list)
     scores: Dict[str, float] = field(default_factory=dict)
+    agent_type: str = ""  # naive, hybrid, graph, deep
+    retrieval_time: float = 0.0
     retrieval_logs: Dict[str, Any] = field(default_factory=dict)
     
-    def update_answer(self, answer: str):
-        """更新系统回答"""
+    def update_system_answer(self, answer: str, agent_type: str = ""):
+        """
+        更新系统回答并提取引用
+        
+        Args:
+            answer: 原始系统回答
+            agent_type: 代理类型
+        """
+        # 先清理思考过程，再提取引用数据
+        if agent_type == "deep":
+            answer = clean_thinking_process(answer)
+            
+        # 保存原始答案（包含引用数据）
         self.system_answer = answer
-        # 提取答案中引用的实体和关系
+        
+        if agent_type:
+            self.agent_type = agent_type
+            
+        # 提取引用的实体和关系
         self.referenced_entities = list(extract_referenced_entities(answer))
         self.referenced_relationships = extract_referenced_relationships(answer)
     
@@ -50,8 +61,25 @@ class RetrievalEvaluationSample:
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
-        return asdict(self)
-
+        result = asdict(self)
+        
+        # 处理关系元组（JSON序列化时需要转换为列表）
+        result["retrieved_relationships"] = [list(rel) for rel in self.retrieved_relationships]
+        result["referenced_relationships"] = [list(rel) for rel in self.referenced_relationships]
+        
+        # 处理检索日志中可能存在的HumanMessage
+        if "retrieval_logs" in result and isinstance(result["retrieval_logs"], dict):
+            logs = result["retrieval_logs"]
+            if "execution_log" in logs and isinstance(logs["execution_log"], list):
+                for i, log in enumerate(logs["execution_log"]):
+                    # 处理输入中可能的HumanMessage
+                    if "input" in log and hasattr(log["input"], "__class__") and log["input"].__class__.__name__ == "HumanMessage":
+                        logs["execution_log"][i]["input"] = str(log["input"])
+                    # 处理输出中可能的HumanMessage或AIMessage
+                    if "output" in log and hasattr(log["output"], "__class__") and log["output"].__class__.__name__ in ["HumanMessage", "AIMessage"]:
+                        logs["execution_log"][i]["output"] = str(log["output"])
+        
+        return result
 
 @dataclass
 class RetrievalEvaluationData:
@@ -101,8 +129,16 @@ class RetrievalEvaluationData:
     
     def save(self, path: str):
         """保存评估数据"""
+        class CustomEncoder(json.JSONEncoder):
+            def default(self, obj):
+                from langchain_core.messages import BaseMessage
+                if isinstance(obj, BaseMessage):
+                    return str(obj)
+                return super().default(obj)
+        
         with open(path, "w", encoding='utf-8') as f:
-            json.dump([sample.to_dict() for sample in self.samples], f, ensure_ascii=False, indent=2)
+            samples_data = [sample.to_dict() for sample in self.samples]
+            json.dump(samples_data, f, ensure_ascii=False, indent=2, cls=CustomEncoder)
     
     @classmethod
     def load(cls, path: str) -> 'RetrievalEvaluationData':
@@ -122,7 +158,6 @@ class RetrievalEvaluationData:
             data.append(sample)
         
         return data
-
 
 class RetrievalPrecision(BaseMetric):
     """检索精确率评估指标"""
@@ -161,7 +196,7 @@ class RetrievalPrecision(BaseMetric):
             retr_norm = [normalize_answer(e) for e in retr_entities]
             ref_norm = [normalize_answer(e) for e in ref_entities]
             
-            # 计算精确率
+            # 计算精确率 - 检索结果中有多少是被引用的
             referenced = sum(1 for e in retr_norm if any(normalize_answer(r) == e for r in ref_norm))
             precision = referenced / len(retr_norm) if retr_norm else 0.0
             precision_scores.append(precision)
@@ -181,7 +216,7 @@ class RetrievalUtilization(BaseMetric):
     
     def calculate_metric(self, data: RetrievalEvaluationData) -> Tuple[Dict[str, float], List[float]]:
         """
-        计算检索利用率
+        计算检索利用率 - 引用的实体在检索结果中的比例
         
         Args:
             data (RetrievalEvaluationData): 评估数据
@@ -228,7 +263,7 @@ class RelationshipUtilization(BaseMetric):
     
     def calculate_metric(self, data: RetrievalEvaluationData) -> Tuple[Dict[str, float], List[float]]:
         """
-        计算关系利用率
+        计算关系利用率 - 引用的关系在检索结果中的比例
         
         Args:
             data (RetrievalEvaluationData): 评估数据
@@ -274,178 +309,6 @@ class RelationshipUtilization(BaseMetric):
         return {"relationship_utilization": avg_utilization}, utilization_scores
 
 
-class FactualConsistency(BaseMetric):
-    """事实一致性评估指标"""
-    
-    metric_name = "factual_consistency"
-    
-    def __init__(self, config):
-        super().__init__(config)
-        self.use_llm = config.get('use_llm', True)
-        
-        if self.use_llm:
-            from model.get_models import get_llm_model
-            self.llm = get_llm_model()
-    
-    def _assess_consistency_simple(self, answer: str, entities: List[str], relationships: List[Tuple[str, str, str]]) -> float:
-        """
-        使用简单方法评估事实一致性
-        
-        Args:
-            answer (str): 系统回答
-            entities (List[str]): 检索到的实体
-            relationships (List[Tuple[str, str, str]]): 检索到的关系
-            
-        Returns:
-            float: 一致性得分 (0-1)
-        """
-        if not answer:
-            return 0.0
-            
-        # 提取回答中引用的实体和关系
-        referenced_entities = extract_referenced_entities(answer)
-        referenced_relationships = extract_referenced_relationships(answer)
-        
-        # 标准化处理
-        entities_norm = [normalize_answer(e) for e in entities]
-        ref_entities_norm = [normalize_answer(e) for e in referenced_entities]
-        
-        # 计算实体一致性
-        entity_consistency = 0.0
-        if ref_entities_norm:
-            consistent_entities = sum(1 for e in ref_entities_norm if any(normalize_answer(r) == e for r in entities_norm))
-            entity_consistency = consistent_entities / len(ref_entities_norm)
-        
-        # 标准化处理关系
-        rels_norm = [(normalize_answer(src), normalize_answer(rel), normalize_answer(dst)) 
-                     for src, rel, dst in relationships]
-        ref_rels_norm = [(normalize_answer(src), normalize_answer(rel), normalize_answer(dst)) 
-                         for src, rel, dst in referenced_relationships]
-        
-        # 计算关系一致性
-        rel_consistency = 0.0
-        if ref_rels_norm:
-            consistent_rels = 0
-            for r_src, r_rel, r_dst in ref_rels_norm:
-                for t_src, t_rel, t_dst in rels_norm:
-                    if (r_src == t_src and r_dst == t_dst and r_rel == t_rel):
-                        consistent_rels += 1
-                        break
-            
-            rel_consistency = consistent_rels / len(ref_rels_norm)
-        
-        # 综合一致性得分，实体和关系各占50%权重
-        if ref_entities_norm or ref_rels_norm:
-            consistency = 0.0
-            weights = 0.0
-            
-            if ref_entities_norm:
-                consistency += 0.5 * entity_consistency
-                weights += 0.5
-                
-            if ref_rels_norm:
-                consistency += 0.5 * rel_consistency
-                weights += 0.5
-                
-            return consistency / weights if weights > 0 else 0.0
-        
-        return 0.0  # 如果没有引用任何内容，则一致性为0
-    
-    def _assess_consistency_llm(self, answer: str, entities: List[str], relationships: List[Tuple[str, str, str]]) -> float:
-        """
-        使用LLM评估事实一致性
-        
-        Args:
-            answer (str): 系统回答
-            entities (List[str]): 检索到的实体
-            relationships (List[Tuple[str, str, str]]): 检索到的关系
-            
-        Returns:
-            float: 一致性得分 (0-1)
-        """
-        # 格式化实体和关系
-        entities_text = "\n".join([f"- {entity}" for entity in entities])
-        
-        relationships_text = ""
-        for src, rel, dst in relationships:
-            relationships_text += f"- {src} --[{rel}]--> {dst}\n"
-        
-        prompt = f"""评估以下回答在多大程度上与提供的图数据保持一致，没有添加未在图数据中的信息。
-        
-回答:
-{answer}
-
-图数据中的实体:
-{entities_text}
-
-图数据中的关系:
-{relationships_text}
-
-请基于以下标准评分(0到1):
-- 0.0: 完全不一致，回答中的主要信息不在图数据中
-- 0.25: 轻微一致，少数信息来自图数据，但大部分是添加的
-- 0.5: 部分一致，约一半的信息来自图数据
-- 0.75: 大部分一致，主要信息来自图数据，有少量添加
-- 1.0: 完全一致，回答中的所有主要信息都来自图数据
-
-仅返回一个数值得分，不需要解释。示例：0.75
-"""
-        
-        try:
-            response = self.llm.invoke(prompt)
-            
-            # 提取数值得分
-            if hasattr(response, 'content'):
-                score_text = response.content
-            else:
-                score_text = str(response)
-                
-            # 尝试提取浮点数
-            score_match = re.search(r'(\d+\.\d+|\d+)', score_text)
-            if score_match:
-                consistency_score = float(score_match.group(1))
-                # 确保分数在0-1范围内
-                return max(0.0, min(1.0, consistency_score))
-            return 0.5  # 默认中等一致性
-        except Exception as e:
-            print(f"使用LLM评估事实一致性时出错: {e}")
-            # 回退到简单方法
-            return self._assess_consistency_simple(answer, entities, relationships)
-    
-    def calculate_metric(self, data: RetrievalEvaluationData) -> Tuple[Dict[str, float], List[float]]:
-        """
-        计算事实一致性评估指标
-        
-        Args:
-            data (RetrievalEvaluationData): 评估数据
-            
-        Returns:
-            Tuple[Dict[str, float], List[float]]: 总体得分和每个样本的得分
-        """
-        answers = data.system_answers
-        retrieved_entities = data.retrieved_entities
-        retrieved_relationships = data.retrieved_relationships
-        
-        consistency_scores = []
-        
-        # 使用LLM或简单方法评估一致性
-        for answer, entities, relationships in zip(answers, retrieved_entities, retrieved_relationships):
-            if not answer:
-                consistency_scores.append(0.0)
-                continue
-                
-            if self.use_llm:
-                consistency = self._assess_consistency_llm(answer, entities, relationships)
-            else:
-                consistency = self._assess_consistency_simple(answer, entities, relationships)
-            
-            consistency_scores.append(consistency)
-        
-        avg_consistency = sum(consistency_scores) / len(consistency_scores) if consistency_scores else 0.0
-        
-        return {"factual_consistency": avg_consistency}, consistency_scores
-
-
 class RetrievalLatency(BaseMetric):
     """检索延迟评估指标"""
     
@@ -467,30 +330,8 @@ class RetrievalLatency(BaseMetric):
         latency_scores = []
         
         for sample in data.samples:
-            # 尝试从检索日志中获取延迟信息
-            logs = sample.retrieval_logs
-            latency = 0.0
-            
-            if logs:
-                # 尝试获取检索时间
-                if 'retrieval_time' in logs:
-                    latency = logs['retrieval_time']
-                    
-                # 如果有详细的执行日志，尝试计算检索相关节点的时间
-                elif 'execution_log' in logs:
-                    execution_log = logs['execution_log']
-                    retrieval_nodes = [
-                        node for node in execution_log 
-                        if node.get('node', '').lower() in ['retrieve', 'retrieval', 'search']
-                    ]
-                    
-                    if retrieval_nodes:
-                        # 计算检索节点的执行时间
-                        for node in retrieval_nodes:
-                            if 'duration' in node:
-                                latency += node['duration']
-            
-            latency_scores.append(latency)
+            # 直接使用样本中记录的检索时间
+            latency_scores.append(sample.retrieval_time)
         
         # 计算平均延迟
         avg_latency = sum(latency_scores) / len(latency_scores) if latency_scores else 0.0
@@ -498,17 +339,19 @@ class RetrievalLatency(BaseMetric):
         return {"retrieval_latency": avg_latency}, latency_scores
 
 
-class KeywordCoverage(BaseMetric):
-    """关键词覆盖率评估指标"""
+class EntityCoverage(BaseMetric):
+    """实体覆盖率评估指标"""
     
-    metric_name = "keyword_coverage"
+    metric_name = "entity_coverage"
     
     def __init__(self, config):
         super().__init__(config)
+        # 使用配置中提供的所有可能实体（如果有）
+        self.all_possible_entities = config.get("possible_entities", [])
     
     def calculate_metric(self, data: RetrievalEvaluationData) -> Tuple[Dict[str, float], List[float]]:
         """
-        计算关键词覆盖率
+        计算实体覆盖率 - 根据关键词判断检索到的实体覆盖了多少关键概念
         
         Args:
             data (RetrievalEvaluationData): 评估数据
@@ -522,7 +365,7 @@ class KeywordCoverage(BaseMetric):
         coverage_scores = []
         
         for question, entities in zip(questions, retrieved_entities):
-            # 提取问题中的关键词
+            # 从问题中提取关键词
             keywords = re.findall(r'\b[\w\u4e00-\u9fa5]{2,}\b', normalize_answer(question))
             keywords = [k for k in keywords if len(k) > 1]
             
@@ -535,16 +378,103 @@ class KeywordCoverage(BaseMetric):
             entities_text = " ".join([normalize_answer(e) for e in entities])
             
             # 计算关键词覆盖率
-            covered = sum(1 for k in keywords if k in entities_text)
+            covered = sum(1 for k in keywords if k.lower() in entities_text.lower())
             coverage = covered / len(keywords) if keywords else 0.0
             
             coverage_scores.append(coverage)
         
         avg_coverage = sum(coverage_scores) / len(coverage_scores) if coverage_scores else 0.0
         
-        return {"keyword_coverage": avg_coverage}, coverage_scores
+        return {"entity_coverage": avg_coverage}, coverage_scores
 
 
+class ChunkUtilization(BaseMetric):
+    """文本块利用率评估指标"""
+    
+    metric_name = "chunk_utilization"
+    
+    def __init__(self, config):
+        super().__init__(config)
+        self.neo4j_client = config.get('neo4j_client', None)
+    
+    def calculate_metric(self, data: RetrievalEvaluationData) -> Tuple[Dict[str, float], List[float]]:
+        """
+        计算文本块利用率 - 从引用数据中提取的chunk被利用的程度
+        
+        Args:
+            data (RetrievalEvaluationData): 评估数据
+            
+        Returns:
+            Tuple[Dict[str, float], List[float]]: 总体得分和每个样本的得分
+        """
+        chunk_scores = []
+        
+        for sample in data.samples:
+            # 从原始回答中提取引用的chunks
+            refs = extract_references_from_answer(sample.system_answer)
+            chunk_ids = refs.get("chunks", [])
+            
+            if not chunk_ids:
+                chunk_scores.append(0.0)
+                continue
+            
+            # 在回答中查找chunk内容的使用情况
+            answer_text = clean_references(sample.system_answer)
+            answer_text = clean_thinking_process(answer_text)
+            
+            if not self.neo4j_client:
+                # 如果没有Neo4j客户端，使用默认值
+                chunk_scores.append(0.5)
+                continue
+            
+            # 从Neo4j获取chunk内容
+            try:
+                chunk_texts = []
+                total_matches = 0
+                
+                for chunk_id in chunk_ids:
+                    # 查询文本块内容
+                    query = """
+                    MATCH (n:__Chunk__) 
+                    WHERE n.id = $id 
+                    RETURN n.text AS text
+                    """
+                    
+                    result = self.neo4j_client.execute_query(query, {"id": chunk_id})
+                    
+                    if result.records and len(result.records) > 0:
+                        chunk_text = result.records[0].get("text", "")
+                        if chunk_text:
+                            chunk_texts.append(chunk_text)
+                            
+                            # 计算文本块内容在回答中的利用率
+                            # 将文本块分成关键短语
+                            key_phrases = re.findall(r'\b[\w\u4e00-\u9fa5]{4,}\b', chunk_text)
+                            key_phrases = list(set([p for p in key_phrases if len(p) > 3]))
+                            
+                            if key_phrases:
+                                # 计算关键短语在回答中出现的比例
+                                matched_phrases = sum(1 for phrase in key_phrases 
+                                                    if phrase.lower() in answer_text.lower())
+                                match_ratio = matched_phrases / len(key_phrases)
+                                total_matches += match_ratio
+                
+                # 计算平均利用率
+                if chunk_texts:
+                    chunk_utilization = total_matches / len(chunk_texts)
+                    chunk_scores.append(chunk_utilization)
+                else:
+                    chunk_scores.append(0.0)
+                    
+            except Exception as e:
+                print(f"计算文本块利用率时出错: {e}")
+                chunk_scores.append(0.5)  # 出错时使用默认值
+        
+        avg_chunk_utilization = sum(chunk_scores) / len(chunk_scores) if chunk_scores else 0.0
+        
+        return {"chunk_utilization": avg_chunk_utilization}, chunk_scores
+
+    
 class GraphRAGRetrievalEvaluator(BaseEvaluator):
     """GraphRAG检索评估器"""
     
@@ -574,8 +504,7 @@ class GraphRAGRetrievalEvaluator(BaseEvaluator):
                 for sample, metric_score in zip(data.samples, metric_scores):
                     sample.update_evaluation_score(metric_name, metric_score)
             except Exception as e:
-                print(f'评估 {metric_name} 时出错!')
-                print(e)
+                print(f'评估 {metric_name} 时出错: {e}')
                 continue
         
         # 保存评估结果
@@ -588,77 +517,99 @@ class GraphRAGRetrievalEvaluator(BaseEvaluator):
         
         return result_dict
     
-    def evaluate_retrieval(self, questions: List[str], agent_with_trace=False) -> Dict[str, float]:
+    def evaluate_agent(self, agent_name: str, questions: List[str]) -> Dict[str, float]:
         """
-        评估检索系统
+        评估特定代理的检索性能
         
         Args:
-            questions (List[str]): 问题列表
-            agent_with_trace (bool): 是否使用带trace的代理
+            agent_name: 代理名称 (naive, hybrid, graph, deep)
+            questions: 问题列表
             
         Returns:
             Dict[str, float]: 评估结果
         """
-        if not self.qa_agent:
-            raise ValueError("未提供QA代理，无法评估检索系统")
+        agents = {
+            "naive": self.config.get("naive_agent"),
+            "hybrid": self.config.get("hybrid_agent"),
+            "graph": self.config.get("graph_agent"),
+            "deep": self.config.get("deep_agent")
+        }
         
-        # 初始化评估数据
+        agent = agents.get(agent_name)
+        if not agent:
+            raise ValueError(f"未找到代理: {agent_name}")
+        
+        # 创建评估数据集
         eval_data = RetrievalEvaluationData()
         
         # 处理每个问题
         for question in questions:
             # 创建评估样本
-            sample = RetrievalEvaluationSample(question=question)
+            sample = RetrievalEvaluationSample(
+                question=question,
+                agent_type=agent_name
+            )
             
-            # 获取带trace的回答（包含检索数据）
-            try:
-                if agent_with_trace:
-                    response = self.qa_agent.ask_with_trace(question)
-                    
-                    # 从trace中提取检索数据
-                    answer = response.get('answer', '')
-                    logs = response.get('execution_log', [])
-                    
-                    # 提取实体和关系
-                    entities, relationships = self._extract_retrieval_data_from_logs(logs)
-                    
-                    # 更新样本
-                    sample.update_answer(answer)
-                    sample.update_retrieval_data(entities, relationships)
-                    sample.update_logs({"execution_log": logs})
-                else:
-                    # 普通回答
-                    answer = self.qa_agent.ask(question)
-                    
-                    # 使用Neo4j获取相关图数据
-                    if self.neo4j_client:
-                        entities, relationships = self._get_relevant_graph_data(question)
-                        sample.update_retrieval_data(entities, relationships)
-                    
-                    # 更新样本
-                    sample.update_answer(answer)
-            except Exception as e:
-                print(f"处理问题 '{question}' 时出错: {e}")
-                sample.update_answer("")
+            # 记录开始时间
+            start_time = time.time()
+            
+            # 普通回答
+            answer = agent.ask(question)
+            
+            # 更新样本
+            sample.update_system_answer(answer, agent_name)
+            sample.retrieval_time = time.time() - start_time
+            
+            # 使用Neo4j获取相关图数据
+            if self.neo4j_client:
+                entities, relationships = self._get_relevant_graph_data(question)
+                sample.update_retrieval_data(entities, relationships)
             
             # 添加到评估数据
             eval_data.append(sample)
         
         # 执行评估
-        results = self.evaluate(eval_data)
+        return self.evaluate(eval_data)
+    
+    def compare_agents(self, questions: List[str]) -> Dict[str, Dict[str, float]]:
+        """
+        比较所有代理的检索性能
         
-        # 使用表格格式格式化结果
-        formatted_results = self.format_results_table(results)
-        print(formatted_results)
+        Args:
+            questions: 问题列表
+            
+        Returns:
+            Dict[str, Dict[str, float]]: 每个代理的评估结果
+        """
+        agents = {
+            "naive": self.config.get("naive_agent"),
+            "hybrid": self.config.get("hybrid_agent"),
+            "graph": self.config.get("graph_agent"),
+            "deep": self.config.get("deep_agent")
+        }
+        
+        results = {}
+        
+        for agent_name, agent in agents.items():
+            if agent:
+                print(f"评估代理: {agent_name}")
+                agent_results = self.evaluate_agent(agent_name, questions)
+                results[agent_name] = agent_results
+                
+                # 打印结果
+                print(f"{agent_name} 评估结果:")
+                for metric, score in agent_results.items():
+                    print(f"  {metric}: {score:.4f}")
+                print()
         
         return results
     
-    def _extract_retrieval_data_from_logs(self, logs: List[Dict[str, Any]]) -> Tuple[List[str], List[Tuple[str, str, str]]]:
+    def _extract_retrieval_data_from_logs(self, logs: List[Dict]) -> Tuple[List[str], List[Tuple[str, str, str]]]:
         """
         从执行日志中提取检索到的实体和关系
         
         Args:
-            logs (List[Dict[str, Any]]): 执行日志
+            logs: 执行日志
             
         Returns:
             Tuple[List[str], List[Tuple[str, str, str]]]: 实体和关系
@@ -708,7 +659,7 @@ class GraphRAGRetrievalEvaluator(BaseEvaluator):
         从Neo4j获取与问题相关的实体和关系
         
         Args:
-            question (str): 问题
+            question: 问题
             
         Returns:
             Tuple[List[str], List[Tuple[str, str, str]]]: 实体和关系
@@ -726,41 +677,76 @@ class GraphRAGRetrievalEvaluator(BaseEvaluator):
         try:
             # 查询与关键词匹配的实体
             entity_query = """
-            MATCH (n)
-            WHERE any(word IN $keywords WHERE n.name CONTAINS word OR n.description CONTAINS word)
-            RETURN n.name AS name
+            MATCH (n:__Entity__)
+            WHERE any(word IN $keywords WHERE n.id CONTAINS word OR n.description CONTAINS word)
+            RETURN n.id AS id
             LIMIT 10
             """
             
             # 查询与这些实体相关的关系
             relationship_query = """
-            MATCH (a)-[r]->(b)
-            WHERE a.name IN $entity_names OR b.name IN $entity_names
-            RETURN a.name AS source, type(r) AS relation, b.name AS target
+            MATCH (a:__Entity__)-[r]->(b:__Entity__)
+            WHERE a.id IN $entity_ids OR b.id IN $entity_ids
+            RETURN a.id AS source, type(r) AS relation, b.id AS target
             LIMIT 20
             """
             
             # 执行查询
-            entity_result = self.neo4j_client.query(entity_query, {"keywords": question_words})
-            
-            # 提取实体名称
-            if entity_result:
-                entity_names = [record.get('name', '') for record in entity_result if record.get('name')]
-                entities = [name for name in entity_names if name]
-                
-                # 查询关系
-                if entities:
-                    rel_result = self.neo4j_client.query(relationship_query, {"entity_names": entities})
-                    
-                    # 提取关系
-                    if rel_result:
-                        for record in rel_result:
-                            source = record.get('source', '')
-                            relation = record.get('relation', '')
-                            target = record.get('target', '')
-                            if source and relation and target:
-                                relationships.append((source, relation, target))
+            entity_result = self.neo4j_client.execute_query(entity_query, {"keywords": question_words})
+
+            if entity_result.records:
+                for record in entity_result.records:
+                    if 'id' in record:
+                        entity_id = record['id']
+                        if entity_id:
+                            entities.append(entity_id)
+
+            rel_result = self.neo4j_client.execute_query(relationship_query, {"entity_ids": entities})
+            if rel_result.records:
+                for record in rel_result.records:
+                    if 'source' in record and 'relation' in record and 'target' in record:
+                        source = record['source']
+                        relation = record['relation']
+                        target = record['target']
+                        if source and relation and target:
+                            relationships.append((source, relation, target))
         except Exception as e:
             print(f"从Neo4j获取图数据时出错: {e}")
         
         return entities, relationships
+    
+    def format_comparison_table(self, results: Dict[str, Dict[str, float]]) -> str:
+        """
+        将比较结果格式化为表格
+        
+        Args:
+            results: 比较结果
+            
+        Returns:
+            str: 表格字符串
+        """
+        # 获取所有指标
+        all_metrics = set()
+        for agent_results in results.values():
+            all_metrics.update(agent_results.keys())
+        
+        # 构建表头
+        header = "| 指标 | " + " | ".join(results.keys()) + " |"
+        separator = "| --- | " + " | ".join(["---" for _ in results]) + " |"
+        
+        # 构建行
+        rows = []
+        for metric in sorted(all_metrics):
+            row = f"| {metric} |"
+            for agent in results:
+                score = results[agent].get(metric, "N/A")
+                if isinstance(score, float):
+                    score_str = f"{score:.4f}"
+                else:
+                    score_str = str(score)
+                row += f" {score_str} |"
+            rows.append(row)
+        
+        # 拼接表格
+        table = "\n".join([header, separator] + rows)
+        return table

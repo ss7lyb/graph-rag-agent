@@ -1,7 +1,6 @@
 import re
 import string
-from typing import List, Dict, Any, Set, Tuple
-import json
+from typing import List, Dict, Set, Tuple
 
 def normalize_answer(s: str) -> str:
     """
@@ -74,64 +73,66 @@ def extract_relationships_from_neo4j_response(text: str) -> List[Tuple[str, str,
     
     return unique_rels
 
-def extract_json_from_text(text: str) -> Any:
-    """
-    从文本中提取JSON内容
+def extract_referenced_entities(answer: str) -> Set[str]:
+    # 从 '引用数据' 部分提取 Entities
+    entities_pattern = r"Entities\s*:\s*\[(.*?)\]"
+    entities_match = re.search(entities_pattern, answer, re.DOTALL)
     
-    Args:
-        text (str): 包含JSON的文本
-        
-    Returns:
-        Any: 解析后的JSON对象
-    """
-    # 寻找可能的JSON内容
-    json_pattern = r'{.*}'
-    json_match = re.search(json_pattern, text, re.DOTALL)
+    entities = set()
+    if entities_match:
+        entities_str = entities_match.group(1)
+        # 处理数字ID和字符串ID
+        for item in re.findall(r'\d+|\'[^\']*\'|\"[^\"]*\"', entities_str):
+            if item.isdigit():
+                entities.add(item)
+            else:
+                # 去除引号
+                entities.add(item.strip('\'\"'))
     
-    if json_match:
-        json_str = json_match.group(0)
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError:
-            # 尝试修复常见的JSON格式错误
-            # 单引号替换为双引号
-            json_str = json_str.replace("'", '"')
-            try:
-                return json.loads(json_str)
-            except json.JSONDecodeError:
-                pass
+    # 也检查文本中的实体名词
+    patterns = [
+        r'(?:["\'](.*?)["\'](?:\s+(?:是|表示|代表|指|指代)))',
+        r'(?:\b([\w\u4e00-\u9fa5]+)\b(?:\s+是|表示|被称为|指代))'
+    ]
     
-    return None
+    for pattern in patterns:
+        matches = re.findall(pattern, answer, re.IGNORECASE)
+        entities.update(matches)
+    
+    # 添加调试输出
+    print(f"提取的实体: {entities}")
+    
+    return entities
 
-def compute_overlap_score(pred: List[str], truth: List[str]) -> float:
+def extract_referenced_relationships(answer: str) -> List[Tuple[str, str, str]]:
     """
-    计算两个列表的重叠分数
+    从回答中提取引用的关系
     
     Args:
-        pred (List[str]): 预测列表
-        truth (List[str]): 真实列表
+        answer (str): 回答文本
         
     Returns:
-        float: Jaccard相似度 (0-1之间)
+        List[Tuple[str, str, str]]: 关系列表，每个元素为(源实体, 关系类型, 目标实体)
     """
-    if not pred or not truth:
-        return 0.0
+    # 尝试提取关系
+    patterns = [
+        r'(?:["\'](.*?)["\'])\s*(?:和|与)\s*(?:["\'](.*?)["\'])\s*(?:之间|存在|有)\s*(?:["\'](.*?)["\'])\s*(?:关系|联系)',
+        r'(?:["\'](.*?)["\'])\s*(?:["\'](.*?)["\'])\s*(?:["\'](.*?)["\'])',
+        r'(?:([\w\u4e00-\u9fa5]+))\s*(?:和|与)\s*(?:([\w\u4e00-\u9fa5]+))\s*(?:之间|存在|有)\s*(?:([\w\u4e00-\u9fa5]+))'
+    ]
     
-    # 标准化处理
-    pred_norm = [normalize_answer(p) for p in pred]
-    truth_norm = [normalize_answer(t) for t in truth]
+    relationships = []
+    for pattern in patterns:
+        matches = re.findall(pattern, answer, re.IGNORECASE)
+        relationships.extend(matches)
     
-    # 计算交集大小
-    intersection = set(pred_norm).intersection(set(truth_norm))
+    # 过滤可能的误匹配
+    valid_relationships = []
+    for src, rel, dst in relationships:
+        if src and rel and dst and len(src) < 50 and len(rel) < 50 and len(dst) < 50:
+            valid_relationships.append((src, rel, dst))
     
-    # 计算并集大小
-    union = set(pred_norm).union(set(truth_norm))
-    
-    # Jaccard相似度
-    if len(union) == 0:
-        return 0.0
-    
-    return len(intersection) / len(union)
+    return valid_relationships
 
 def compute_precision_recall_f1(pred: List[str], truth: List[str]) -> Dict[str, float]:
     """
@@ -166,58 +167,3 @@ def compute_precision_recall_f1(pred: List[str], truth: List[str]) -> Dict[str, 
         "recall": recall, 
         "f1": f1
     }
-
-def extract_referenced_entities(answer: str) -> Set[str]:
-    """
-    从回答中提取引用的实体
-    
-    Args:
-        answer (str): 回答文本
-        
-    Returns:
-        Set[str]: 实体集合
-    """
-    # 尝试提取实体名称
-    patterns = [
-        r'(?:["\'](.*?)["\'](?:\s+(?:是|表示|代表|指|指代)))',
-        r'(?:(?:实体|节点|Node)[:：]\s*["\'](.*?)["\'])',
-        r'(?:\b([\w\u4e00-\u9fa5]+)\b(?:\s+是|表示|被称为|指代))'
-    ]
-    
-    entities = set()
-    for pattern in patterns:
-        matches = re.findall(pattern, answer, re.IGNORECASE)
-        entities.update(matches)
-    
-    # 过滤空字符串和太长的内容（可能是误匹配）
-    return {e for e in entities if e and len(e) < 50}
-
-def extract_referenced_relationships(answer: str) -> List[Tuple[str, str, str]]:
-    """
-    从回答中提取引用的关系
-    
-    Args:
-        answer (str): 回答文本
-        
-    Returns:
-        List[Tuple[str, str, str]]: 关系列表，每个元素为(源实体, 关系类型, 目标实体)
-    """
-    # 尝试提取关系
-    patterns = [
-        r'(?:["\'](.*?)["\'])\s*(?:和|与)\s*(?:["\'](.*?)["\'])\s*(?:之间|存在|有)\s*(?:["\'](.*?)["\'])\s*(?:关系|联系)',
-        r'(?:["\'](.*?)["\'])\s*(?:["\'](.*?)["\'])\s*(?:["\'](.*?)["\'])',
-        r'(?:([\w\u4e00-\u9fa5]+))\s*(?:和|与)\s*(?:([\w\u4e00-\u9fa5]+))\s*(?:之间|存在|有)\s*(?:([\w\u4e00-\u9fa5]+))'
-    ]
-    
-    relationships = []
-    for pattern in patterns:
-        matches = re.findall(pattern, answer, re.IGNORECASE)
-        relationships.extend(matches)
-    
-    # 过滤可能的误匹配
-    valid_relationships = []
-    for src, rel, dst in relationships:
-        if src and rel and dst and len(src) < 50 and len(rel) < 50 and len(dst) < 50:
-            valid_relationships.append((src, rel, dst))
-    
-    return valid_relationships

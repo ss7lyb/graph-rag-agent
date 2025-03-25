@@ -1,12 +1,13 @@
-from typing import Dict, Any, List
+import time
+import os
+import psutil
+from typing import Dict, Any, List, Tuple
+
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
-import time
-import os
-import psutil
 
 from model.get_models import get_llm_model, get_embeddings_model
 from config.prompt import (
@@ -22,14 +23,14 @@ from config.settings import (
     OVERLAP
 )
 from config.neo4jdb import get_db_manager
-from processor.file_reader import FileReader
-from processor.text_chunker import ChineseTextChunker
+from processor.document_processor import DocumentProcessor
 from graph import GraphStructureBuilder
 from graph import EntityRelationExtractor
 from graph import GraphWriter
 
 import shutup
 shutup.please()
+
 
 class KnowledgeGraphBuilder:
     """
@@ -47,7 +48,7 @@ class KnowledgeGraphBuilder:
         """初始化知识图谱构建器"""
         # 初始化终端界面
         self.console = Console()
-        self.file_contents = []
+        self.processed_documents = []
         
         # 添加计时器
         self.start_time = None
@@ -56,8 +57,7 @@ class KnowledgeGraphBuilder:
         # 阶段性能统计
         self.performance_stats = {
             "初始化": 0,
-            "文件读取": 0,
-            "文本分块": 0,
+            "文件处理": 0,  # 改为"文件处理"，包含读取和分块
             "图结构构建": 0,
             "实体抽取": 0,
             "写入数据库": 0
@@ -93,9 +93,8 @@ class KnowledgeGraphBuilder:
             self.graph = db_manager.graph
             progress.advance(task)
             
-            # 初始化文本处理器
-            self.file_reader = FileReader(FILES_DIR)
-            self.chunker = ChineseTextChunker(CHUNK_SIZE, OVERLAP)
+            # 初始化文档处理器 - 使用DocumentProcessor替代直接使用FileReader和ChineseTextChunker
+            self.document_processor = DocumentProcessor(FILES_DIR, CHUNK_SIZE, OVERLAP)
             progress.advance(task)
             
             # 初始化图谱构建器 - 动态调整批处理大小和并行度
@@ -154,38 +153,41 @@ class KnowledgeGraphBuilder:
         self._display_stage_header("构建基础知识图谱")
         
         try:
-            # 1. 读取文件
-            read_start = time.time()
+            # 1. 处理文件（读取和分块）
+            process_start = time.time()
             with self._create_progress() as progress:
-                task = progress.add_task("[cyan]读取文件...", total=1)
-                self.file_contents = self.file_reader.read_txt_files()
+                task = progress.add_task("[cyan]处理文件...", total=1)
+                
+                # 使用DocumentProcessor处理文件
+                self.processed_documents = self.document_processor.process_directory()
                 progress.update(task, completed=1)
                 
                 # 显示文件信息
                 table = Table(title="文件信息")
                 table.add_column("文件名")
+                table.add_column("类型", style="cyan")
                 table.add_column("内容长度", justify="right")
-                for file_name, content in self.file_contents:
-                    table.add_row(file_name, str(len(content)))
+                table.add_column("分块数量", justify="right")
+                
+                for doc in self.processed_documents:
+                    file_type = self.document_processor.get_extension_type(doc["extension"])
+                    chunks_count = doc.get("chunk_count", 0)
+                    table.add_row(
+                        doc["filename"], 
+                        file_type, 
+                        str(doc["content_length"]),
+                        str(chunks_count)
+                    )
                 self.console.print(table)
             
-            self.performance_stats["文件读取"] = time.time() - read_start
-            
-            # 2. 文本分块
-            chunk_start = time.time()
-            with self._create_progress() as progress:
-                task = progress.add_task("[cyan]文本分块...", total=len(self.file_contents))
-                for file_content in self.file_contents:
-                    chunks = self.chunker.chunk_text(file_content[1])
-                    file_content.append(chunks)
-                    progress.advance(task)
-            
-            self.performance_stats["文本分块"] = time.time() - chunk_start
+            self.performance_stats["文件处理"] = time.time() - process_start
             
             # 显示分块统计
-            total_chunks = sum(len(file_content[2]) for file_content in self.file_contents)
-            avg_chunk_size = sum(len(''.join(chunk)) for file_content in self.file_contents for chunk in file_content[2]) / total_chunks if total_chunks else 0
+            total_chunks = sum(doc.get("chunk_count", 0) for doc in self.processed_documents)
+            total_length = sum(doc["content_length"] for doc in self.processed_documents)
+            avg_chunk_size = sum(sum(doc.get("chunk_lengths", [0])) for doc in self.processed_documents) / total_chunks if total_chunks else 0
             
+            self.console.print(f"[blue]共处理 {len(self.processed_documents)} 个文件，总计 {total_length} 字符[/blue]")
             self.console.print(f"[blue]共生成 {total_chunks} 个文本块，平均每块 {avg_chunk_size:.1f} 字符[/blue]")
             
             # 3. 构建图结构
@@ -195,33 +197,35 @@ class KnowledgeGraphBuilder:
                 
                 # 清空并创建Document节点
                 self.struct_builder.clear_database()
-                for file_content in self.file_contents:
-                    self.struct_builder.create_document(
-                        type="local",
-                        uri=str(FILES_DIR),
-                        file_name=file_content[0],
-                        domain=theme
-                    )
+                for doc in self.processed_documents:
+                    if "chunks" in doc and doc["chunks"]:  # 只处理成功分块的文档
+                        self.struct_builder.create_document(
+                            type="local",
+                            uri=str(FILES_DIR),
+                            file_name=doc["filename"],
+                            domain=theme
+                        )
                 progress.advance(task)
                 
                 # 创建Chunk节点和关系 - 优化：使用并行处理大文件
-                for file_content in self.file_contents:
-                    # 根据chunks数量选择处理方法
-                    chunks = file_content[2]
-                    if len(chunks) > 100:
-                        # 对于大文件使用并行处理
-                        result = self.struct_builder.parallel_process_chunks(
-                            file_content[0],
-                            chunks,
-                            max_workers=os.cpu_count() or 4
-                        )
-                    else:
-                        # 对于小文件使用标准批处理
-                        result = self.struct_builder.create_relation_between_chunks(
-                            file_content[0],
-                            chunks
-                        )
-                    file_content.append(result)
+                for doc in self.processed_documents:
+                    if "chunks" in doc and doc["chunks"]:  # 只处理成功分块的文档
+                        # 根据chunks数量选择处理方法
+                        chunks = doc["chunks"]
+                        if doc.get("chunk_count", 0) > 100:
+                            # 对于大文件使用并行处理
+                            result = self.struct_builder.parallel_process_chunks(
+                                doc["filename"],
+                                chunks,
+                                max_workers=os.cpu_count() or 4
+                            )
+                        else:
+                            # 对于小文件使用标准批处理
+                            result = self.struct_builder.create_relation_between_chunks(
+                                doc["filename"],
+                                chunks
+                            )
+                        doc["graph_result"] = result
                 progress.advance(task)
                 progress.advance(task)
             
@@ -230,25 +234,52 @@ class KnowledgeGraphBuilder:
             # 4. 提取实体和关系
             extract_start = time.time()
             with self._create_progress() as progress:
-                total_chunks = sum(len(file_content[2]) for file_content in self.file_contents)
+                total_chunks = sum(doc.get("chunk_count", 0) for doc in self.processed_documents)
                 task = progress.add_task("[cyan]提取实体和关系...", total=total_chunks)
                 
                 def progress_callback(chunk_index):
                     progress.advance(task)
                 
+                # 准备处理的数据格式
+                file_contents_format = []
+                for doc in self.processed_documents:
+                    if "chunks" in doc and doc["chunks"]:
+                        file_contents_format.append([
+                            doc["filename"], 
+                            doc["content"], 
+                            doc["chunks"]
+                        ])
+                
                 # 根据数据集大小选择处理方法
                 if total_chunks > 100:
                     # 对于大型数据集使用批处理模式
-                    self.file_contents = self.entity_extractor.process_chunks_batch(
-                        self.file_contents,
+                    processed_file_contents = self.entity_extractor.process_chunks_batch(
+                        file_contents_format,
                         progress_callback
                     )
                 else:
                     # 对于小型数据集使用标准并行处理
-                    self.file_contents = self.entity_extractor.process_chunks(
-                        self.file_contents,
+                    processed_file_contents = self.entity_extractor.process_chunks(
+                        file_contents_format,
                         progress_callback
                     )
+                
+                # 将处理结果合并回文档数据
+                file_content_map = {}
+                for processed_file in processed_file_contents:
+                    if len(processed_file) >= 4:  # 确保有足够的元素
+                        filename = processed_file[0]
+                        entity_data = processed_file[3]
+                        file_content_map[filename] = entity_data
+                
+                # 使用映射将结果放回到原始文档中
+                for doc in self.processed_documents:
+                    if "chunks" in doc and doc["chunks"]:
+                        filename = doc["filename"]
+                        if filename in file_content_map:
+                            doc["entity_data"] = file_content_map[filename]
+                        else:
+                            self.console.print(f"[yellow]警告: 文件 {filename} 的实体抽取结果未找到[/yellow]")
             
             self.performance_stats["实体抽取"] = time.time() - extract_start
             
@@ -264,13 +295,40 @@ class KnowledgeGraphBuilder:
             write_start = time.time()
             with self._create_progress() as progress:
                 task = progress.add_task("[cyan]写入数据库...", total=1)
+                
+                # 将处理数据转换为GraphWriter所需格式
+                graph_writer_data = []
+                for doc in self.processed_documents:
+                    if "chunks" in doc and doc["chunks"] and "entity_data" in doc:
+                        # 获取图构建结果（创建的chunk节点列表）
+                        graph_result = doc.get("graph_result", [])
+                        entity_data = doc.get("entity_data", [])
+                        
+                        # 确保graph_result和entity_data存在且长度相等
+                        if not graph_result:
+                            self.console.print(f"[yellow]警告: 文件 {doc['filename']} 的图结构结果缺失[/yellow]")
+                            continue
+                            
+                        if not entity_data or not isinstance(entity_data, list):
+                            self.console.print(f"[yellow]警告: 文件 {doc['filename']} 的实体数据缺失或格式不正确[/yellow]")
+                            continue
+                            
+                        # 调整数据格式以匹配GraphWriter期望的结构
+                        graph_writer_data.append([
+                            doc["filename"],
+                            doc["content"],
+                            doc["chunks"],
+                            graph_result,  # 这应该是chunks_with_hash数据
+                            entity_data,    # 这应该是实体提取结果
+                        ])
+                
                 # 使用优化的GraphWriter
                 graph_writer = GraphWriter(
                     self.graph, 
                     batch_size=50,
                     max_workers=os.cpu_count() or 4
                 )
-                graph_writer.process_and_write_graph_documents(self.file_contents)
+                graph_writer.process_and_write_graph_documents(graph_writer_data)
                 progress.update(task, completed=1)
             
             self.performance_stats["写入数据库"] = time.time() - write_start
@@ -291,7 +349,20 @@ class KnowledgeGraphBuilder:
             performance_table.add_row("总计", f"{total_time:.2f}", "100.0", style="bold")
             self.console.print(performance_table)
             
-            return self.file_contents
+            # 返回处理好的文档列表
+            file_contents_compat = []
+            for doc in self.processed_documents:
+                if "chunks" in doc and doc["chunks"]:
+                    content_list = [
+                        doc["filename"],
+                        doc["content"],
+                        doc["chunks"]
+                    ]
+                    if "entity_data" in doc:
+                        content_list.append(doc["entity_data"])
+                    file_contents_compat.append(content_list)
+            
+            return file_contents_compat
             
         except Exception as e:
             self.console.print(f"[red]基础图谱构建失败: {str(e)}[/red]")

@@ -47,6 +47,17 @@ class ChineseTextChunker:
         Returns:
             分割后的文本块列表，每个块是token列表
         """
+        # 处理空文本或太短的文本
+        if not text or len(text) < self.chunk_size / 10:  # 如果文本长度不到chunk_size的1/10
+            # 尝试简单分词并返回单个块
+            try:
+                tokens = self.tokenizer(text)
+                return [tokens] if tokens else []
+            except Exception as e:
+                print(f"分词失败：{str(e)}")
+                # 如果连分词都失败，则手动分字符
+                return [[char for char in text]] if text else []
+                
         paragraphs = text.split('\n')
         chunks = []
         buffer = []
@@ -55,32 +66,56 @@ class ChineseTextChunker:
         while i < len(paragraphs):
             # 填充buffer
             while len(buffer) < self.chunk_size and i < len(paragraphs):
-                tokens = self.tokenizer(paragraphs[i])
-                buffer.extend(tokens)
+                try:
+                    tokens = self.tokenizer(paragraphs[i])
+                    buffer.extend(tokens)
+                except Exception as e:
+                    print(f"分词失败 ({i}): {str(e)}")
+                    # 如果分词失败，直接按字符添加
+                    buffer.extend([char for char in paragraphs[i]])
                 i += 1
                 
+            # 空buffer检查
+            if not buffer:
+                continue
+                    
             # 处理当前buffer
             while len(buffer) >= self.chunk_size:
-                end = self._find_next_sentence_end(buffer, self.chunk_size)
-                chunk = buffer[:end]
-                chunks.append(chunk)
-                
-                start_next = self._find_previous_sentence_end(buffer, end - self.overlap)
-                if start_next == 0:
-                    start_next = self._find_previous_sentence_end(buffer, end - 1)
-                if start_next == 0:
-                    start_next = end - self.overlap
+                try:
+                    end = self._find_next_sentence_end(buffer, self.chunk_size)
+                    chunk = buffer[:end]
+                    chunks.append(chunk)
                     
-                buffer = buffer[start_next:]
+                    start_next = self._find_previous_sentence_end(buffer, end - self.overlap)
+                    if start_next == 0:
+                        start_next = self._find_previous_sentence_end(buffer, end - 1)
+                    if start_next == 0:
+                        start_next = max(0, end - self.overlap)
+                        
+                    buffer = buffer[start_next:]
+                except IndexError:
+                    # 处理可能的索引错误
+                    print("处理buffer时出现索引错误，使用安全分块")
+                    mid = len(buffer) // 2
+                    chunks.append(buffer[:mid])
+                    buffer = buffer[max(0, mid - self.overlap):]
         
         # 处理剩余内容
         if buffer:
-            last_chunk = chunks[-1]
-            rest = ''.join(buffer)
-            temp = ''.join(last_chunk[len(last_chunk)-len(rest):])
-            if temp != rest:
+            if not chunks:  # 如果之前没有生成任何块
                 chunks.append(buffer)
-                
+            else:
+                last_chunk = chunks[-1]
+                # 安全检查：确保索引有效
+                if len(last_chunk) >= len(buffer):
+                    rest = ''.join(buffer)
+                    temp = ''.join(last_chunk[len(last_chunk)-len(buffer):])
+                    if temp != rest:
+                        chunks.append(buffer)
+                else:
+                    # 索引无效，直接添加剩余内容
+                    chunks.append(buffer)
+                    
         return chunks
     
     def _is_sentence_end(self, token: str) -> bool:

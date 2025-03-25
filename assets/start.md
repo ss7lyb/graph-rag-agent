@@ -26,6 +26,14 @@ cd graph-rag-agent/
 pip install -r requirements.txt
 ```
 
+注意，如果需要处理`.doc（老式word文档）`，这里也提供了解决方案，见requirements.txt即可：
+
+```txt
+# linux: sudo apt-get install python-dev-is-python3 libxml2-dev libxslt1-dev antiword unrtf poppler-utils
+textract==1.6.3 # windows不用这个
+# windows: pywin32>=302
+```
+
 .env文件配置：
 
 ```env
@@ -142,7 +150,7 @@ response = requests.post(
 )
 ```
 
-Linux 下中文字体安装：见[教程](https://zhuanlan.zhihu.com/p/571610437)
+Linux 下中文字体安装：见[教程](https://zhuanlan.zhihu.com/p/571610437)，或者直接使用英文画图也可，本项目默认用英文画plt的图。
 
 前后端项目启动：
 

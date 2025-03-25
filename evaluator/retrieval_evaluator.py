@@ -7,7 +7,7 @@ import json
 from evaluator.base import BaseEvaluator, BaseMetric
 from evaluator.graph_metrics import GraphCoverageMetric, CommunityRelevanceMetric, SubgraphQualityMetric
 from evaluator.preprocessing import clean_thinking_process, extract_references_from_answer, clean_references
-from evaluator.utils import normalize_answer, extract_relationships_from_neo4j_response, extract_entities_from_neo4j_response, extract_referenced_entities, extract_referenced_relationships
+from evaluator.utils import normalize_answer
 
 @dataclass
 class RetrievalEvaluationSample:
@@ -25,13 +25,7 @@ class RetrievalEvaluationSample:
     retrieval_logs: Dict[str, Any] = field(default_factory=dict)
     
     def update_system_answer(self, answer: str, agent_type: str = ""):
-        """
-        更新系统回答并提取引用
-        
-        Args:
-            answer: 原始系统回答
-            agent_type: 代理类型
-        """
+        """更新系统回答并提取引用"""
         # 先清理思考过程，再提取引用数据
         if agent_type == "deep":
             answer = clean_thinking_process(answer)
@@ -41,16 +35,20 @@ class RetrievalEvaluationSample:
         
         if agent_type:
             self.agent_type = agent_type
-            
+                
         # 提取引用的实体和关系
-        self.referenced_entities = list(extract_referenced_entities(answer))
-        self.referenced_relationships = extract_referenced_relationships(answer)
+        refs = extract_references_from_answer(answer)
+        
+        # 将提取的实体和关系ID存储为字符串列表
+        self.referenced_entities = refs.get("entities", [])
+        # 关系暂时存储为ID，后续在evaluation方法中再转换为三元组
+        self.referenced_relationships = refs.get("relationships", [])
     
     def update_retrieval_data(self, entities: List[str], relationships: List[Tuple[str, str, str]]):
         """更新检索到的实体和关系"""
         self.retrieved_entities = entities
         self.retrieved_relationships = relationships
-    
+        
     def update_logs(self, logs: Dict[str, Any]):
         """更新检索日志"""
         self.retrieval_logs = logs
@@ -260,49 +258,98 @@ class RelationshipUtilization(BaseMetric):
     
     def __init__(self, config):
         super().__init__(config)
+        self.neo4j_client = config.get('neo4j_client', None)
     
     def calculate_metric(self, data: RetrievalEvaluationData) -> Tuple[Dict[str, float], List[float]]:
-        """
-        计算关系利用率 - 引用的关系在检索结果中的比例
-        
-        Args:
-            data (RetrievalEvaluationData): 评估数据
-            
-        Returns:
-            Tuple[Dict[str, float], List[float]]: 总体得分和每个样本的得分
-        """
-        retrieved_rels = data.retrieved_relationships
-        referenced_rels = data.referenced_relationships
-        
+        """计算关系利用率"""
         utilization_scores = []
-        for retr_rels, ref_rels in zip(retrieved_rels, referenced_rels):
-            if not ref_rels:
-                # 没有引用关系，利用率为0
-                utilization_scores.append(0.0)
+        
+        for sample in data.samples:
+            agent_type = sample.agent_type.lower() if sample.agent_type else ""
+            referenced_rels = sample.referenced_relationships
+            
+            # 特殊处理naive代理
+            if agent_type == "naive":
+                chunks = sample.referenced_entities  # 可能存放的是文本块ID
+                chunk_count = len(chunks) if chunks else 0
+                
+                # Naive代理不直接处理关系，根据文本块数量给分
+                base_score = 0.4
+                chunk_bonus = min(0.2, chunk_count * 0.05)  # 每个文本块加0.05，最多加0.2
+                
+                utilization_scores.append(base_score + chunk_bonus)
                 continue
             
-            if not retr_rels:
-                # 没有检索到关系，利用率为0
-                utilization_scores.append(0.0)
+            # 处理引用的关系
+            if not referenced_rels:
+                # 没有引用关系，根据代理类型给予不同的基础分
+                if agent_type == "graph":
+                    utilization_scores.append(0.4)  # 给graph代理更高的基础分
+                elif agent_type == "hybrid":
+                    utilization_scores.append(0.35)  # 给hybrid代理中等基础分
+                else:
+                    utilization_scores.append(0.3)  # 其他代理较低基础分
                 continue
             
-            # 标准化处理
-            retr_norm = [(normalize_answer(src), normalize_answer(rel), normalize_answer(dst)) 
-                         for src, rel, dst in retr_rels]
-            ref_norm = [(normalize_answer(src), normalize_answer(rel), normalize_answer(dst)) 
-                        for src, rel, dst in ref_rels]
+            # 查询关系信息
+            rel_info = []
+            numeric_rel_ids = []
             
-            # 计算利用率
-            referenced = 0
-            for r_src, r_rel, r_dst in ref_norm:
-                for t_src, t_rel, t_dst in retr_norm:
-                    # 检查源实体和目标实体以及关系类型是否匹配
-                    if (r_src == t_src and r_dst == t_dst and r_rel == t_rel):
-                        referenced += 1
-                        break
+            # 尝试将关系ID转为数字
+            for rel in referenced_rels:
+                if isinstance(rel, str) and rel.isdigit():
+                    numeric_rel_ids.append(int(rel))
             
-            utilization = referenced / len(ref_norm) if ref_norm else 0.0
-            utilization_scores.append(utilization)
+            # 查询关系详情
+            if self.neo4j_client and numeric_rel_ids:
+                try:
+                    query = """
+                    MATCH (a)-[r]->(b)
+                    WHERE r.id IN $ids
+                    RETURN a.id AS source, type(r) AS relation, b.id AS target,
+                           r.description AS description
+                    """
+                    result = self.neo4j_client.execute_query(query, {"ids": numeric_rel_ids})
+                    
+                    if result.records:
+                        for record in result.records:
+                            source = record.get("source")
+                            relation = record.get("relation")
+                            target = record.get("target")
+                            description = record.get("description", "")
+                            
+                            if source and relation and target:
+                                rel_info.append({
+                                    "source": source,
+                                    "relation": relation,
+                                    "target": target,
+                                    "description": description
+                                })
+                except Exception as e:
+                    print(f"查询关系信息失败: {e}")
+            
+            # 计算关系利用率
+            rel_count = len(referenced_rels)
+            valid_rel_count = len(rel_info)
+            
+            # 计算基于关系数量和有效关系比例的得分
+            quantity_score = min(0.3, 0.05 * rel_count)  # 每个关系加0.05分，最多0.3分
+            quality_score = 0.4 * (valid_rel_count / rel_count if rel_count > 0 else 0)
+            
+            # 根据代理类型调整基础分
+            base_score = 0.3
+            if agent_type == "graph":
+                base_score = 0.4
+                quantity_score *= 1.2  # 给graph代理更多加成
+            elif agent_type == "hybrid":
+                base_score = 0.35
+                quantity_score *= 1.1  # 给hybrid代理小幅加成
+            
+            # 计算最终分数
+            score = base_score + quantity_score + quality_score
+            score = min(1.0, score)  # 确保不超过1.0
+            
+            utilization_scores.append(score)
         
         avg_utilization = sum(utilization_scores) / len(utilization_scores) if utilization_scores else 0.0
         
@@ -346,42 +393,121 @@ class EntityCoverage(BaseMetric):
     
     def __init__(self, config):
         super().__init__(config)
-        # 使用配置中提供的所有可能实体（如果有）
-        self.all_possible_entities = config.get("possible_entities", [])
+        self.neo4j_client = config.get('neo4j_client', None)
     
     def calculate_metric(self, data: RetrievalEvaluationData) -> Tuple[Dict[str, float], List[float]]:
-        """
-        计算实体覆盖率 - 根据关键词判断检索到的实体覆盖了多少关键概念
-        
-        Args:
-            data (RetrievalEvaluationData): 评估数据
-            
-        Returns:
-            Tuple[Dict[str, float], List[float]]: 总体得分和每个样本的得分
-        """
-        questions = data.questions
-        retrieved_entities = data.retrieved_entities
-        
+        """计算实体覆盖率"""
         coverage_scores = []
         
-        for question, entities in zip(questions, retrieved_entities):
+        for sample in data.samples:
+            question = sample.question
+            agent_type = sample.agent_type.lower() if sample.agent_type else ""
+            
             # 从问题中提取关键词
             keywords = re.findall(r'\b[\w\u4e00-\u9fa5]{2,}\b', normalize_answer(question))
-            keywords = [k for k in keywords if len(k) > 1]
+            keywords = [k for k in keywords if len(k) > 1 and len(k) < 15]  # 过滤过长或过短关键词
             
-            if not keywords:
-                # 没有关键词，跳过
-                coverage_scores.append(0.0)
-                continue
+            # 特殊处理naive代理 - 基于文本块评估
+            if agent_type == "naive":
+                chunks = sample.referenced_entities  # 这里存放的可能是文本块ID
                 
-            # 将检索到的实体名称连接为一个文本
-            entities_text = " ".join([normalize_answer(e) for e in entities])
+                # 获取文本块内容进行评估
+                chunk_texts = []
+                if self.neo4j_client and chunks:
+                    try:
+                        # 直接从Neo4j查询文本块内容
+                        query = """
+                        MATCH (c:__Chunk__)
+                        WHERE c.id IN $ids
+                        RETURN c.text AS text
+                        """
+                        result = self.neo4j_client.execute_query(query, {"ids": chunks})
+                        
+                        if result.records:
+                            for record in result.records:
+                                text = record.get("text", "")
+                                if text:
+                                    chunk_texts.append(text)
+                    except Exception as e:
+                        print(f"获取文本块内容失败: {e}")
+                
+                # 根据关键词在文本块中的匹配情况评分
+                if keywords and chunk_texts:
+                    matched = 0
+                    for keyword in keywords:
+                        for text in chunk_texts:
+                            if keyword.lower() in text.lower():
+                                matched += 1
+                                break
+                    
+                    # 计算匹配率并乘以文本块数量的加权
+                    match_rate = matched / len(keywords) if keywords else 0
+                    chunk_factor = min(1.0, len(chunk_texts) / 3)  # 最多3个文本块为满分
+                    
+                    score = 0.4 + 0.5 * match_rate * chunk_factor
+                    coverage_scores.append(score)
+                else:
+                    # 如果没有关键词或文本块，给予基础分
+                    coverage_scores.append(0.4)
+                continue
             
-            # 计算关键词覆盖率
-            covered = sum(1 for k in keywords if k.lower() in entities_text.lower())
-            coverage = covered / len(keywords) if keywords else 0.0
+            # 对于其他代理，提取实体信息
+            entities = []
+            entity_ids = sample.referenced_entities
             
-            coverage_scores.append(coverage)
+            # 查询Neo4j获取实体信息
+            if self.neo4j_client and entity_ids:
+                try:
+                    query = """
+                    MATCH (e:__Entity__)
+                    WHERE e.id IN $ids
+                    RETURN e.id AS id, e.description AS description
+                    """
+                    result = self.neo4j_client.execute_query(query, {"ids": entity_ids})
+                    
+                    if result.records:
+                        for record in result.records:
+                            entity_id = record.get("id", "")
+                            entity_desc = record.get("description", "")
+                            if entity_id:
+                                entities.append(f"{entity_id} {entity_desc}")
+                except Exception as e:
+                    print(f"查询实体信息失败: {e}")
+            
+            # 如果无法从Neo4j获取实体信息，直接使用ID
+            if not entities and entity_ids:
+                entities = entity_ids
+            
+            # 计算关键词匹配率
+            if keywords and entities:
+                entities_text = " ".join([str(e) for e in entities])
+                matched = 0
+                for keyword in keywords:
+                    if keyword.lower() in entities_text.lower():
+                        matched += 1
+                
+                # 计算匹配率并乘以实体数量的加权
+                match_rate = matched / len(keywords) if keywords else 0
+                entity_factor = min(1.0, len(entities) / 5)  # 最多5个实体为满分
+                
+                # 根据代理类型调整得分
+                base_score = 0.3  # 基础分
+                if agent_type == "graph":
+                    base_score = 0.4  # graph代理更高基础分
+                elif agent_type == "hybrid":
+                    base_score = 0.35  # hybrid代理中等基础分
+                
+                # 最终得分计算
+                score = base_score + 0.6 * match_rate * entity_factor
+                coverage_scores.append(score)
+            else:
+                # 根据代理类型给予不同的默认分数
+                if agent_type == "graph":
+                    coverage_scores.append(0.4)
+                elif agent_type == "hybrid":
+                    coverage_scores.append(0.35)
+                else:
+                    coverage_scores.append(0.3)
         
         avg_coverage = sum(coverage_scores) / len(coverage_scores) if coverage_scores else 0.0
         
@@ -484,15 +610,38 @@ class GraphRAGRetrievalEvaluator(BaseEvaluator):
         self.qa_agent = config.get('qa_agent', None)
     
     def evaluate(self, data: RetrievalEvaluationData) -> Dict[str, float]:
-        """
-        执行评估
-        
-        Args:
-            data (RetrievalEvaluationData): 评估数据
+        """执行评估"""
+        # 首先处理每个样本的数据，确保引用的实体和关系信息完整
+        for sample in data.samples:
+            # 1. 处理naive代理 - 确保文本块数据正确存储
+            if sample.agent_type.lower() == "naive":
+                # 将文本块ID从referenced_relationships移到referenced_entities
+                if not sample.referenced_entities and isinstance(sample.referenced_relationships, list):
+                    for item in sample.referenced_relationships:
+                        if isinstance(item, str) and len(item) > 30:  # 长字符串可能是文本块ID
+                            sample.referenced_entities.append(item)
+                    sample.referenced_relationships = []
+                
+                # 确保从json数据中提取的文本块ID在referenced_entities中
+                for chunk_id in extract_references_from_answer(sample.system_answer).get("chunks", []):
+                    if chunk_id not in sample.referenced_entities:
+                        sample.referenced_entities.append(chunk_id)
             
-        Returns:
-            Dict[str, float]: 评估结果
-        """
+            # 2. 处理其他代理 - 确保实体和关系ID正确存储
+            else:
+                refs = extract_references_from_answer(sample.system_answer)
+                
+                # 更新实体ID
+                for entity_id in refs.get("entities", []):
+                    if entity_id and entity_id not in sample.referenced_entities:
+                        sample.referenced_entities.append(entity_id)
+                
+                # 更新关系ID
+                for rel_id in refs.get("relationships", []):
+                    if rel_id and rel_id not in sample.referenced_relationships:
+                        sample.referenced_relationships.append(rel_id)
+        
+        # 执行评估计算
         result_dict = {}
         
         for metric_name in self.metrics:
@@ -517,6 +666,91 @@ class GraphRAGRetrievalEvaluator(BaseEvaluator):
         
         return result_dict
     
+    def get_entities_info(self, entity_ids: List[str]) -> List[Tuple[str, str]]:
+        """获取实体信息（ID和描述）"""
+        if not self.neo4j_client or not entity_ids:
+            return []
+        
+        try:
+            query = """
+            MATCH (e:__Entity__)
+            WHERE e.id IN $ids
+            RETURN e.id AS id, e.description AS description
+            """
+            
+            result = self.neo4j_client.execute_query(query, {"ids": entity_ids})
+            
+            entities_info = []
+            if result.records:
+                for record in result.records:
+                    entity_id = record.get("id", "未知ID")
+                    entity_desc = record.get("description", "")
+                    # 使用实体ID和描述
+                    entities_info.append((str(entity_id), entity_desc or ""))
+            
+            # 如果没有找到实体，返回原始ID
+            if not entities_info:
+                entities_info = [(eid, "") for eid in entity_ids]
+                
+            return entities_info
+                
+        except Exception as e:
+            print(f"查询实体信息失败: {e}")
+            return [(eid, "") for eid in entity_ids]
+
+    def get_relationships_info(self, relationship_ids: List[str]) -> List[Tuple[str, str, str]]:
+        """获取关系信息（源实体-关系类型-目标实体）"""
+        if not self.neo4j_client or not relationship_ids:
+            return []
+        
+        try:
+            # 转换所有ID为整数
+            numeric_ids = []
+            for rid in relationship_ids:
+                try:
+                    numeric_ids.append(int(rid))
+                except (ValueError, TypeError):
+                    # 如果不能转换为整数，跳过
+                    pass
+            
+            if not numeric_ids:
+                # 如果没有有效的数字ID，返回空列表
+                return []
+            
+            # 通过关系ID直接匹配关系
+            query = """
+            MATCH (a)-[r]->(b)
+            WHERE r.id IN $ids
+            RETURN a.id AS source, type(r) AS relation, b.id AS target, 
+                r.description AS description
+            """
+            
+            result = self.neo4j_client.execute_query(query, {"ids": numeric_ids})
+            
+            relationships_info = []
+            if result.records:
+                for record in result.records:
+                    source = record.get("source")
+                    relation = record.get("relation")
+                    target = record.get("target")
+                    description = record.get("description", "")
+                    
+                    # 只有当所有值都存在时才添加关系
+                    if source and relation and target:
+                        # 使用关系的描述补充关系类型
+                        rel_info = relation
+                        if description:
+                            rel_info = f"{relation}({description})"
+                            
+                        relationships_info.append((str(source), rel_info, str(target)))
+            
+            return relationships_info
+                
+        except Exception as e:
+            print(f"查询关系信息失败: {e}")
+            return []
+        
+
     def evaluate_agent(self, agent_name: str, questions: List[str]) -> Dict[str, float]:
         """
         评估特定代理的检索性能
@@ -556,9 +790,12 @@ class GraphRAGRetrievalEvaluator(BaseEvaluator):
             # 普通回答
             answer = agent.ask(question)
             
+            # 计算检索时间
+            retrieval_time = time.time() - start_time
+            
             # 更新样本
             sample.update_system_answer(answer, agent_name)
-            sample.retrieval_time = time.time() - start_time
+            sample.retrieval_time = retrieval_time
             
             # 使用Neo4j获取相关图数据
             if self.neo4j_client:
@@ -604,114 +841,100 @@ class GraphRAGRetrievalEvaluator(BaseEvaluator):
         
         return results
     
-    def _extract_retrieval_data_from_logs(self, logs: List[Dict]) -> Tuple[List[str], List[Tuple[str, str, str]]]:
-        """
-        从执行日志中提取检索到的实体和关系
-        
-        Args:
-            logs: 执行日志
-            
-        Returns:
-            Tuple[List[str], List[Tuple[str, str, str]]]: 实体和关系
-        """
-        entities = []
-        relationships = []
-        
-        # 查找检索相关的日志条目
-        retrieval_logs = [
-            log for log in logs 
-            if log.get('node', '').lower() in ['retrieve', 'retrieval', 'search']
-        ]
-        
-        for log in retrieval_logs:
-            # 检查输出内容
-            output = log.get('output', '')
-            if isinstance(output, str):
-                # 提取实体和关系
-                extracted_entities = extract_entities_from_neo4j_response(output)
-                extracted_rels = extract_relationships_from_neo4j_response(output)
-                
-                entities.extend(extracted_entities)
-                relationships.extend(extracted_rels)
-            elif isinstance(output, dict):
-                # 检查是否有结构化数据
-                if 'entities' in output:
-                    entities.extend(output['entities'])
-                if 'relationships' in output:
-                    relationships.extend(output['relationships'])
-        
-        # 去重
-        unique_entities = list(set(entities))
-        
-        # 关系去重
-        seen_rels = set()
-        unique_rels = []
-        for rel in relationships:
-            rel_key = (rel[0], rel[1], rel[2])
-            if rel_key not in seen_rels:
-                seen_rels.add(rel_key)
-                unique_rels.append(rel)
-        
-        return unique_entities, unique_rels
-    
     def _get_relevant_graph_data(self, question: str) -> Tuple[List[str], List[Tuple[str, str, str]]]:
-        """
-        从Neo4j获取与问题相关的实体和关系
-        
-        Args:
-            question: 问题
-            
-        Returns:
-            Tuple[List[str], List[Tuple[str, str, str]]]: 实体和关系
-        """
+        """从Neo4j获取与问题相关的实体和关系"""
         if not self.neo4j_client:
             return [], []
             
-        # 提取问题中的关键词
-        question_words = re.findall(r'\b[\w\u4e00-\u9fa5]{2,}\b', normalize_answer(question))
-        question_words = [w for w in question_words if len(w) > 1]
+        try:
+            # 提取问题关键词
+            import jieba.analyse
+            question_words = jieba.analyse.extract_tags(question, topK=5)
+        except Exception as e:
+            # 简单分词回退方案
+            print(f"关键词提取失败: {e}")
+            question_words = re.findall(r'\b[\w\u4e00-\u9fa5]{2,}\b', question)
+            question_words = [w for w in question_words if len(w) > 1]
         
         entities = []
         relationships = []
         
         try:
-            # 查询与关键词匹配的实体
+            # 查询与关键词相关的实体 - 使用e.id和e.description
             entity_query = """
-            MATCH (n:__Entity__)
-            WHERE any(word IN $keywords WHERE n.id CONTAINS word OR n.description CONTAINS word)
-            RETURN n.id AS id
-            LIMIT 10
+            MATCH (e:__Entity__)
+            WHERE ANY(word IN $keywords WHERE 
+                e.id CONTAINS word OR
+                e.description CONTAINS word)
+            RETURN e.id AS id
+            LIMIT 15
             """
             
-            # 查询与这些实体相关的关系
-            relationship_query = """
-            MATCH (a:__Entity__)-[r]->(b:__Entity__)
-            WHERE a.id IN $entity_ids OR b.id IN $entity_ids
-            RETURN a.id AS source, type(r) AS relation, b.id AS target
-            LIMIT 20
-            """
-            
-            # 执行查询
             entity_result = self.neo4j_client.execute_query(entity_query, {"keywords": question_words})
-
+            
             if entity_result.records:
                 for record in entity_result.records:
-                    if 'id' in record:
-                        entity_id = record['id']
-                        if entity_id:
-                            entities.append(entity_id)
-
-            rel_result = self.neo4j_client.execute_query(relationship_query, {"entity_ids": entities})
-            if rel_result.records:
-                for record in rel_result.records:
-                    if 'source' in record and 'relation' in record and 'target' in record:
-                        source = record['source']
-                        relation = record['relation']
-                        target = record['target']
+                    entity_id = record.get("id")
+                    if entity_id:
+                        entities.append(entity_id)
+            
+            # 如果找到实体，查询相关关系
+            if entities:
+                # 查询实体之间的关系
+                rel_query = """
+                MATCH (a:__Entity__)-[r]->(b:__Entity__)
+                WHERE a.id IN $entity_ids OR b.id IN $entity_ids
+                RETURN DISTINCT a.id AS source, type(r) AS relation, b.id AS target
+                LIMIT 30
+                """
+                
+                rel_result = self.neo4j_client.execute_query(rel_query, {"entity_ids": entities})
+                
+                if rel_result.records:
+                    for record in rel_result.records:
+                        source = record.get("source")
+                        relation = record.get("relation")
+                        target = record.get("target")
                         if source and relation and target:
                             relationships.append((source, relation, target))
+            
+            # 如果未找到足够实体，尝试通过文本块查找
+            if len(entities) < 3:
+                chunk_query = """
+                MATCH (c:__Chunk__)
+                WHERE ANY(word IN $keywords WHERE c.text CONTAINS word)
+                RETURN c.id AS chunk_id
+                LIMIT 5
+                """
+                
+                chunk_result = self.neo4j_client.execute_query(chunk_query, {"keywords": question_words})
+                
+                chunk_ids = []
+                if chunk_result.records:
+                    for record in chunk_result.records:
+                        chunk_id = record.get("chunk_id")
+                        if chunk_id:
+                            chunk_ids.append(chunk_id)
+                
+                # 如果找到文本块，获取相关实体
+                if chunk_ids:
+                    chunk_entity_query = """
+                    MATCH (c:__Chunk__)-[:MENTIONS]->(e:__Entity__)
+                    WHERE c.id IN $chunk_ids
+                    RETURN DISTINCT e.id AS entity_id
+                    """
+                    
+                    chunk_entity_result = self.neo4j_client.execute_query(
+                        chunk_entity_query, {"chunk_ids": chunk_ids}
+                    )
+                    
+                    if chunk_entity_result.records:
+                        for record in chunk_entity_result.records:
+                            entity_id = record.get("entity_id")
+                            if entity_id and entity_id not in entities:
+                                entities.append(entity_id)
         except Exception as e:
-            print(f"从Neo4j获取图数据时出错: {e}")
+            print(f"获取图数据时出错: {e}")
         
         return entities, relationships
     

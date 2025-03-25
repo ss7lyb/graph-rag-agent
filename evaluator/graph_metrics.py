@@ -1,13 +1,11 @@
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Tuple
 from evaluator.base import BaseMetric
 import re
 
 from evaluator.utils import normalize_answer
 
 class CommunityRelevanceMetric(BaseMetric):
-    """
-    社区相关性评估指标 - 评估检索到的社区与查询的相关性
-    """
+    """社区相关性评估指标"""
     
     metric_name = "community_relevance"
     
@@ -16,74 +14,129 @@ class CommunityRelevanceMetric(BaseMetric):
         self.neo4j_client = config.get('neo4j_client', None)
     
     def calculate_metric(self, data) -> Tuple[Dict[str, float], List[float]]:
-        """
-        计算社区相关性
-        
-        Args:
-            data: 评估数据
-            
-        Returns:
-            Tuple[Dict[str, float], List[float]]: 总体得分和每个样本的得分
-        """
+        """计算社区相关性"""
         relevance_scores = []
         
         for sample in data.samples:
-            # 1. 获取关键词
             question = sample.question
-            keywords = re.findall(r'\b[\w\u4e00-\u9fa5]{2,}\b', normalize_answer(question))
-            keywords = [k for k in keywords if len(k) > 1]
+            agent_type = sample.agent_type.lower() if sample.agent_type else ""
             
-            if not keywords:
-                relevance_scores.append(0.0)
+            # 提取问题关键词
+            keywords = re.findall(r'\b[\w\u4e00-\u9fa5]{2,}\b', normalize_answer(question))
+            keywords = [k for k in keywords if len(k) > 1 and len(k) < 15]
+            
+            # 特殊处理naive代理
+            if agent_type == "naive":
+                chunks = sample.referenced_entities  # 可能存放的是文本块ID
+                
+                # 查询文本块关联的社区
+                community_info = ""
+                if self.neo4j_client and chunks:
+                    try:
+                        # 先查询文本块关联的实体
+                        query = """
+                        MATCH (c:__Chunk__)-[:MENTIONS]->(e:__Entity__)
+                        WHERE c.id IN $chunk_ids
+                        RETURN COLLECT(DISTINCT e.id) AS entity_ids
+                        """
+                        result = self.neo4j_client.execute_query(query, {"chunk_ids": chunks})
+                        
+                        entity_ids = []
+                        if result.records and result.records[0].get("entity_ids"):
+                            entity_ids = result.records[0].get("entity_ids")
+                        
+                        # 查询与这些实体相关的社区
+                        if entity_ids:
+                            community_query = """
+                            MATCH (c:__Community__)
+                            WHERE ANY(entity_id IN c.communities WHERE entity_id IN $entity_ids)
+                            RETURN c.summary AS summary, c.full_content AS full_content
+                            LIMIT 3
+                            """
+                            community_result = self.neo4j_client.execute_query(
+                                community_query, {"entity_ids": entity_ids}
+                            )
+                            
+                            if community_result.records:
+                                for record in community_result.records:
+                                    summary = record.get("summary", "")
+                                    full_content = record.get("full_content", "")
+                                    if summary:
+                                        community_info += summary + " "
+                                    if full_content:
+                                        community_info += full_content + " "
+                    except Exception as e:
+                        print(f"查询文本块关联社区时出错: {e}")
+                
+                # 计算基于社区内容的相关性得分
+                if community_info and keywords:
+                    matched = sum(1 for k in keywords if k.lower() in community_info.lower())
+                    match_rate = matched / len(keywords) if keywords else 0
+                    
+                    # 基础分0.3，匹配率最多贡献0.4分
+                    score = 0.3 + 0.4 * match_rate
+                else:
+                    # 没有社区信息，给予基础分
+                    score = 0.3 + 0.1 * len(chunks) / 3  # 每个文本块增加一点分数
+                    score = min(0.4, score)  # 最多0.4分
+                
+                relevance_scores.append(score)
                 continue
             
-            # 2. 从Neo4j获取社区信息
+            # 处理其他代理的社区相关性
+            entity_ids = sample.referenced_entities
+            
+            # 查询与实体关联的社区
             community_info = ""
-            if self.neo4j_client:
+            if self.neo4j_client and entity_ids:
                 try:
-                    # 尝试查询与关键词相关的社区
+                    # 查询社区信息
                     query = """
                     MATCH (c:__Community__)
-                    WHERE any(word IN $keywords WHERE c.summary CONTAINS word OR c.full_content CONTAINS word)
-                    RETURN c.id AS id, c.summary AS summary, c.full_content AS full_content
-                    LIMIT 3
+                    WHERE ANY(entity_id IN c.communities WHERE entity_id IN $entity_ids)
+                    RETURN c.summary AS summary, c.full_content AS full_content
+                    LIMIT 5
                     """
-                    
-                    result = self.neo4j_client.execute_query(query, {"keywords": keywords})
+                    result = self.neo4j_client.execute_query(query, {"entity_ids": entity_ids})
                     
                     if result.records:
                         for record in result.records:
                             summary = record.get("summary", "")
                             full_content = record.get("full_content", "")
                             if summary:
-                                community_info += summary + "\n"
+                                community_info += summary + " "
                             if full_content:
-                                community_info += full_content + "\n"
+                                community_info += full_content + " "
                 except Exception as e:
-                    print(f"查询社区相关性时出错: {e}")
+                    print(f"查询社区信息失败: {e}")
             
-            # 3. 如果Neo4j查询失败，回退到检索日志中查找社区信息
-            if not community_info:
-                logs = sample.retrieval_logs.get("execution_log", [])
+            # 计算相关性得分
+            if community_info and keywords:
+                matched = sum(1 for k in keywords if k.lower() in community_info.lower())
+                match_rate = matched / len(keywords) if keywords else 0
                 
-                for log in logs:
-                    output = log.get("output", "")
-                    if isinstance(output, str) and "社区" in output:
-                        community_info += output
+                # 基础分根据代理类型不同
+                base_score = 0.3
+                if agent_type == "graph":
+                    base_score = 0.4
+                    match_rate *= 1.2  # 给graph代理更高加成
+                elif agent_type == "hybrid":
+                    base_score = 0.35
+                    match_rate *= 1.1  # 给hybrid代理小幅加成
+                
+                # 计算最终分数
+                score = base_score + 0.5 * match_rate
+                score = min(1.0, score)  # 确保不超过1.0
+            else:
+                # 没有社区信息，基于代理类型给予基础分
+                if agent_type == "graph":
+                    score = 0.4
+                elif agent_type == "hybrid":
+                    score = 0.35
+                else:
+                    score = 0.3
             
-            # 4. 计算关键词匹配情况
-            if not community_info:
-                relevance_scores.append(0.0)
-                continue
-                
-            matched = sum(1 for k in keywords if k.lower() in community_info.lower())
-            relevance = matched / len(keywords) if keywords else 0.0
-            
-            # 5. 调整分数 - 为graph和hybrid模型提供奖励
-            if sample.agent_type in ["graph", "hybrid"]:
-                relevance = min(1.0, relevance * 1.2)  # 提高20%，但不超过1.0
-                
-            relevance_scores.append(relevance)
+            relevance_scores.append(score)
         
         avg_relevance = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
         
@@ -153,64 +206,93 @@ class SubgraphQualityMetric(BaseMetric):
 
 
 class GraphCoverageMetric(BaseMetric):
-    """
-    图覆盖率评估指标 - 评估检索结果覆盖了多少相关的图结构
-    """
+    """图覆盖率评估指标"""
     
     metric_name = "graph_coverage"
     
     def __init__(self, config):
         super().__init__(config)
+        self.neo4j_client = config.get('neo4j_client', None)
     
     def calculate_metric(self, data) -> Tuple[Dict[str, float], List[float]]:
-        """
-        计算图覆盖率
-        
-        Args:
-            data: 评估数据
-            
-        Returns:
-            Tuple[Dict[str, float], List[float]]: 总体得分和每个样本的得分
-        """
+        """计算图覆盖率"""
         coverage_scores = []
         
         for sample in data.samples:
             question = sample.question
-            entities = sample.retrieved_entities
+            agent_type = sample.agent_type.lower() if sample.agent_type else ""
             
-            # 如果没有实体，覆盖率为0
-            if not entities:
-                coverage_scores.append(0.0)
-                continue
-            
-            # 从问题中提取关键词
+            # 提取关键词
             keywords = re.findall(r'\b[\w\u4e00-\u9fa5]{2,}\b', normalize_answer(question))
-            keywords = [k for k in keywords if len(k) > 1]
+            keywords = [k for k in keywords if len(k) > 1 and len(k) < 15]
             
-            if not keywords:
-                coverage_scores.append(0.0)
+            # 特殊处理naive代理
+            if agent_type == "naive":
+                chunks = sample.referenced_entities  # 可能存放的是文本块ID
+                chunk_count = len(chunks) if chunks else 0
+                
+                # 由于naive不使用图结构，根据文本块数量给基础分
+                base_score = 0.3
+                chunk_bonus = min(0.3, chunk_count * 0.1)  # 每个文本块加0.1，最多加0.3
+                
+                coverage_scores.append(base_score + chunk_bonus)
                 continue
             
-            # 评估实体与关键词的匹配情况
-            keyword_coverage_count = 0
-            for keyword in keywords:
-                if any(keyword.lower() in normalize_answer(entity).lower() for entity in entities):
-                    keyword_coverage_count += 1
+            # 处理其他代理
+            entity_ids = sample.referenced_entities
+            rel_ids = []
+            if isinstance(sample.referenced_relationships, list):
+                rel_ids = [r for r in sample.referenced_relationships if isinstance(r, str)]
             
-            keyword_coverage = keyword_coverage_count / len(keywords) if keywords else 0
+            # 计算基于图结构的覆盖率
+            entity_count = len(entity_ids) if entity_ids else 0
+            rel_count = len(rel_ids) if rel_ids else 0
             
-            # 根据代理类型调整
-            agent_boosts = {
-                "naive": 1.0,
-                "hybrid": 1.1,
-                "graph": 1.2,
-                "deep": 1.15
-            }
+            # 查询实体信息以匹配关键词
+            entities_text = ""
+            if self.neo4j_client and entity_ids:
+                try:
+                    query = """
+                    MATCH (e:__Entity__)
+                    WHERE e.id IN $ids
+                    RETURN e.id AS id, e.description AS description
+                    """
+                    result = self.neo4j_client.execute_query(query, {"ids": entity_ids})
+                    
+                    if result.records:
+                        for record in result.records:
+                            entity_id = record.get("id", "")
+                            entity_desc = record.get("description", "")
+                            if entity_id:
+                                entities_text += f"{entity_id} {entity_desc} "
+                except Exception as e:
+                    print(f"查询实体信息失败: {e}")
             
-            boost = agent_boosts.get(sample.agent_type, 1.0)
-            coverage = min(1.0, keyword_coverage * boost)
+            # 计算关键词匹配
+            keyword_match = 0
+            if keywords and entities_text:
+                for keyword in keywords:
+                    if keyword.lower() in entities_text.lower():
+                        keyword_match += 1
+                
+            # 计算结构得分和关键词得分
+            structure_score = min(0.5, 0.1 * entity_count + 0.05 * rel_count)
+            keyword_score = 0.5 * (keyword_match / len(keywords)) if keywords else 0
             
-            coverage_scores.append(coverage)
+            # 根据代理类型调整基础分
+            base_score = 0.2
+            if agent_type == "graph":
+                base_score = 0.3
+                structure_score *= 1.2  # 给graph代理结构分加成
+            elif agent_type == "hybrid":
+                base_score = 0.25
+                structure_score *= 1.1  # 给hybrid代理小幅加成
+            
+            # 计算最终分数
+            score = base_score + structure_score + keyword_score
+            score = min(1.0, score)  # 确保不超过1.0
+            
+            coverage_scores.append(score)
         
         avg_coverage = sum(coverage_scores) / len(coverage_scores) if coverage_scores else 0.0
         

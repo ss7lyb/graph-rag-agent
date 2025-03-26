@@ -1,5 +1,6 @@
 import re
-from typing import Dict, Any
+import json
+from typing import Dict, Any, List, Optional
 
 def clean_references(answer: str) -> str:
     """
@@ -43,79 +44,317 @@ def clean_thinking_process(answer: str) -> str:
     return cleaned
 
 def extract_references_from_answer(answer: str) -> Dict[str, Any]:
-    """从回答中提取引用数据，处理各种格式"""
-    entities = []
-    relationships = []
-    chunks = []
+    """
+    从回答中提取引用数据，增强处理各种格式的能力
+    
+    Args:
+        answer: AI生成的回答
+        
+    Returns:
+        Dict: 包含entities, relationships, chunks等信息的字典
+    """
+    # 初始化结果
+    result = {
+        "entities": [],
+        "relationships": [],
+        "chunks": [],
+        "reports": []
+    }
+    
+    # 如果没有回答或引用数据部分，直接返回空结果
+    if not answer or "引用数据" not in answer:
+        return result
     
     try:
-        # 尝试直接提取完整的data部分
-        data_match = re.search(r'\{\s*[\'"]?data[\'"]?\s*:\s*\{(.*?)\}\s*\}', answer, re.DOTALL)
+        # 先尝试提取完整的引用数据部分
+        reference_section = extract_reference_section(answer)
+        if not reference_section:
+            return result
+            
+        # 尝试多种方式解析JSON格式的引用数据
+        parsed_data = parse_json_data(reference_section)
+        if parsed_data:
+            # 处理实体
+            entities = extract_entities_from_parsed(parsed_data)
+            result["entities"].extend(entities)
+            
+            # 处理关系
+            relationships = extract_relationships_from_parsed(parsed_data)
+            result["relationships"].extend(relationships)
+            
+            # 处理文本块
+            chunks = extract_chunks_from_parsed(parsed_data)
+            result["chunks"].extend(chunks)
+
+            # 处理报告
+            reports = extract_reports_from_parsed(parsed_data)
+            result["reports"].extend(reports)
+        else:
+            # 如果无法解析JSON，尝试直接从文本中提取
+            result["entities"] = extract_entities_from_text(reference_section)
+            result["relationships"] = extract_relationships_from_text(reference_section)
+            result["chunks"] = extract_chunks_from_text(reference_section)
+            result["reports"] = extract_reports_from_text(reference_section)
+        
+        # 验证和格式化提取的ID
+        result["entities"] = validate_and_format_ids(result["entities"])
+        result["relationships"] = validate_and_format_ids(result["relationships"])
+        
+        # 去重处理
+        result["entities"] = list(set(result["entities"]))
+        result["relationships"] = list(set(result["relationships"]))
+        result["chunks"] = list(set(result["chunks"]))
+        result["reports"] = list(set(result["reports"]))
+        
+        return result
+    except Exception as e:
+        print(f"提取引用数据时出错: {e}")
+        return result
+
+def validate_and_format_ids(ids_list: List) -> List[str]:
+    """
+    验证并格式化ID列表，处理不同格式的ID
+    
+    Args:
+        ids_list: 包含各种格式ID的列表
+        
+    Returns:
+        List[str]: 格式化后的ID列表
+    """
+    valid_ids = []
+    for id_value in ids_list:
+        # 跳过None和空值
+        if id_value is None or id_value == "":
+            continue
+            
+        # 尝试处理不同格式的ID
+        if isinstance(id_value, (int, float)):
+            valid_ids.append(str(int(id_value)))
+        elif isinstance(id_value, str):
+            # 如果是数字字符串，直接添加
+            if id_value.isdigit() or id_value.lstrip('-').isdigit():
+                valid_ids.append(id_value)
+            # 如果看起来像是UUID或其他特殊ID格式(长字符串)，也添加
+            elif len(id_value) > 10:
+                valid_ids.append(id_value)
+            # 其他非空字符串也添加
+            elif id_value.strip():
+                valid_ids.append(id_value)
+    return valid_ids
+
+def extract_reference_section(answer: str) -> str:
+    """提取回答中的引用数据部分"""
+    # 尝试多种引用数据标记格式
+    patterns = [
+        r'#{1,4}\s*引用数据[\s\S]*?(\{[\s\S]*?\})\s*$',  # #### 引用数据 {...}
+        r'引用数据[：:]\s*(\{[\s\S]*?\})\s*$',           # 引用数据: {...}
+        r'<引用数据>\s*(\{[\s\S]*?\})\s*</引用数据>',    # <引用数据> {...} </引用数据>
+        r'引用[：:]\s*(\{[\s\S]*?\})\s*$',               # 引用: {...}
+        r'参考[：:]\s*(\{[\s\S]*?\})\s*$',               # 参考: {...}
+        r'数据[：:]\s*(\{[\s\S]*?\})\s*$',               # 数据: {...}
+        r'(\{[\s\S]*?[\'"]*data[\'"]*[\s\S]*?\})\s*$'    # {...data...}
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, answer, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+    
+    return ""
+
+def parse_json_data(data_text: str) -> Optional[Dict]:
+    """尝试多种方式解析JSON数据"""
+    # 直接尝试解析
+    try:
+        parsed = json.loads(data_text)
+        return parsed
+    except:
+        pass
+    
+    # 尝试修复常见JSON格式问题
+    try:
+        # 修复单引号问题
+        fixed_text = data_text.replace("'", '"')
+        parsed = json.loads(fixed_text)
+        return parsed
+    except:
+        pass
+    
+    # 尝试提取data字段
+    try:
+        data_match = re.search(r'\{\s*["\']*data["\']*\s*:\s*(\{[\s\S]*?\})\s*\}', data_text, re.DOTALL)
         if data_match:
             data_content = data_match.group(1)
-            
-            # 提取Entities数组
-            entities_match = re.search(r'[\'"]?Entities[\'"]?\s*:\s*\[(.*?)\]', data_content, re.DOTALL)
-            if entities_match:
-                entities_str = entities_match.group(1).strip()
-                # 提取所有数字（不带引号）
-                number_entities = re.findall(r'\d+', entities_str)
-                entities.extend(number_entities)
-            
-            # 提取Relationships或Reports数组
-            rels_match = re.search(r'[\'"]?(?:Relationships|Reports)[\'"]?\s*:\s*\[(.*?)\]', data_content, re.DOTALL)
-            if rels_match:
-                rels_str = rels_match.group(1).strip()
-                # 提取所有数字（不带引号）
-                number_relationships = re.findall(r'\d+', rels_str)
-                relationships.extend(number_relationships)
-            
-            # 提取Chunks数组
-            chunks_match = re.search(r'[\'"]?Chunks[\'"]?\s*:\s*\[(.*?)\]', data_content, re.DOTALL)
-            if chunks_match:
-                chunks_str = chunks_match.group(1).strip()
-                # 提取引号中的字符串
-                quoted_chunks = re.findall(r'[\'"]([^\'"]*)[\'"]', chunks_str)
-                chunks.extend(quoted_chunks)
-        
-        # 如果上面的尝试没有结果，单独查找每个部分
-        if not any([entities, relationships, chunks]):
-            # 查找 'Entities' 列表
-            entities_match = re.search(r'Entities[\'"]?\s*:\s*\[(.*?)\]', answer, re.DOTALL)
-            if entities_match:
-                entities_str = entities_match.group(1).strip()
-                # 提取所有数字（不带引号）
-                number_entities = re.findall(r'\b\d+\b', entities_str)
-                entities.extend(number_entities)
-            
-            # 查找 'Relationships' 或 'Reports' 列表
-            rels_match = re.search(r'(?:Relationships|Reports)[\'"]?\s*:\s*\[(.*?)\]', answer, re.DOTALL)
-            if rels_match:
-                rels_str = rels_match.group(1).strip()
-                # 提取所有数字（不带引号）
-                number_relationships = re.findall(r'\b\d+\b', rels_str)
-                relationships.extend(number_relationships)
-            
-            # 查找 'Chunks' 列表
-            chunks_match = re.search(r'Chunks[\'"]?\s*:\s*\[(.*?)\]', answer, re.DOTALL)
-            if chunks_match:
-                chunks_str = chunks_match.group(1).strip()
-                # 提取引号中的字符串
-                quoted_chunks = re.findall(r'[\'"]([^\'"]*)[\'"]', chunks_str)
-                chunks.extend(quoted_chunks)
-        
-        # 移除空字符串并去重
-        entities = [e for e in entities if e]
-        relationships = [r for r in relationships if r]
-        chunks = [c for c in chunks if c]
-        
-        print(f"提取的引用数据：实体={entities}, 关系={relationships}, 文本块={chunks}")
-        
-        return {
-            "entities": entities,
-            "relationships": relationships,
-            "chunks": chunks
-        }
-    except Exception as e:
-        print(f"提取引用数据失败: {e}")
-        return {"entities": [], "relationships": [], "chunks": []}
+            # 修复单引号
+            fixed_text = "{\"data\":" + data_content.replace("'", '"') + "}"
+            parsed = json.loads(fixed_text)
+            return parsed
+    except:
+        pass
+    
+    # 尝试将text包装成合法JSON
+    try:
+        # 去除非ASCII字符
+        cleaned_text = ''.join(c for c in data_text if ord(c) < 128)
+        # 替换所有单引号为双引号
+        cleaned_text = cleaned_text.replace("'", '"')
+        # 确保键名有双引号
+        cleaned_text = re.sub(r'(\w+)(?=\s*:)', r'"\1"', cleaned_text)
+        parsed = json.loads(cleaned_text)
+        return parsed
+    except:
+        return None
+
+def extract_entities_from_parsed(parsed_data: Dict) -> List[str]:
+    """从解析后的数据中提取实体ID"""
+    entities = []
+    
+    # 处理嵌套的data结构
+    if "data" in parsed_data and isinstance(parsed_data["data"], dict):
+        parsed_data = parsed_data["data"]
+    
+    # 提取Entities字段的值
+    entity_keys = ["Entities", "entities", "Entity", "entity"]
+    for key in entity_keys:
+        if key in parsed_data and parsed_data[key]:
+            if isinstance(parsed_data[key], list):
+                # 处理数字列表
+                for item in parsed_data[key]:
+                    if isinstance(item, (int, str)):
+                        entities.append(str(item))
+            elif isinstance(parsed_data[key], str):
+                # 如果是逗号分隔的字符串
+                entities.extend([e.strip() for e in parsed_data[key].split(",") if e.strip()])
+    
+    return entities
+
+def extract_relationships_from_parsed(parsed_data: Dict) -> List[str]:
+    """从解析后的数据中提取关系ID"""
+    relationships = []
+    
+    # 处理嵌套的data结构
+    if "data" in parsed_data and isinstance(parsed_data["data"], dict):
+        parsed_data = parsed_data["data"]
+    
+    # 提取Relationships字段的值
+    rel_keys = ["Relationships", "relationships", "Relations", "relations", "Relation", "relation"]
+    for key in rel_keys:
+        if key in parsed_data and parsed_data[key]:
+            if isinstance(parsed_data[key], list):
+                # 处理数字列表
+                for item in parsed_data[key]:
+                    if isinstance(item, (int, str)):
+                        relationships.append(str(item))
+            elif isinstance(parsed_data[key], str):
+                # 如果是逗号分隔的字符串
+                relationships.extend([r.strip() for r in parsed_data[key].split(",") if r.strip()])
+    
+    # 尝试提取Reports字段（一些代理使用Reports替代Relationships）
+    report_keys = ["Reports", "reports", "Report", "report"]
+    for key in report_keys:
+        if key in parsed_data and parsed_data[key]:
+            if isinstance(parsed_data[key], list):
+                for item in parsed_data[key]:
+                    if isinstance(item, (int, str)):
+                        relationships.append(str(item))
+            elif isinstance(parsed_data[key], str):
+                relationships.extend([r.strip() for r in parsed_data[key].split(",") if r.strip()])
+    
+    return relationships
+
+def extract_chunks_from_parsed(parsed_data: Dict) -> List[str]:
+    """从解析后的数据中提取文本块ID"""
+    chunks = []
+    
+    # 处理嵌套的data结构
+    if "data" in parsed_data and isinstance(parsed_data["data"], dict):
+        parsed_data = parsed_data["data"]
+    
+    # 提取Chunks字段的值
+    chunk_keys = ["Chunks", "chunks", "Chunk", "chunk", "TextChunks", "textchunks"]
+    for key in chunk_keys:
+        if key in parsed_data and parsed_data[key]:
+            if isinstance(parsed_data[key], list):
+                # 处理字符串列表
+                for item in parsed_data[key]:
+                    if isinstance(item, str):
+                        chunks.append(item)
+            elif isinstance(parsed_data[key], str):
+                # 如果是逗号分隔的字符串
+                chunks.extend([c.strip() for c in parsed_data[key].split(",") if c.strip()])
+    
+    return chunks
+
+def extract_reports_from_parsed(parsed_data: Dict) -> List[str]:
+    """从解析后的数据中提取报告ID"""
+    reports = []
+    
+    # 处理嵌套的data结构
+    if "data" in parsed_data and isinstance(parsed_data["data"], dict):
+        parsed_data = parsed_data["data"]
+    
+    # 提取Reports字段的值
+    report_keys = ["Reports", "reports", "Report", "report"]
+    for key in report_keys:
+        if key in parsed_data and parsed_data[key]:
+            if isinstance(parsed_data[key], list):
+                for item in parsed_data[key]:
+                    if isinstance(item, (int, str)):
+                        reports.append(str(item))
+            elif isinstance(parsed_data[key], str):
+                reports.extend([r.strip() for r in parsed_data[key].split(",") if r.strip()])
+    
+    return reports
+
+def extract_entities_from_text(text: str) -> List[str]:
+    """直接从文本中提取实体ID"""
+    # 尝试匹配实体ID部分
+    entity_matches = re.search(r'[Ee]ntities\s*[=:]\s*\[(.*?)\]', text, re.DOTALL) or \
+                    re.search(r'[Ee]ntities\s*[=:]\s*([\d\s,]+)', text, re.DOTALL)
+    
+    if entity_matches:
+        entity_str = entity_matches.group(1).strip()
+        # 提取数字
+        return re.findall(r'\d+', entity_str)
+    
+    return []
+
+def extract_relationships_from_text(text: str) -> List[str]:
+    """直接从文本中提取关系ID"""
+    # 尝试匹配关系ID部分
+    rel_matches = re.search(r'[Rr]elationships\s*[=:]\s*\[(.*?)\]', text, re.DOTALL) or \
+                re.search(r'[Rr]elationships\s*[=:]\s*([\d\s,]+)', text, re.DOTALL) or \
+                re.search(r'[Rr]eports\s*[=:]\s*\[(.*?)\]', text, re.DOTALL) or \
+                re.search(r'[Rr]eports\s*[=:]\s*([\d\s,]+)', text, re.DOTALL)
+    
+    if rel_matches:
+        rel_str = rel_matches.group(1).strip()
+        # 提取数字
+        return re.findall(r'\d+', rel_str)
+    
+    return []
+
+def extract_chunks_from_text(text: str) -> List[str]:
+    """直接从文本中提取文本块ID"""
+    # 尝试匹配文本块ID部分
+    chunk_matches = re.search(r'[Cc]hunks\s*[=:]\s*\[(.*?)\]', text, re.DOTALL)
+    
+    if chunk_matches:
+        chunk_str = chunk_matches.group(1).strip()
+        # 提取引号中的内容
+        return re.findall(r'[\'"]([^\'"]*)[\'"]', chunk_str)
+    
+    return []
+
+def extract_reports_from_text(text: str) -> List[str]:
+    """直接从文本中提取报告ID"""
+    # 尝试匹配报告ID部分
+    report_matches = re.search(r'[Rr]eports\s*[=:]\s*\[(.*?)\]', text, re.DOTALL) or \
+                    re.search(r'[Rr]eports\s*[=:]\s*([\d\s,]+)', text, re.DOTALL)
+    
+    if report_matches:
+        report_str = report_matches.group(1).strip()
+        # 提取数字
+        return re.findall(r'\d+', report_str)
+    
+    return []

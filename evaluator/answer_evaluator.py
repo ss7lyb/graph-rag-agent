@@ -3,7 +3,7 @@ from dataclasses import dataclass, field, asdict
 import json
 
 from evaluator.base import BaseEvaluator, BaseMetric
-from evaluator.llm_metrics import ResponseCoherence, FactualConsistency, ComprehensiveAnswerMetric
+from evaluator.llm_metrics import ResponseCoherence, FactualConsistency, ComprehensiveAnswerMetric, LLMGraphRagEvaluator
 from evaluator.preprocessing import clean_references, clean_thinking_process
 from evaluator.utils import normalize_answer, compute_precision_recall_f1
 

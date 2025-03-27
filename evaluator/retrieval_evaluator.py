@@ -158,7 +158,7 @@ class RetrievalEvaluationData:
         return data
 
 class RetrievalPrecision(BaseMetric):
-    """改进的检索精确率评估指标"""
+    """检索精确率评估指标"""
     
     metric_name = "retrieval_precision"
     
@@ -166,10 +166,11 @@ class RetrievalPrecision(BaseMetric):
         super().__init__(config)
         self.neo4j_client = config.get('neo4j_client', None)
         self.debug = config.get('debug', True)
+        self.llm = config.get("llm", None)
     
     def calculate_metric(self, data) -> Tuple[Dict[str, float], List[float]]:
         """
-        计算检索精确率，增强对ID格式实体的处理
+        计算检索精确率
         
         Args:
             data: 评估数据
@@ -179,6 +180,8 @@ class RetrievalPrecision(BaseMetric):
         """
         if self.debug:
             print("\n======== RetrievalPrecision 计算日志 ========")
+            print(f"样本总数: {len(data.samples) if hasattr(data, 'samples') else 0}")
+            print(f"LLM可用: {'是' if self.llm else '否'}")
         
         retrieved_entities = data.retrieved_entities
         referenced_entities = data.referenced_entities
@@ -186,7 +189,6 @@ class RetrievalPrecision(BaseMetric):
         # 打印总体信息
         total_samples = len(data.samples) if hasattr(data, 'samples') else 0
         if self.debug:
-            print(f"样本总数: {total_samples}")
             print(f"检索实体列表长度: {len(retrieved_entities)}")
             print(f"引用实体列表长度: {len(referenced_entities)}")
         
@@ -196,7 +198,7 @@ class RetrievalPrecision(BaseMetric):
                 print(f"\n样本 {idx+1}:")
                 print(f"  检索到的实体数量: {len(retr_entities) if retr_entities else 0}")
                 print(f"  引用的实体数量: {len(ref_entities) if ref_entities else 0}")
-                
+                    
                 # 详细打印实体信息
                 if retr_entities:
                     print(f"  检索实体: {retr_entities[:5]}{'...' if len(retr_entities) > 5 else ''}")
@@ -209,89 +211,115 @@ class RetrievalPrecision(BaseMetric):
                 if self.debug:
                     print(f"  没有检索到实体或引用实体，使用基础分: 0.3")
                 continue
-
-             # 实体字符串预处理
-            retr_entities_str = [str(e).lower() for e in retr_entities]
-            ref_entities_str = [str(e).lower() for e in ref_entities]
-
-            # 1. 直接ID匹配 - 检查引用实体ID是否出现在检索实体文本中
-            direct_matches = 0
-            for ref_id in ref_entities_str:
-                for retr_entity in retr_entities_str:
-                    if ref_id in retr_entity:
-                        direct_matches += 1
-                        break
             
-            # 2. 查询Neo4j获取实体的实际内容
-            matched_entities = 0
-            try:
-                if self.neo4j_client:
-                    # 获取所有实体
-                    all_entities_query = """
-                    MATCH (n) 
-                    RETURN n.id AS id, n.description AS description
-                    LIMIT 1000
-                    """
-                    result = self.neo4j_client.execute_query(all_entities_query)
-                    
-                    # 创建ID到实体内容的映射
-                    entity_map = {}
-                    for record in result.records:
-                        ent_id = record.get("id")
-                        ent_desc = record.get("description", "")
-                        if ent_id:
-                            entity_map[str(ent_id).lower()] = ent_desc
-                    
-                    # 尝试更复杂的匹配
-                    for ref_id in ref_entities_str:
-                        # 如果在映射中找到该ID
-                        if ref_id in entity_map:
-                            desc = entity_map[ref_id]
-                            # 检查描述是否在任何检索实体中
-                            if desc and any(desc.lower() in retr.lower() for retr in retr_entities_str):
-                                matched_entities += 1
-            except Exception as e:
-                if self.debug:
-                    print(f"  查询实体信息失败: {e}")
-            
-            # 取两种匹配方式中的最大值
-            matched = max(direct_matches, matched_entities)
-            
-            # 3. 使用更宽松的评分机制，确保即使匹配不完美也能得到一定分数
-            normalized_match = matched / len(ref_entities) if ref_entities else 0
-            
-            if normalized_match > 0:
-                # 有匹配 - 根据匹配比例给分
-                precision = 0.3 + 0.7 * normalized_match  # 基础分0.3，最高可达1.0
-            else:
-                # 尝试基于ID数字的简单匹配 - 提取数字部分进行比较
-                ref_numbers = []
-                for ref_id in ref_entities:
-                    # 提取ID中的数字部分
-                    if isinstance(ref_id, str):
-                        num_match = re.search(r'\d+', ref_id)
-                        if num_match:
-                            ref_numbers.append(num_match.group())
-                
-                retr_texts = " ".join(str(e) for e in retr_entities)
-                simple_matches = sum(1 for num in ref_numbers if num in retr_texts)
-                simple_match_ratio = simple_matches / len(ref_numbers) if ref_numbers else 0
-                
-                # 基于简单匹配给予一定的分数
-                precision = 0.3 + 0.4 * simple_match_ratio  # 最高可达0.7
-            
-            # 确保不超过1.0
-            precision = min(1.0, precision)
+            # 规则匹配评分
+            matched, rule_score = self._calculate_rule_precision(retr_entities, ref_entities)
             
             if self.debug:
                 print(f"  匹配的实体数量: {matched}")
+                print(f"  规则精确率分数: {rule_score:.4f}")
+            
+            # 如果规则评分只是基础分或很低，使用LLM回退
+            if rule_score <= 0.3 and self.llm:
+                if self.debug:
+                    print(f"  规则精确率过低，尝试使用LLM评估")
+                
+                # 获取样本
+                sample = data.samples[idx]
+                question = sample.question
+                agent_type = sample.agent_type
+                
+                # 准备LLM提示
+                retr_str = ", ".join([str(e) for e in retr_entities[:10]])
+                ref_str = ", ".join([str(e) for e in ref_entities[:10]])
+                
+                prompt = f"""
+                请评估以下检索到的实体与用户引用实体的匹配程度，给出0到1的分数。
+                
+                问题: {question}
+                代理类型: {agent_type}
+                
+                检索到的实体: [{retr_str}]
+                用户引用的实体: [{ref_str}]
+                
+                评分标准:
+                - 高分(0.8-1.0): 引用实体全部或大部分存在于检索实体中
+                - 中分(0.4-0.7): 引用实体部分存在于检索实体中
+                - 低分(0.0-0.3): 引用实体几乎不在检索实体中
+                
+                只返回一个0到1之间的数字表示分数，不要有任何其他文字。
+                """
+                
+                try:
+                    response = self.llm.invoke(prompt)
+                    score_text = response.content if hasattr(response, 'content') else response
+                    
+                    if self.debug:
+                        print(f"  LLM响应: {score_text}")
+                    
+                    # 提取数字
+                    score_match = re.search(r'(\d+(\.\d+)?)', score_text)
+                    if score_match:
+                        precision = float(score_match.group(1))
+                        # 确保在0-1范围内
+                        precision = max(0.0, min(1.0, precision))
+                        if self.debug:
+                            print(f"  LLM评估的精确率分数: {precision:.4f}")
+                    else:
+                        precision = rule_score  # 使用规则分数作为回退
+                        if self.debug:
+                            print(f"  无法从LLM响应中提取分数，使用规则分数: {precision:.4f}")
+                except Exception as e:
+                    if self.debug:
+                        print(f"  LLM评估时出错: {e}")
+                    precision = rule_score  # 使用规则分数作为回退
+            else:
+                precision = rule_score  # 使用规则分数
+                
+            if self.debug:
                 print(f"  最终精确率分数: {precision:.4f}")
             
             precision_scores.append(precision)
         
         avg_precision = sum(precision_scores) / len(precision_scores) if precision_scores else 0.3
         
+        if self.debug:
+            print(f"总体评分分布: 最低={min(precision_scores):.4f}, 最高={max(precision_scores):.4f}, 平均={avg_precision:.4f}")
+            print("完成检索精确率评估")
+        
         return {"retrieval_precision": avg_precision}, precision_scores
+
+    def _calculate_rule_precision(self, retr_entities, ref_entities):
+        """计算规则匹配精确率"""
+        # 实体字符串预处理
+        retr_entities_str = [str(e).lower() for e in retr_entities]
+        ref_entities_str = [str(e).lower() for e in ref_entities]
+
+        # 1. 直接ID匹配 - 检查引用实体ID是否出现在检索实体文本中
+        direct_matches = 0
+        for ref_id in ref_entities_str:
+            for retr_entity in retr_entities_str:
+                if ref_id in retr_entity:
+                    direct_matches += 1
+                    break
+        
+        # 2. 数字ID匹配
+        num_matches = 0
+        for ref_id in ref_entities_str:
+            ref_num = re.search(r'\d+', ref_id)
+            if ref_num and any(ref_num.group() in retr for retr in retr_entities_str):
+                num_matches += 1
+        
+        # 使用最高的匹配数
+        matched = max(direct_matches, num_matches)
+        
+        # 3. 计算分数
+        if matched > 0:
+            # 有匹配 - 根据匹配比例给分
+            return matched, max(0.3, 0.3 + 0.7 * (matched / len(ref_entities_str)))
+        else:
+            # 无匹配 - 返回基础分
+            return 0, 0.3
     
     def _get_entities_with_info(self, entity_ids: List[str]) -> List[Dict[str, str]]:
         entities_info = []
@@ -371,145 +399,189 @@ class RetrievalUtilization(BaseMetric):
         super().__init__(config)
         self.neo4j_client = config.get('neo4j_client', None)
         self.debug = config.get('debug', True)
+        self.llm = config.get("llm", None)
     
     def calculate_metric(self, data) -> Tuple[Dict[str, float], List[float]]:
-        """计算检索利用率"""
+        """
+        计算检索利用率
         
-        print("\n======== RetrievalUtilization 计算日志 ========")
+        Args:
+            data: 评估数据
+            
+        Returns:
+            Tuple[Dict[str, float], List[float]]: 总体得分和每个样本的得分
+        """
+        if self.debug:
+            print("\n======== RetrievalUtilization 计算日志 ========")
+            print(f"样本总数: {len(data.samples) if hasattr(data, 'samples') else 0}")
+            print(f"LLM可用: {'是' if self.llm else '否'}")
         
         retrieved_entities = data.retrieved_entities
         referenced_entities = data.referenced_entities
         
         # 打印总体信息
         total_samples = len(data.samples) if hasattr(data, 'samples') else 0
-        print(f"样本总数: {total_samples}")
-        print(f"检索实体列表长度: {len(retrieved_entities)}")
-        print(f"引用实体列表长度: {len(referenced_entities)}")
+        if self.debug:
+            print(f"检索实体列表长度: {len(retrieved_entities)}")
+            print(f"引用实体列表长度: {len(referenced_entities)}")
         
         utilization_scores = []
         for idx, (retr_entities, ref_entities) in enumerate(zip(retrieved_entities, referenced_entities)):
-            print(f"\n样本 {idx+1}:")
-            
-            # 检查数据格式
-            if not isinstance(retr_entities, list):
-                print(f"  检索实体不是列表类型，而是 {type(retr_entities)}")
-                retr_entities = []
-            if not isinstance(ref_entities, list):
-                print(f"  引用实体不是列表类型，而是 {type(ref_entities)}")
-                ref_entities = []
+            if self.debug:
+                print(f"\n样本 {idx+1}:")
                 
-            # 确保所有元素都是字符串
-            retr_entities = [str(e) for e in retr_entities]
-            ref_entities = [str(e) for e in ref_entities]
-            
-            print(f"  检索到的实体数量: {len(retr_entities)}")
-            print(f"  引用的实体数量: {len(ref_entities)}")
-            
-            # 详细打印实体ID
-            if retr_entities:
-                print(f"  检索实体: {retr_entities[:5]}{'...' if len(retr_entities) > 5 else ''}")
-            if ref_entities:
-                print(f"  引用实体: {ref_entities[:5]}{'...' if len(ref_entities) > 5 else ''}")
+                # 检查数据格式
+                if not isinstance(retr_entities, list):
+                    print(f"  检索实体不是列表类型，而是 {type(retr_entities)}")
+                    retr_entities = []
+                if not isinstance(ref_entities, list):
+                    print(f"  引用实体不是列表类型，而是 {type(ref_entities)}")
+                    ref_entities = []
+                    
+                # 确保所有元素都是字符串
+                retr_entities = [str(e) for e in retr_entities]
+                ref_entities = [str(e) for e in ref_entities]
+                
+                print(f"  检索到的实体数量: {len(retr_entities)}")
+                print(f"  引用的实体数量: {len(ref_entities)}")
+                
+                # 详细打印实体ID
+                if retr_entities:
+                    print(f"  检索实体: {retr_entities[:5]}{'...' if len(retr_entities) > 5 else ''}")
+                if ref_entities:
+                    print(f"  引用实体: {ref_entities[:5]}{'...' if len(ref_entities) > 5 else ''}")
             
             # 如果没有引用实体，给予基础分
             if not ref_entities:
                 utilization_scores.append(0.3)
-                print(f"  没有引用实体，使用基础分: 0.3")
+                if self.debug:
+                    print(f"  没有引用实体，使用基础分: 0.3")
                 continue
             
             # 如果没有检索到实体，给予基础分
             if not retr_entities:
                 utilization_scores.append(0.3)
-                print(f"  没有检索到实体，使用基础分: 0.3")
+                if self.debug:
+                    print(f"  没有检索到实体，使用基础分: 0.3")
                 continue
             
-            # 标准化处理
-            retr_norm = [normalize_answer(e) for e in retr_entities]
-            ref_norm = [normalize_answer(e) for e in ref_entities]
-            
-            # 1. 直接ID匹配
-            direct_matches = 0
-            for ref_id in ref_norm:
-                if any(ref_id in retr for retr in retr_norm):
-                    direct_matches += 1
-            
-            # 2. 获取关联的实体描述
-            entity_descriptions = {}
-            try:
-                if self.neo4j_client:
-                    # 查询实体描述
-                    query = """
-                    MATCH (n)
-                    RETURN n.id AS id, n.description AS description
-                    LIMIT 500
-                    """
-                    result = self.neo4j_client.execute_query(query)
-                    
-                    if result.records:
-                        for record in result.records:
-                            entity_id = record.get("id")
-                            description = record.get("description")
-                            if entity_id and description:
-                                entity_descriptions[str(entity_id).lower()] = description
-            except Exception as e:
-                print(f"  获取实体描述时出错: {e}")
-            
-            # 3. 基于描述的匹配
-            desc_matches = 0
-            combined_retr_text = " ".join(retr_norm).lower()
-            for ref_id in ref_norm:
-                # 检查该ID的实体描述是否在检索实体中
-                if ref_id in entity_descriptions:
-                    desc = entity_descriptions[ref_id].lower()
-                    if desc in combined_retr_text:
-                        desc_matches += 1
-            
-            # 取最高的匹配数
-            matched = max(direct_matches, desc_matches)
-            
-            # 4. 使用更宽松的评分方法
-            # 检查简单的数字ID匹配
-            ref_numbers = []
-            for ref_id in ref_entities:
-                # 提取ID中的数字部分
-                if isinstance(ref_id, str):
-                    num_match = re.search(r'\d+', ref_id)
-                    if num_match:
-                        ref_numbers.append(num_match.group())
-            
-            retr_text = " ".join(str(e) for e in retr_entities)
-            simple_matches = sum(1 for num in ref_numbers if num in retr_text)
-            
-            # 更新匹配数
-            matched = max(matched, simple_matches)
-            
-            # 计算利用率
-            utilization_ratio = matched / len(ref_entities)
-            
-            # 基于匹配比例计算分数
-            if utilization_ratio > 0:
-                # 有匹配，给更高的分数
-                utilization = 0.3 + 0.7 * utilization_ratio
-            else:
-                # 没有匹配，但可能仍然使用了部分信息
-                # 检查是否有任何相似性
-                if any(any(ref in retr for retr in retr_norm) for ref in ref_norm):
-                    utilization = 0.5  # 部分相似
-                else:
-                    utilization = 0.3  # 基础分
-            
-            # 确保不超过1.0
-            utilization = min(1.0, utilization)
+            # 规则匹配评分
+            matches_found, rule_score = self._calculate_rule_utilization(retr_entities, ref_entities)
             
             if self.debug:
-                print(f"  在检索结果中找到的引用实体数量: {matched}")
+                print(f"  在检索结果中找到的引用实体数量: {matches_found}")
+                print(f"  规则利用率分数: {rule_score:.4f}")
+            
+            # 如果规则评分只是基础分或很低，使用LLM回退
+            if rule_score <= 0.3 and self.llm:
+                if self.debug:
+                    print(f"  规则利用率过低，尝试使用LLM评估")
+                
+                # 获取样本
+                sample = data.samples[idx]
+                question = sample.question
+                system_answer = sample.system_answer
+                
+                # 提取系统答案的前200个字符作为上下文
+                answer_context = system_answer[:200] + "..." if len(system_answer) > 200 else system_answer
+                
+                # 准备LLM提示
+                retr_str = ", ".join([str(e) for e in retr_entities[:10]])
+                ref_str = ", ".join([str(e) for e in ref_entities[:10]])
+                
+                prompt = f"""
+                请评估系统在回答用户问题时对检索实体的利用程度，给出0到1的分数。
+                
+                问题: {question}
+                
+                检索到的实体: [{retr_str}]
+                用户引用的实体: [{ref_str}]
+                
+                系统回答(部分): {answer_context}
+                
+                评分标准:
+                - 高分(0.8-1.0): 系统充分利用了检索到的实体中的关键信息
+                - 中分(0.4-0.7): 系统部分利用了检索到的实体信息
+                - 低分(0.0-0.3): 系统几乎没有利用检索到的实体信息
+                
+                只返回一个0到1之间的数字表示分数，不要有任何其他文字。
+                """
+                
+                try:
+                    response = self.llm.invoke(prompt)
+                    score_text = response.content if hasattr(response, 'content') else response
+                    
+                    if self.debug:
+                        print(f"  LLM响应: {score_text}")
+                    
+                    # 提取数字
+                    score_match = re.search(r'(\d+(\.\d+)?)', score_text)
+                    if score_match:
+                        utilization = float(score_match.group(1))
+                        # 确保在0-1范围内
+                        utilization = max(0.0, min(1.0, utilization))
+                        if self.debug:
+                            print(f"  LLM评估的利用率分数: {utilization:.4f}")
+                    else:
+                        utilization = rule_score  # 使用规则分数作为回退
+                        if self.debug:
+                            print(f"  无法从LLM响应中提取分数，使用规则分数: {utilization:.4f}")
+                except Exception as e:
+                    if self.debug:
+                        print(f"  LLM评估时出错: {e}")
+                    utilization = rule_score  # 使用规则分数作为回退
+            else:
+                utilization = rule_score  # 使用规则分数
+            
+            if self.debug:
                 print(f"  最终利用率分数: {utilization:.4f}")
             
             utilization_scores.append(utilization)
         
         avg_utilization = sum(utilization_scores) / len(utilization_scores) if utilization_scores else 0.3
         
+        if self.debug:
+            print(f"总体评分分布: 最低={min(utilization_scores):.4f}, 最高={max(utilization_scores):.4f}, 平均={avg_utilization:.4f}")
+            print("完成检索利用率评估")
+        
         return {"retrieval_utilization": avg_utilization}, utilization_scores
+
+    def _calculate_rule_utilization(self, retr_entities, ref_entities):
+        """计算规则匹配利用率"""
+        # 标准化处理
+        retr_norm = [str(e).lower() for e in retr_entities]
+        ref_norm = [str(e).lower() for e in ref_entities]
+        
+        # 1. 直接ID匹配
+        direct_matches = 0
+        for ref_id in ref_norm:
+            if any(ref_id in retr for retr in retr_norm):
+                direct_matches += 1
+        
+        # 2. 数字ID匹配
+        num_matches = 0
+        for ref_id in ref_norm:
+            ref_num = re.search(r'\d+', ref_id)
+            if ref_num and any(ref_num.group() in retr for retr in retr_norm):
+                num_matches += 1
+        
+        # 使用最高的匹配数
+        matched = max(direct_matches, num_matches)
+        
+        # 计算利用率
+        if matched > 0:
+            # 有匹配，计算基于匹配比例的分数
+            return matched, max(0.3, 0.3 + 0.7 * (matched / len(ref_norm)))
+        else:
+            # 无匹配，但检查字符串相似性
+            combined_retr = " ".join(retr_norm)
+            for ref in ref_norm:
+                # 检查部分匹配
+                if any(token in combined_retr for token in ref.split() if len(token) > 3):
+                    return 1, 0.4  # 有部分匹配，给予略高于基础的分数
+            
+            # 无任何匹配
+            return 0, 0.3
 
 
 class RelationshipUtilizationMetric(BaseMetric):
@@ -736,33 +808,82 @@ class RelationshipUtilizationMetric(BaseMetric):
         return min(1.0, rel_count * 0.1)
     
     def _calculate_quality_score(self, rel_info: List[Dict[str, Any]]) -> float:
-        """计算关系质量得分"""
+        """
+        计算关系质量得分 
+        
+        Args:
+            rel_info: 关系信息列表
+            
+        Returns:
+            float: 关系质量得分
+        """
         if not rel_info:
             return 0.0
             
         # 检查关系是否有描述 - 确保处理None值
-        described_count = sum(1 for rel in rel_info if rel.get("description", "") is not None and str(rel.get("description", "")).strip())
+        described_count = 0
+        for rel in rel_info:
+            # 使用描述或关系类型
+            description = rel.get("description", "")
+            relation_type = rel.get("relation", "")
+            
+            if ((description is not None and str(description).strip()) or 
+                (relation_type is not None and str(relation_type).strip())):
+                described_count += 1
+        
         description_ratio = described_count / len(rel_info) if rel_info else 0
         
         # 检查关系类型的多样性
-        relation_types = set(rel.get("relation", "") for rel in rel_info)
+        relation_types = set()
+        for rel in rel_info:
+            rel_type = rel.get("relation", "")
+            if rel_type and rel_type.strip():
+                relation_types.add(rel_type)
+        
         type_diversity = min(1.0, len(relation_types) / 5)  # 最多5种关系类型为满分
+        
+        # 检查来源和目标实体是否存在
+        valid_relations = 0
+        for rel in rel_info:
+            source = rel.get("source", "")
+            target = rel.get("target", "")
+            if source and source != "unknown" and target and target != "unknown":
+                valid_relations += 1
+        
+        validity_ratio = valid_relations / len(rel_info) if rel_info else 0
         
         # 计算关系权重的平均值（如果有）
         weight_score = 0.0
         weighted_rels = [rel for rel in rel_info if "weight" in rel and rel["weight"] is not None]
         if weighted_rels:
-            weights = [float(rel["weight"]) for rel in weighted_rels]
-            avg_weight = sum(weights) / len(weights)
-            # 假设权重范围为0-10，归一化到0-1
-            weight_score = min(1.0, avg_weight / 10.0)
+            try:
+                weights = []
+                for rel in weighted_rels:
+                    # 确保权重是有效数字
+                    if isinstance(rel["weight"], (int, float)):
+                        weights.append(float(rel["weight"]))
+                    elif isinstance(rel["weight"], str) and rel["weight"].replace('.', '', 1).isdigit():
+                        weights.append(float(rel["weight"]))
+                
+                if weights:
+                    avg_weight = sum(weights) / len(weights)
+                    # 假设权重范围为0-10，归一化到0-1
+                    weight_score = min(1.0, avg_weight / 10.0)
+            except Exception as e:
+                if self.debug:
+                    print(f"  计算权重得分时出错: {e}")
         
-        # 综合得分 - 描述占30%，多样性占30%，权重占40%（如果有权重）
+        # 综合得分 - 描述占30%，多样性占30%，有效性占20%，权重占20%
         if weighted_rels:
-            return 0.3 * description_ratio + 0.3 * type_diversity + 0.4 * weight_score
+            return (0.3 * description_ratio + 
+                    0.3 * type_diversity + 
+                    0.2 * validity_ratio + 
+                    0.2 * weight_score)
         else:
-            # 如果没有权重信息，描述和多样性各占50%
-            return 0.5 * description_ratio + 0.5 * type_diversity
+            # 如果没有权重信息，重新分配占比
+            return (0.4 * description_ratio + 
+                    0.3 * type_diversity + 
+                    0.3 * validity_ratio)
     
     def _calculate_relevance_score(self, rel_info: List[Dict[str, Any]], entity_ids: List[str]) -> float:
         """计算关系相关性得分"""
@@ -972,33 +1093,82 @@ class RelationshipUtilizationMetric(BaseMetric):
         return min(1.0, rel_count * 0.1)
     
     def _calculate_quality_score(self, rel_info: List[Dict[str, Any]]) -> float:
-        """计算关系质量得分"""
+        """
+        计算关系质量得分 
+        
+        Args:
+            rel_info: 关系信息列表
+            
+        Returns:
+            float: 关系质量得分
+        """
         if not rel_info:
             return 0.0
             
         # 检查关系是否有描述 - 确保处理None值
-        described_count = sum(1 for rel in rel_info if rel.get("description", "") is not None and str(rel.get("description", "")).strip())
+        described_count = 0
+        for rel in rel_info:
+            # 使用描述或关系类型
+            description = rel.get("description", "")
+            relation_type = rel.get("relation", "")
+            
+            if ((description is not None and str(description).strip()) or 
+                (relation_type is not None and str(relation_type).strip())):
+                described_count += 1
+        
         description_ratio = described_count / len(rel_info) if rel_info else 0
         
         # 检查关系类型的多样性
-        relation_types = set(rel.get("relation", "") for rel in rel_info)
+        relation_types = set()
+        for rel in rel_info:
+            rel_type = rel.get("relation", "")
+            if rel_type and rel_type.strip():
+                relation_types.add(rel_type)
+        
         type_diversity = min(1.0, len(relation_types) / 5)  # 最多5种关系类型为满分
+        
+        # 检查来源和目标实体是否存在
+        valid_relations = 0
+        for rel in rel_info:
+            source = rel.get("source", "")
+            target = rel.get("target", "")
+            if source and source != "unknown" and target and target != "unknown":
+                valid_relations += 1
+        
+        validity_ratio = valid_relations / len(rel_info) if rel_info else 0
         
         # 计算关系权重的平均值（如果有）
         weight_score = 0.0
         weighted_rels = [rel for rel in rel_info if "weight" in rel and rel["weight"] is not None]
         if weighted_rels:
-            weights = [float(rel["weight"]) for rel in weighted_rels]
-            avg_weight = sum(weights) / len(weights)
-            # 假设权重范围为0-10，归一化到0-1
-            weight_score = min(1.0, avg_weight / 10.0)
+            try:
+                weights = []
+                for rel in weighted_rels:
+                    # 确保权重是有效数字
+                    if isinstance(rel["weight"], (int, float)):
+                        weights.append(float(rel["weight"]))
+                    elif isinstance(rel["weight"], str) and rel["weight"].replace('.', '', 1).isdigit():
+                        weights.append(float(rel["weight"]))
+                
+                if weights:
+                    avg_weight = sum(weights) / len(weights)
+                    # 假设权重范围为0-10，归一化到0-1
+                    weight_score = min(1.0, avg_weight / 10.0)
+            except Exception as e:
+                if self.debug:
+                    print(f"  计算权重得分时出错: {e}")
         
-        # 综合得分 - 描述占30%，多样性占30%，权重占40%（如果有权重）
+        # 综合得分 - 描述占30%，多样性占30%，有效性占20%，权重占20%
         if weighted_rels:
-            return 0.3 * description_ratio + 0.3 * type_diversity + 0.4 * weight_score
+            return (0.3 * description_ratio + 
+                    0.3 * type_diversity + 
+                    0.2 * validity_ratio + 
+                    0.2 * weight_score)
         else:
-            # 如果没有权重信息，描述和多样性各占50%
-            return 0.5 * description_ratio + 0.5 * type_diversity
+            # 如果没有权重信息，重新分配占比
+            return (0.4 * description_ratio + 
+                    0.3 * type_diversity + 
+                    0.3 * validity_ratio)
     
     def _calculate_relevance_score(self, rel_info: List[Dict], entity_ids: List[str]) -> float:
         """计算关系相关性得分"""
@@ -1151,7 +1321,16 @@ class EntityCoverageMetric(BaseMetric):
         return 0.4
     
     def _evaluate_entity_coverage(self, sample, keywords: List[str]) -> float:
-        """统一计算实体覆盖率得分"""
+        """
+        统一计算实体覆盖率得分
+        
+        Args:
+            sample: 评估样本
+            keywords: 问题关键词
+            
+        Returns:
+            float: 实体覆盖率得分
+        """
         # 提取实体信息
         entities = []
         entity_ids = sample.referenced_entities
@@ -1164,7 +1343,7 @@ class EntityCoverageMetric(BaseMetric):
         if self.neo4j_client and entity_ids:
             try:
                 query = """
-                MATCH (e:__Entity__)
+                MATCH (e)
                 WHERE e.id IN $ids
                 RETURN e.id AS id, e.description AS description
                 """
@@ -1188,15 +1367,44 @@ class EntityCoverageMetric(BaseMetric):
         
         # 计算关键词匹配率
         if keywords and entities:
-            entities_text = " ".join([str(e) for e in entities])
+            # 将所有实体信息合并为一个文本
+            entities_text = " ".join([str(e) for e in entities]).lower()
             print(f"  实体文本长度: {len(entities_text)}")
             
+            # 匹配关键词
             matched = 0
             for keyword in keywords:
-                if keyword.lower() in entities_text.lower():
+                keyword_lower = keyword.lower()
+                if keyword_lower in entities_text:
                     matched += 1
             
-            # 计算匹配率
+            # 尝试数字ID匹配
+            for keyword in keywords:
+                if not any(keyword.lower() in str(e).lower() for e in entities):
+                    # 对于未匹配的关键词，尝试通过ID间接匹配
+                    for entity_id in entity_ids:
+                        # 获取相关联的实体
+                        try:
+                            if self.neo4j_client:
+                                query = """
+                                MATCH (e)-[r]-(related)
+                                WHERE e.id = $id
+                                RETURN related.description AS description
+                                LIMIT 10
+                                """
+                                result = self.neo4j_client.execute_query(query, {"id": entity_id})
+                                
+                                if result.records:
+                                    for record in result.records:
+                                        desc = record.get("description", "")
+                                        if desc and keyword.lower() in desc.lower():
+                                            matched += 0.5  # 相关实体匹配给予部分分数
+                                            break
+                        except Exception as e:
+                            # 忽略错误
+                            pass
+            
+            # 计算匹配率和实体数量因子
             match_rate = matched / len(keywords) if keywords else 0
             entity_factor = min(1.0, len(entities) / 5)  # 最多5个实体为满分
             
@@ -1211,7 +1419,16 @@ class EntityCoverageMetric(BaseMetric):
             print(f"  基础分: {base_score}")
             print(f"  质量得分: {quality_score:.4f}")
             
-            return base_score + quality_score
+            return min(1.0, base_score + quality_score)
+        
+        # 如果实体列表为空，但agent_type为graph或hybrid，给予稍高分数
+        agent_type = sample.agent_type.lower()
+        if agent_type in ["graph", "hybrid"] and entity_ids:
+            # 根据实体ID数量给予一定加分
+            id_count_score = min(0.3, len(entity_ids) * 0.05)  # 每个ID加0.05，最多0.3
+            score = 0.4 + id_count_score
+            print(f"  基于实体ID数量的得分: {score:.4f}")
+            return score
         
         # 没有实体或关键词时，给予基础分
         print("  没有实体或关键词，使用基础分: 0.4")

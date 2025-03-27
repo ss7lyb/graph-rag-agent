@@ -151,21 +151,22 @@ class CompositeGraphRAGEvaluator:
                 # 计算检索时间
                 retrieval_time = time.time() - start_time
                 
-                # 更新样本 - 提取引用信息
-                answer_sample.update_system_answer(answer, agent_name)
-                retrieval_sample.update_system_answer(answer, agent_name)
-                retrieval_sample.retrieval_time = retrieval_time
-                
-                # 同时存储回答用于后续保存
+                # 用于展示的清理版本
                 clean_answer = answer
                 if agent_name == "deep":
                     clean_answer = clean_thinking_process(clean_answer)
                 clean_answer = clean_references(clean_answer)
                 
+                # 立即将答案添加到列表，避免后续重复调用
                 answers.append({
                     "question": question,
                     "answer": clean_answer
                 })
+                
+                # 更新样本 - 提取引用信息
+                answer_sample.update_system_answer(answer, agent_name)
+                retrieval_sample.update_system_answer(answer, agent_name)
+                retrieval_sample.retrieval_time = retrieval_time
                 
                 # 从答案中提取引用实体和关系
                 refs = extract_references_from_answer(answer)
@@ -204,38 +205,19 @@ class CompositeGraphRAGEvaluator:
             answer_data.append(answer_sample)
             retrieval_data.append(retrieval_sample)
         
-        # 保存所有回答
-        answers_path = os.path.join(self.answers_dir, f"{agent_name}_answers.json")
-        with open(answers_path, "w", encoding="utf-8") as f:
-            json.dump(answers, f, ensure_ascii=False, indent=2)
-        
-        # 生成markdown格式的回答
-        markdown_path = os.path.join(self.answers_dir, f"{agent_name}_answers.md")
-        with open(markdown_path, "w", encoding="utf-8") as f:
-            f.write(f"# {agent_name.capitalize()} 代理的回答\n\n")
-            
-            for i, qa in enumerate(answers):
-                f.write(f"## 问题 {i+1}: {qa['question']}\n\n")
-                f.write(f"{qa['answer']}\n\n")
-                f.write("---\n\n")
-        
-        print(f"  已保存{agent_name}的回答到 {answers_path}")
+        # 保存所有回答 - 使用已收集的数据，不再重复调用
+        self._save_agent_answers(agent_name, answers)
         
         # 执行答案评估
         answer_results = {}
         if hasattr(self.answer_evaluator, 'evaluate') and callable(self.answer_evaluator.evaluate):
             try:
-                # 处理可能出现的错误
-                try:
-                    answer_results = self.answer_evaluator.evaluate(answer_data)
-                except Exception as e:
-                    print(f"答案评估出错: {e}")
-                    import traceback
-                    print(traceback.format_exc())
-                    # 提供默认值
-                    answer_results = {"em": 0.0, "f1": 0.0}
+                answer_results = self.answer_evaluator.evaluate(answer_data)
             except Exception as e:
-                print(f"答案评估主函数出错: {e}")
+                print(f"答案评估出错: {e}")
+                import traceback
+                print(traceback.format_exc())
+                answer_results = {"em": 0.0, "f1": 0.0}
         
         # 执行检索评估
         retrieval_results = {}
@@ -301,7 +283,6 @@ class CompositeGraphRAGEvaluator:
         Returns:
             Dict[str, float]: 评估结果
         """
-        # 修改标准版本，确保答案也被保存
         agent = self.agents.get(agent_name)
         if not agent:
             raise ValueError(f"未找到代理: {agent_name}")
@@ -332,20 +313,21 @@ class CompositeGraphRAGEvaluator:
                 # 计算检索时间
                 retrieval_time = time.time() - start_time
                 
-                # 更新样本
-                retrieval_sample.update_system_answer(answer, agent_name)
-                retrieval_sample.retrieval_time = retrieval_time
-                
-                # 同时存储回答用于后续保存
+                # 用于展示的清理版本
                 clean_answer = answer
                 if agent_name == "deep":
                     clean_answer = clean_thinking_process(clean_answer)
                 clean_answer = clean_references(clean_answer)
                 
+                # 立即将答案添加到列表，避免后续重复调用
                 answers.append({
                     "question": question,
                     "answer": clean_answer
                 })
+                
+                # 更新样本
+                retrieval_sample.update_system_answer(answer, agent_name)
+                retrieval_sample.retrieval_time = retrieval_time
                 
                 # 尝试使用Neo4j获取相关图数据（如果可用）
                 neo4j_client = self.config.get('neo4j_client')
@@ -373,22 +355,8 @@ class CompositeGraphRAGEvaluator:
             # 添加到评估数据
             retrieval_data.append(retrieval_sample)
         
-        # 保存所有回答
-        answers_path = os.path.join(self.answers_dir, f"{agent_name}_answers.json")
-        with open(answers_path, "w", encoding="utf-8") as f:
-            json.dump(answers, f, ensure_ascii=False, indent=2)
-        
-        # 生成markdown格式的回答
-        markdown_path = os.path.join(self.answers_dir, f"{agent_name}_answers.md")
-        with open(markdown_path, "w", encoding="utf-8") as f:
-            f.write(f"# {agent_name.capitalize()} 代理的回答\n\n")
-            
-            for i, qa in enumerate(answers):
-                f.write(f"## 问题 {i+1}: {qa['question']}\n\n")
-                f.write(f"{qa['answer']}\n\n")
-                f.write("---\n\n")
-        
-        print(f"  已保存{agent_name}的回答到 {answers_path}")
+        # 保存所有回答 - 使用已收集的数据，不再重复调用
+        self._save_agent_answers(agent_name, answers)
         
         # 执行检索评估
         try:
@@ -434,6 +402,34 @@ class CompositeGraphRAGEvaluator:
             json.dump(results, f, ensure_ascii=False, indent=2)
         
         return results
+    
+    def _save_agent_answers(self, agent_name: str, answers: List[Dict[str, str]]):
+        """
+        保存代理回答
+        
+        Args:
+            agent_name: 代理名称
+            answers: 回答列表
+        """
+        # 确保答案目录存在
+        os.makedirs(self.answers_dir, exist_ok=True)
+        
+        # 保存JSON格式
+        answers_path = os.path.join(self.answers_dir, f"{agent_name}_answers.json")
+        with open(answers_path, "w", encoding="utf-8") as f:
+            json.dump(answers, f, ensure_ascii=False, indent=2)
+        
+        # 生成更易读的markdown格式
+        markdown_path = os.path.join(self.answers_dir, f"{agent_name}_answers.md")
+        with open(markdown_path, "w", encoding="utf-8") as f:
+            f.write(f"# {agent_name.capitalize()} 代理的回答\n\n")
+            
+            for i, qa in enumerate(answers):
+                f.write(f"## 问题 {i+1}: {qa['question']}\n\n")
+                f.write(f"{qa['answer']}\n\n")
+                f.write("---\n\n")
+        
+        print(f"  已保存{agent_name}的回答到 {answers_path}")
     
     def format_comparison_table(self, results: Dict[str, Dict[str, float]]) -> str:
         """
@@ -526,9 +522,6 @@ class CompositeGraphRAGEvaluator:
     
     def save_agent_answers(self, questions: List[str], output_dir: str = None):
         """
-        保存所有代理对问题的回答，便于人工评估
-        注意：这个方法仅作为后备，因为在评估过程中已经保存了回答
-        
         Args:
             questions: 问题列表
             output_dir: 输出目录，默认为self.save_dir/answers
@@ -555,8 +548,21 @@ class CompositeGraphRAGEvaluator:
             print(f"获取{agent_name}代理的回答...")
             answers = []
             
+            # 使用缓存记录已处理的问题
+            processed_questions = {}
+            
             for i, question in enumerate(questions):
                 print(f"  问题 {i+1}/{len(questions)}")
+                
+                # 先检查缓存
+                cache_key = f"{agent_name}:{question}"
+                if cache_key in processed_questions:
+                    answers.append({
+                        "question": question,
+                        "answer": processed_questions[cache_key]
+                    })
+                    print(f"    使用缓存的回答")
+                    continue
                 
                 try:
                     # 获取回答
@@ -566,6 +572,9 @@ class CompositeGraphRAGEvaluator:
                     if agent_name == "deep":
                         answer = clean_thinking_process(answer)
                     answer = clean_references(answer)
+                    
+                    # 保存到缓存
+                    processed_questions[cache_key] = answer
                     
                     answers.append({
                         "question": question,
@@ -578,21 +587,8 @@ class CompositeGraphRAGEvaluator:
                         "answer": f"获取回答时出错: {str(e)}"
                     })
             
-            # 保存回答
-            with open(answers_path, "w", encoding="utf-8") as f:
-                json.dump(answers, f, ensure_ascii=False, indent=2)
-            
-            # 生成可读性更好的markdown格式
-            markdown_path = os.path.join(output_dir, f"{agent_name}_answers.md")
-            with open(markdown_path, "w", encoding="utf-8") as f:
-                f.write(f"# {agent_name.capitalize()} 代理的回答\n\n")
-                
-                for i, qa in enumerate(answers):
-                    f.write(f"## 问题 {i+1}: {qa['question']}\n\n")
-                    f.write(f"{qa['answer']}\n\n")
-                    f.write("---\n\n")
-            
-            print(f"  已保存{agent_name}的回答到 {answers_path}")
+            # 使用抽取的方法保存回答
+            self._save_agent_answers(agent_name, answers)
 
     def load_questions_from_file(self, file_path: str) -> List[str]:
         """

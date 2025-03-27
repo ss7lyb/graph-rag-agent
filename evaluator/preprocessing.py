@@ -206,7 +206,15 @@ def parse_json_data(data_text: str) -> Optional[Dict]:
         return None
 
 def extract_entities_from_parsed(parsed_data: Dict) -> List[str]:
-    """从解析后的数据中提取实体ID"""
+    """
+    从解析后的数据中提取实体ID
+    
+    Args:
+        parsed_data: 已解析的数据
+    
+    Returns:
+        List[str]: 实体ID列表
+    """
     entities = []
     
     # 处理嵌套的data结构
@@ -218,47 +226,80 @@ def extract_entities_from_parsed(parsed_data: Dict) -> List[str]:
     for key in entity_keys:
         if key in parsed_data and parsed_data[key]:
             if isinstance(parsed_data[key], list):
-                # 处理数字列表
+                # 处理列表格式
                 for item in parsed_data[key]:
-                    if isinstance(item, (int, str)):
-                        entities.append(str(item))
+                    if isinstance(item, (int, float)):
+                        entities.append(str(int(item)))
+                    elif isinstance(item, str):
+                        entities.append(item)
+                    elif isinstance(item, dict) and "id" in item:
+                        # 处理{id: 123}格式
+                        entities.append(str(item["id"]))
             elif isinstance(parsed_data[key], str):
-                # 如果是逗号分隔的字符串
-                entities.extend([e.strip() for e in parsed_data[key].split(",") if e.strip()])
+                # 处理逗号分隔的字符串
+                parts = parsed_data[key].split(",")
+                for part in parts:
+                    clean_part = part.strip()
+                    if clean_part:
+                        entities.append(clean_part)
+            elif isinstance(parsed_data[key], dict):
+                # 处理字典格式
+                for k, v in parsed_data[key].items():
+                    if isinstance(v, (int, str)):
+                        entities.append(str(v))
     
     return entities
 
 def extract_relationships_from_parsed(parsed_data: Dict) -> List[str]:
-    """从解析后的数据中提取关系ID"""
+    """
+    从解析后的数据中提取关系ID
+    
+    Args:
+        parsed_data: 已解析的数据
+    
+    Returns:
+        List[str]: 关系ID列表
+    """
     relationships = []
     
     # 处理嵌套的data结构
     if "data" in parsed_data and isinstance(parsed_data["data"], dict):
         parsed_data = parsed_data["data"]
     
-    # 提取Relationships字段的值
-    rel_keys = ["Relationships", "relationships", "Relations", "relations", "Relation", "relation"]
+    # 提取关系ID的所有可能键
+    rel_keys = [
+        "Relationships", "relationships", "Relations", "relations", 
+        "Relation", "relation", "Reports", "reports", "Report", "report"
+    ]
+    
     for key in rel_keys:
         if key in parsed_data and parsed_data[key]:
             if isinstance(parsed_data[key], list):
-                # 处理数字列表
+                # 处理列表格式
                 for item in parsed_data[key]:
-                    if isinstance(item, (int, str)):
+                    if isinstance(item, (int, float)):
+                        relationships.append(str(int(item)))
+                    elif isinstance(item, str):
+                        relationships.append(item)
+                    elif isinstance(item, dict) and "id" in item:
+                        # 处理{id: 123}格式
+                        relationships.append(str(item["id"]))
+                    elif isinstance(item, tuple) or (isinstance(item, list) and len(item) >= 3):
+                        # 处理三元组格式 (source, relation, target)
+                        # 在这种情况下，我们可以提取关系ID或使用整个三元组
                         relationships.append(str(item))
             elif isinstance(parsed_data[key], str):
-                # 如果是逗号分隔的字符串
-                relationships.extend([r.strip() for r in parsed_data[key].split(",") if r.strip()])
-    
-    # 尝试提取Reports字段（一些代理使用Reports替代Relationships）
-    report_keys = ["Reports", "reports", "Report", "report"]
-    for key in report_keys:
-        if key in parsed_data and parsed_data[key]:
-            if isinstance(parsed_data[key], list):
-                for item in parsed_data[key]:
-                    if isinstance(item, (int, str)):
-                        relationships.append(str(item))
-            elif isinstance(parsed_data[key], str):
-                relationships.extend([r.strip() for r in parsed_data[key].split(",") if r.strip()])
+                # 处理逗号分隔的字符串
+                parts = parsed_data[key].split(",")
+                for part in parts:
+                    clean_part = part.strip()
+                    if clean_part:
+                        relationships.append(clean_part)
+            elif isinstance(parsed_data[key], dict):
+                # 处理字典格式
+                for k, v in parsed_data[key].items():
+                    if isinstance(v, (int, str)):
+                        relationships.append(str(v))
     
     return relationships
 

@@ -1,7 +1,6 @@
 import os
 import sys
 import argparse
-
 # 添加父目录到路径，使得可以导入evaluator模块
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
@@ -11,8 +10,8 @@ from evaluator.evaluator_config.agent_evaluation_config import get_agent_metrics
 from evaluator.utils.eval_utils import evaluate_agent, load_questions_and_answers
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="评估Graph Agent性能")
-    parser.add_argument("--save_dir", type=str, default="./evaluation_results/graph_agent",
+    parser = argparse.ArgumentParser(description="评估Hybrid Agent性能")
+    parser.add_argument("--save_dir", type=str, default="./evaluation_results/hybrid_agent",
                         help="评估结果保存目录")
     parser.add_argument("--questions_file", type=str, required=True,
                         help="要评估的问题文件（JSON格式）")
@@ -32,8 +31,8 @@ def main():
     
     # 设置日志记录
     os.makedirs(args.save_dir, exist_ok=True)
-    logger = setup_logger("graph_evaluation", os.path.join(args.save_dir, "evaluation.log"))
-    logger.info("开始评估Graph Agent")
+    logger = setup_logger("hybrid_evaluation", os.path.join(args.save_dir, "evaluation.log"))
+    logger.info("开始评估Hybrid Agent")
     
     # 设置全局调试模式
     set_debug_mode(args.verbose)
@@ -47,13 +46,13 @@ def main():
     else:
         # 根据评估类型使用默认指标
         if args.eval_type == "answer":
-            metrics = get_agent_metrics("graph", "answer")
+            metrics = get_agent_metrics("hybrid", "answer")
             logger.info(f"使用答案评估指标: {', '.join(metrics)}")
         elif args.eval_type == "retrieval":
-            metrics = get_agent_metrics("graph", "retrieval")
+            metrics = get_agent_metrics("hybrid", "retrieval")
             logger.info(f"使用检索评估指标: {', '.join(metrics)}")
         else:
-            metrics = get_agent_metrics("graph")
+            metrics = get_agent_metrics("hybrid")
             logger.info(f"使用全部评估指标: {', '.join(metrics)}")
     
     try:
@@ -65,7 +64,7 @@ def main():
         
         # 执行评估
         evaluate_agent(
-            agent_type="graph",
+            agent_type="hybrid",
             questions=questions,
             golden_answers=golden_answers,
             save_dir=args.save_dir,

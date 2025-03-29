@@ -88,7 +88,7 @@ class DeeperResearchTool:
     def _log(self, message):
         """记录执行日志"""
         self.execution_logs.append(message)
-        print(message)  # 同时打印到控制台
+        # print(message)  # 同时打印到控制台
     
     def extract_keywords(self, query: str) -> Dict[str, List[str]]:
         """从查询中提取关键词"""

@@ -417,7 +417,7 @@ class DeepResearchTool(BaseSearchTool):
     def _log(self, message):
         """记录执行日志"""
         self.execution_logs.append(message)
-        print(message)  # 同时打印到控制台
+        # print(message)  # 同时打印到控制台
     
     def thinking(self, query: str):
         """

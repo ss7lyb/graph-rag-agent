@@ -22,6 +22,12 @@ from evaluator.metrics.llm_metrics import (
     ComprehensiveAnswerMetric, LLMGraphRagEvaluator
 )
 
+# 深度研究指标
+from evaluator.metrics.deep_search_metrics import (
+    ReasoningCoherence, ReasoningDepth,
+    IterativeImprovementMetric, KnowledgeGraphUtilizationMetric
+)
+
 # 定义所有可用的指标
 __all_metrics__ = {
     # 答案评估指标
@@ -45,7 +51,13 @@ __all_metrics__ = {
     'response_coherence': 'evaluator.metrics.llm_metrics.ResponseCoherence',
     'factual_consistency': 'evaluator.metrics.llm_metrics.FactualConsistency',
     'answer_comprehensiveness': 'evaluator.metrics.llm_metrics.ComprehensiveAnswerMetric',
-    'llm_evaluation': 'evaluator.metrics.llm_metrics.LLMGraphRagEvaluator'
+    'llm_evaluation': 'evaluator.metrics.llm_metrics.LLMGraphRagEvaluator',
+    
+    # 深度研究指标
+    'reasoning_coherence': 'evaluator.metrics.deep_search_metrics.ReasoningCoherence',
+    'reasoning_depth': 'evaluator.metrics.deep_search_metrics.ReasoningDepth',
+    'iterative_improvement': 'evaluator.metrics.deep_search_metrics.IterativeImprovementMetric',
+    'knowledge_graph_utilization': 'evaluator.metrics.deep_search_metrics.KnowledgeGraphUtilizationMetric'
 }
 
 def list_available_metrics():

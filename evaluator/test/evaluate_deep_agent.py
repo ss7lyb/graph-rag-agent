@@ -11,8 +11,8 @@ from evaluator.evaluator_config.agent_evaluation_config import get_agent_metrics
 from evaluator.utils.eval_utils import evaluate_agent, load_questions_and_answers
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="评估Graph Agent性能")
-    parser.add_argument("--save_dir", type=str, default="./evaluation_results/graph_agent",
+    parser = argparse.ArgumentParser(description="评估Deep Research Agent性能")
+    parser.add_argument("--save_dir", type=str, default="./evaluation_results/deep_agent",
                         help="评估结果保存目录")
     parser.add_argument("--questions_file", type=str, required=True,
                         help="要评估的问题文件（JSON格式）")
@@ -23,8 +23,10 @@ def parse_args():
     parser.add_argument("--metrics", type=str, default="",
                         help="要评估的指标，用逗号分隔，留空则使用默认指标")
     parser.add_argument("--eval_type", type=str, default="all",
-                        choices=["all", "answer", "retrieval"],
-                        help="评估类型: all(全面评估), answer(仅答案质量), retrieval(仅检索性能)")
+                        choices=["all", "answer", "retrieval", "reasoning"],
+                        help="评估类型: all(全面评估), answer(仅答案质量), retrieval(仅检索性能), reasoning(仅推理能力)")
+    parser.add_argument("--use_deeper", action="store_true",
+                        help="是否使用增强版深度研究工具(DeeperResearchTool)")
     return parser.parse_args()
 
 def main():
@@ -32,8 +34,8 @@ def main():
     
     # 设置日志记录
     os.makedirs(args.save_dir, exist_ok=True)
-    logger = setup_logger("graph_evaluation", os.path.join(args.save_dir, "evaluation.log"))
-    logger.info("开始评估Graph Agent")
+    logger = setup_logger("deep_evaluation", os.path.join(args.save_dir, "evaluation.log"))
+    logger.info("开始评估Deep Research Agent")
     
     # 设置全局调试模式
     set_debug_mode(args.verbose)
@@ -47,16 +49,33 @@ def main():
     else:
         # 根据评估类型使用默认指标
         if args.eval_type == "answer":
-            metrics = get_agent_metrics("graph", "answer")
+            metrics = get_agent_metrics("deep", "answer")
             logger.info(f"使用答案评估指标: {', '.join(metrics)}")
         elif args.eval_type == "retrieval":
-            metrics = get_agent_metrics("graph", "retrieval")
+            metrics = get_agent_metrics("deep", "retrieval")
             logger.info(f"使用检索评估指标: {', '.join(metrics)}")
+        elif args.eval_type == "reasoning":
+            metrics = get_agent_metrics("deep", "reasoning")
+            # 如果使用增强版深度研究工具，添加对应指标
+            if args.use_deeper:
+                metrics.extend(get_agent_metrics("deep", "deeper"))
+            logger.info(f"使用推理评估指标: {', '.join(metrics)}")
         else:
-            metrics = get_agent_metrics("graph")
+            metrics = get_agent_metrics("deep")
             logger.info(f"使用全部评估指标: {', '.join(metrics)}")
     
     try:
+        # 设置是否使用增强版
+        from agent.deep_research_agent import DeepResearchAgent
+        agent = DeepResearchAgent()
+        
+        if not args.use_deeper:
+            agent = agent.is_deeper_tool(False)
+            logger.info("使用标准深度研究工具(DeepResearchTool)")
+        else:
+            agent = agent.is_deeper_tool(True)
+            logger.info("使用增强版深度研究工具(DeeperResearchTool)")
+        
         # 加载问题和答案
         questions, golden_answers = load_questions_and_answers(
             args.questions_file, 
@@ -65,7 +84,7 @@ def main():
         
         # 执行评估
         evaluate_agent(
-            agent_type="graph",
+            agent_type="deep",
             questions=questions,
             golden_answers=golden_answers,
             save_dir=args.save_dir,

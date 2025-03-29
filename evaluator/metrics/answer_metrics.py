@@ -75,13 +75,21 @@ class ExactMatch(BaseMetric):
                 score = 1.0
                 self.log(f"  完全匹配 ✓")
             else:
-                # 规则匹配失败，回退到LLM评分
-                self.log(f"  规则匹配失败，回退到LLM评分")
+                # 规则匹配失败，尝试内容相似性评估
+                similarity_score = self._calculate_content_similarity(cleaned_pred, golden)
+                self.log(f"  基本内容相似度: {similarity_score:.4f}")
                 
-                # 仅当有LLM可用时使用LLM评分
-                if self.llm:
+                # 如果内容相似度较高，给予一定分数
+                if similarity_score >= 0.7:
+                    score = 0.7 + (similarity_score - 0.7) * 3/3  # 0.7-1.0 映射到 0.7-1.0
+                    self.log(f"  内容高度相似，给予分数: {score:.4f}")
+                # 如果内容相似度一般，回退到LLM评分
+                elif self.llm:
+                    self.log(f"  内容相似度一般，回退到LLM评分")
+                    
+                    # 构建LLM评估提示
                     prompt = f"""
-                    请比较下面两个答案，评估它们内容上的等价性，并给出0到1之间的分数。
+                    请比较下面两个答案，评估它们在内容上的等价性，给出0到1之间的分数。
                     0表示完全不同，1表示内容上完全等价。
                     请只考虑实质内容，忽略格式、表达方式和顺序的差异。
                     
@@ -94,65 +102,60 @@ class ExactMatch(BaseMetric):
                     只返回一个0到1之间的数字表示分数，不要有任何其他文字。
                     """
                     
-                    try:
-                        response = self.llm.invoke(prompt)
-                        score_text = response.content if hasattr(response, 'content') else response
-                        
-                        self.log(f"  LLM响应: {score_text}")
-                        
-                        # 提取数字
-                        score_match = re.search(r'(\d+(\.\d+)?)', score_text)
-                        if score_match:
-                            score = float(score_match.group(1))
-                            # 确保在0-1范围内
-                            score = max(0.0, min(1.0, score))
-                            self.log(f"  LLM评估的匹配度分数: {score:.4f}")
-                        else:
-                            score = 0.0
-                            self.log(f"  无法从LLM响应中提取分数，使用默认分数0.0")
-                    except Exception as e:
-                        self.log(f"  LLM评估时出错: {e}")
-                        score = 0.0
+                    # 使用基类的LLM回退评分方法
+                    score = self.get_llm_fallback_score(prompt, default_score=similarity_score)
+                    self.log(f"  LLM评估的匹配度分数: {score:.4f}")
                 else:
-                    # 没有LLM，使用基本规则评分
-                    score = 0.0
-                    self.log(f"  不匹配且没有可用的LLM评分，使用0分")
-                    
-                    # 显示不匹配的详细信息
-                    min_len = min(len(normalized_pred), len(normalized_golden))
-                    max_len = max(len(normalized_pred), len(normalized_golden))
-                    
-                    # 检查字符级差异
-                    first_diff_pos = None
-                    for i in range(min_len):
-                        if normalized_pred[i] != normalized_golden[i]:
-                            first_diff_pos = i
-                            break
-                    
-                    if first_diff_pos is not None:
-                        self.log(f"  首个差异位置: 字符位置 {first_diff_pos}")
-                        context_start = max(0, first_diff_pos - 10)
-                        context_end = min(min_len, first_diff_pos + 10)
-                        
-                        pred_context = normalized_pred[context_start:context_end]
-                        golden_context = normalized_golden[context_start:context_end]
-                        
-                        self.log(f"  差异上下文 - 系统: '...{pred_context}...'")
-                        self.log(f"  差异上下文 - 标准: '...{golden_context}...'")
-                    
-                    # 显示长度差异
-                    if len(normalized_pred) != len(normalized_golden):
-                        self.log(f"  答案长度差异: 系统({len(normalized_pred)}) vs 标准({len(normalized_golden)})")
+                    # 没有LLM，使用内容相似度作为分数
+                    score = similarity_score
+                    self.log(f"  使用内容相似度作为分数: {score:.4f}")
             
             metric_score_list.append(score)
         
         em_score = sum(metric_score_list) / len(metric_score_list) if metric_score_list else 0.0
         self.log(f"\n样本总数: {len(metric_score_list)}")
-        self.log(f"匹配样本数: {sum(1 for s in metric_score_list if s > 0)}")
+        self.log(f"匹配样本数: {sum(1 for s in metric_score_list if s > 0.8)}")
         self.log(f"精确匹配平均得分: {em_score:.4f}")
         self.log("======== ExactMatch 计算结束 ========\n")
         
         return {"em": em_score}, metric_score_list
+    
+    def _calculate_content_similarity(self, pred: str, golden: str) -> float:
+        """
+        计算两个文本的内容相似度
+        
+        Args:
+            pred: 预测答案
+            golden: 标准答案
+            
+        Returns:
+            float: 内容相似度分数 (0-1)
+        """
+        # 标准化处理
+        pred_norm = normalize_answer(pred).split()
+        golden_norm = normalize_answer(golden).split()
+        
+        if not pred_norm or not golden_norm:
+            return 0.0
+            
+        # 计算共有词的数量
+        common_words = set(pred_norm) & set(golden_norm)
+        
+        # 计算Jaccard相似度
+        union_words = set(pred_norm) | set(golden_norm)
+        if union_words:
+            jaccard = len(common_words) / len(union_words)
+        else:
+            jaccard = 0.0
+            
+        # 计算词覆盖率
+        pred_coverage = len(common_words) / len(set(pred_norm)) if pred_norm else 0
+        golden_coverage = len(common_words) / len(set(golden_norm)) if golden_norm else 0
+        
+        # 综合得分 - Jaccard占40%，两个覆盖率各占30%
+        similarity = 0.4 * jaccard + 0.3 * pred_coverage + 0.3 * golden_coverage
+        
+        return similarity
 
 class F1Score(BaseMetric):
     """F1分数评估指标"""
@@ -237,15 +240,15 @@ class F1Score(BaseMetric):
                 self.log(f"  规则F1计算出错: {e}")
                 rule_f1 = 0.0
             
-            # 如果规则F1太低，回退到LLM评分
-            if rule_f1 < 0.3 and self.llm:
-                self.log(f"  规则F1分数过低 ({rule_f1:.4f})，回退到LLM评分")
+            # 无论规则F1分数如何，如果有LLM都尝试使用LLM评估
+            if self.llm:
+                self.log(f"  尝试使用LLM评估内容相似度")
                 
                 # 构建内容相似度评估提示
                 prompt = f"""
                 请比较下面两个答案的内容相似度，评估它们包含的信息重叠程度，并给出0到1之间的分数。
                 0表示完全不同信息，1表示信息完全重叠。
-                请考虑实质内容的相似性，而不仅是表面文字的匹配。
+                请考虑实质内容的相似性，而不仅是表面文字的匹配。在评估时，请特别关注关键信息点是否一致。
                 
                 标准答案:
                 {golden}
@@ -256,30 +259,19 @@ class F1Score(BaseMetric):
                 只返回一个0到1之间的数字表示分数，不要有任何其他文字。
                 """
                 
-                try:
-                    response = self.llm.invoke(prompt)
-                    score_text = response.content if hasattr(response, 'content') else response
-                    
-                    self.log(f"  LLM响应: {score_text}")
-                    
-                    # 提取数字
-                    score_match = re.search(r'(\d+(\.\d+)?)', score_text)
-                    if score_match:
-                        llm_f1 = float(score_match.group(1))
-                        # 确保在0-1范围内
-                        llm_f1 = max(0.0, min(1.0, llm_f1))
-                        self.log(f"  LLM评估的F1分数: {llm_f1:.4f}")
-                        
-                        # 使用LLM的分数
-                        f1 = llm_f1
-                    else:
-                        self.log(f"  无法从LLM响应中提取分数，使用规则F1分数")
-                        f1 = rule_f1
-                except Exception as e:
-                    self.log(f"  LLM评估时出错: {e}")
+                # 使用基类的LLM回退评分方法
+                llm_f1 = self.get_llm_fallback_score(prompt, default_score=0.5)
+                self.log(f"  LLM评估的F1分数: {llm_f1:.4f}")
+                
+                # 如果LLM分数更高，使用LLM分数；否则使用规则F1分数
+                if llm_f1 > rule_f1:
+                    self.log(f"  LLM分数更高，采用LLM评估")
+                    f1 = llm_f1
+                else:
+                    self.log(f"  规则F1分数更高，保留规则评估")
                     f1 = rule_f1
             else:
-                # 规则F1分数足够好，或者没有LLM可用
+                # 没有LLM可用，使用规则F1分数
                 f1 = rule_f1
             
             f1_scores.append(f1)

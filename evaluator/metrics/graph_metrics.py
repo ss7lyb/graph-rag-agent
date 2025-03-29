@@ -14,11 +14,22 @@ class CommunityRelevanceMetric(BaseMetric):
     
     def calculate_metric(self, data) -> Tuple[Dict[str, float], List[float]]:
         """计算社区相关性"""
+        self.log("\n======== CommunityRelevance 计算日志 ========")
+        
         relevance_scores = []
         
-        for sample in data.samples:
+        # 打印总体信息
+        total_samples = len(data.samples) if hasattr(data, 'samples') else 0
+        self.log(f"样本总数: {total_samples}")
+        
+        for idx, sample in enumerate(data.samples):
             question = sample.question
             agent_type = sample.agent_type.lower() if sample.agent_type else ""
+            answer = sample.system_answer
+            
+            self.log(f"\n样本 {idx+1}:")
+            self.log(f"  问题: {question[:50]}...")
+            self.log(f"  代理类型: {agent_type}")
             
             # 提取问题关键词
             keywords = re.findall(r'\b[\w\u4e00-\u9fa5]{2,}\b', normalize_answer(question))
@@ -74,10 +85,20 @@ class CommunityRelevanceMetric(BaseMetric):
                     
                     # 基础分0.3，匹配率最多贡献0.4分
                     score = 0.3 + 0.4 * match_rate
+                    self.log(f"  基于社区内容的得分: {score:.4f}")
                 else:
                     # 没有社区信息，给予基础分
                     score = 0.3 + 0.1 * len(chunks) / 3  # 每个文本块增加一点分数
                     score = min(0.4, score)  # 最多0.4分
+                    self.log(f"  基于文本块数量的得分: {score:.4f}")
+                
+                # 如果分数较低，尝试使用LLM回退
+                if score <= 0.4 and self.llm:
+                    llm_score = self._llm_fallback_for_community(sample, keywords)
+                    if llm_score > score:
+                        self.log(f"  LLM回退分数更高({llm_score:.4f})，采用LLM评分")
+                        relevance_scores.append(llm_score)
+                        continue
                 
                 relevance_scores.append(score)
                 continue
@@ -145,6 +166,7 @@ class CommunityRelevanceMetric(BaseMetric):
                 # 计算最终分数
                 score = base_score + 0.5 * match_rate
                 score = min(1.0, score)  # 确保不超过1.0
+                self.log(f"  基于社区内容和代理类型的得分: {score:.4f}")
             else:
                 # 没有社区信息或关键词，基于代理类型给予基础分
                 if agent_type == "graph":
@@ -153,13 +175,69 @@ class CommunityRelevanceMetric(BaseMetric):
                     score = 0.35
                 else:
                     score = 0.3
+                self.log(f"  基于代理类型的基础分: {score:.4f}")
+            
+            # 如果分数较低，尝试LLM回退
+            if score <= 0.4 and self.llm:
+                llm_score = self._llm_fallback_for_community(sample, keywords)
+                if llm_score > score:
+                    self.log(f"  LLM回退分数更高({llm_score:.4f})，采用LLM评分")
+                    relevance_scores.append(llm_score)
+                    continue
             
             relevance_scores.append(score)
         
         avg_relevance = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
         
+        self.log(f"\n平均社区相关性得分: {avg_relevance:.4f}")
+        self.log("======== CommunityRelevance 计算结束 ========\n")
+        
         return {"community_relevance": avg_relevance}, relevance_scores
-
+    
+    def _llm_fallback_for_community(self, sample, keywords: List[str]) -> float:
+        """
+        使用LLM评估社区相关性
+        
+        Args:
+            sample: 评估样本
+            keywords: 问题关键词
+            
+        Returns:
+            float: LLM评估的社区相关性分数
+        """
+        question = sample.question
+        answer = sample.system_answer
+        agent_type = sample.agent_type
+        
+        # 获取实体ID
+        entity_ids = sample.referenced_entities
+        entity_text = ", ".join([str(e) for e in entity_ids[:10]]) if entity_ids else "无实体"
+        
+        # 关键词文本
+        keywords_text = ", ".join(keywords) if keywords else "无关键词"
+        
+        # 构建LLM提示
+        prompt = f"""
+        请评估以下AI回答与知识社区的相关性，给出0到1的分数。
+        
+        问题: {question}
+        代理类型: {agent_type}
+        
+        问题关键词: {keywords_text}
+        引用的实体: {entity_text}
+        
+        回答(部分): {answer[:200]}...
+        
+        评分标准:
+        - 高分(0.8-1.0): 回答内容与问题所属知识领域高度相关，引用了该领域的核心概念
+        - 中分(0.4-0.7): 回答内容与问题所属知识领域有一定相关性，包含一些领域概念
+        - 低分(0.0-0.3): 回答内容与问题所属知识领域关联性弱，几乎没有涉及领域概念
+        
+        只返回一个0到1之间的数字表示分数，不要有任何其他文字。
+        """
+        
+        # 使用基类的LLM回退评分方法
+        return self.get_llm_fallback_score(prompt, default_score=0.4)
 
 class SubgraphQualityMetric(BaseMetric):
     """
@@ -188,22 +266,43 @@ class SubgraphQualityMetric(BaseMetric):
         for idx, sample in enumerate(data.samples):
             entities = sample.referenced_entities
             relationships = sample.referenced_relationships
+            question = sample.question
             
             self.log(f"\n样本 {idx+1}:")
+            self.log(f"  问题: {question[:50]}...")
             self.log(f"  实体数量: {len(entities) if entities else 0}")
             self.log(f"  关系数量: {len(relationships) if relationships else 0}")
             
-            # 如果没有实体和关系，质量为基础分
+            # 如果没有实体和关系，质量为基础分，并尝试LLM回退
             if not entities and not relationships:
-                quality_scores.append(0.3)
-                self.log(f"  没有实体和关系，使用基础分: 0.3")
+                base_score = 0.3
+                self.log(f"  没有实体和关系，使用基础分: {base_score}")
+                
+                # 尝试使用LLM评估
+                if self.llm:
+                    llm_score = self._llm_fallback_for_subgraph(sample)
+                    if llm_score > base_score:
+                        self.log(f"  LLM回退分数更高({llm_score:.4f})，采用LLM评分")
+                        quality_scores.append(llm_score)
+                        continue
+                
+                quality_scores.append(base_score)
                 continue
             
             # 如果只有实体没有关系，给予基于实体的评分
             if entities and not relationships:
                 entity_based_score = 0.3 + min(0.2, 0.01 * len(entities))  # 每个实体加0.01，最多0.2
-                quality_scores.append(entity_based_score)
                 self.log(f"  只有实体没有关系，基于实体数量评分: {entity_based_score:.4f}")
+                
+                # 如果分数较低，尝试LLM回退
+                if entity_based_score <= 0.4 and self.llm:
+                    llm_score = self._llm_fallback_for_subgraph(sample)
+                    if llm_score > entity_based_score:
+                        self.log(f"  LLM回退分数更高({llm_score:.4f})，采用LLM评分")
+                        quality_scores.append(llm_score)
+                        continue
+                
+                quality_scores.append(entity_based_score)
                 continue
             
             # 获取关系信息
@@ -217,8 +316,17 @@ class SubgraphQualityMetric(BaseMetric):
                 # 使用关系ID数量给予一定奖励
                 rel_count = len(relationships) if isinstance(relationships, list) else 0
                 rel_based_score = 0.3 + min(0.2, 0.02 * rel_count)  # 每个关系ID加0.02，最多0.2
-                quality_scores.append(rel_based_score)
                 self.log(f"  无有效关系，基于关系ID数量评分: {rel_based_score:.4f}")
+                
+                # 如果分数较低，尝试LLM回退
+                if rel_based_score <= 0.4 and self.llm:
+                    llm_score = self._llm_fallback_for_subgraph(sample)
+                    if llm_score > rel_based_score:
+                        self.log(f"  LLM回退分数更高({llm_score:.4f})，采用LLM评分")
+                        quality_scores.append(llm_score)
+                        continue
+                    
+                quality_scores.append(rel_based_score)
                 continue
             
             # 计算图密度 - 边数与最大可能边数之比
@@ -259,6 +367,14 @@ class SubgraphQualityMetric(BaseMetric):
             quality = max(0.3, quality)
             self.log(f"  最终质量分数: {quality:.4f}")
             
+            # 如果质量分数较低，尝试LLM回退
+            if quality <= 0.4 and self.llm:
+                llm_score = self._llm_fallback_for_subgraph(sample)
+                if llm_score > quality:
+                    self.log(f"  LLM回退分数更高({llm_score:.4f})，采用LLM评分")
+                    quality_scores.append(llm_score)
+                    continue
+            
             quality_scores.append(quality)
         
         avg_quality = sum(quality_scores) / len(quality_scores) if quality_scores else 0.0
@@ -266,6 +382,64 @@ class SubgraphQualityMetric(BaseMetric):
         self.log("======== SubgraphQuality 计算结束 ========\n")
         
         return {"subgraph_quality": avg_quality}, quality_scores
+    
+    def _llm_fallback_for_subgraph(self, sample) -> float:
+        """
+        使用LLM评估子图质量
+        
+        Args:
+            sample: 评估样本
+            
+        Returns:
+            float: LLM评估的子图质量分数
+        """
+        question = sample.question
+        answer = sample.system_answer
+        agent_type = sample.agent_type
+        
+        # 获取实体和关系
+        entities = sample.referenced_entities
+        relationships = sample.referenced_relationships
+        
+        # 构建实体和关系的描述
+        entity_text = ", ".join([str(e) for e in entities[:10]]) if entities else "无实体"
+        
+        # 处理关系描述
+        rel_text = "无关系"
+        if relationships:
+            if isinstance(relationships[0], tuple) and len(relationships[0]) >= 3:
+                # 如果是三元组格式
+                rel_samples = relationships[:3]
+                rel_text = "; ".join([f"({r[0]}-{r[1]}->{r[2]})" for r in rel_samples])
+            else:
+                # 如果是ID格式
+                rel_text = ", ".join([str(r) for r in relationships[:5]])
+        
+        # 构建LLM提示
+        prompt = f"""
+        请评估以下AI回答中引用的子图质量，给出0到1的分数。
+        
+        问题: {question}
+        代理类型: {agent_type}
+        
+        引用的实体数量: {len(entities) if entities else 0}
+        引用实体示例: {entity_text}
+        
+        引用的关系数量: {len(relationships) if relationships else 0}
+        引用关系示例: {rel_text}
+        
+        回答(部分): {answer[:]}...
+        
+        评分标准:
+        - 高分(0.8-1.0): 子图结构丰富，包含大量连通的实体和关系，形成了信息密集的网络
+        - 中分(0.4-0.7): 子图包含一定数量的实体和关系，但结构可能不够完整或连通性一般
+        - 低分(0.0-0.3): 子图结构简单，实体间缺乏足够的关系连接，或只有少量实体
+        
+        只返回一个0到1之间的数字表示分数，不要有任何其他文字。
+        """
+        
+        # 使用基类中的LLM回退方法
+        return self.get_llm_fallback_score(prompt, default_score=0.4)
     
     def _get_processed_relationships(self, relationships) -> List[Tuple[str, str, str]]:
         """处理关系数据，获取标准化的三元组列表"""
@@ -494,12 +668,32 @@ class GraphCoverageMetric(BaseMetric):
             if agent_type == "naive":
                 naive_score = self._evaluate_naive_coverage(sample, keywords)
                 self.log(f"  Naive代理的图覆盖率分数: {naive_score:.4f}")
+                
+                # 当分数过低时，使用LLM回退
+                if naive_score <= 0.3 and self.llm:
+                    llm_score = self._llm_fallback_for_coverage(sample, keywords)
+                    # 如果LLM给出了更高的分数，使用LLM分数
+                    if llm_score > naive_score:
+                        self.log(f"  LLM回退分数更高({llm_score:.4f})，采用LLM评分")
+                        coverage_scores.append(llm_score)
+                        continue
+                
                 coverage_scores.append(naive_score)
                 continue
             
             # 对于graph和hybrid代理，使用统一的评估方法
             graph_score = self._evaluate_graph_coverage(sample, keywords)
             self.log(f"  图覆盖率分数: {graph_score:.4f}")
+            
+            # 当分数过低时，使用LLM回退
+            if graph_score <= 0.4 and self.llm:
+                llm_score = self._llm_fallback_for_coverage(sample, keywords)
+                # 如果LLM给出了更高的分数，使用LLM分数
+                if llm_score > graph_score:
+                    self.log(f"  LLM回退分数更高({llm_score:.4f})，采用LLM评分")
+                    coverage_scores.append(llm_score)
+                    continue
+            
             coverage_scores.append(graph_score)
         
         avg_coverage = sum(coverage_scores) / len(coverage_scores) if coverage_scores else 0.0
@@ -507,6 +701,53 @@ class GraphCoverageMetric(BaseMetric):
         self.log("======== GraphCoverage 计算结束 ========\n")
         
         return {"graph_coverage": avg_coverage}, coverage_scores
+    
+    def _llm_fallback_for_coverage(self, sample, keywords: List[str]) -> float:
+        """
+        使用LLM评估图覆盖率
+        
+        Args:
+            sample: 评估样本
+            keywords: 问题关键词
+            
+        Returns:
+            float: LLM评估的图覆盖率分数
+        """
+        question = sample.question
+        answer = sample.system_answer
+        agent_type = sample.agent_type.lower()
+        
+        # 提取实体和关系ID
+        entity_ids = sample.referenced_entities
+        relationships = sample.referenced_relationships
+        
+        # 构建实体和关系的描述文本
+        entity_text = ", ".join([str(e) for e in entity_ids[:10]]) if entity_ids else "无"
+        rel_text = ", ".join([str(r) for r in relationships[:5]]) if relationships else "无"
+        
+        # 构建LLM提示
+        prompt = f"""
+        请评估以下AI回答中对图数据的覆盖程度，给出0到1的分数。
+        
+        问题: {question}
+        代理类型: {agent_type}
+        
+        问题关键词: {', '.join(keywords) if keywords else '无关键词'}
+        引用的实体ID: {entity_text}
+        引用的关系: {rel_text}
+        
+        回答(部分): {answer[:]}...
+        
+        评分标准:
+        - 高分(0.8-1.0): 回答广泛引用了与问题高度相关的图数据，实体和关系覆盖全面
+        - 中分(0.4-0.7): 回答引用了部分相关图数据，但可能不够全面
+        - 低分(0.0-0.3): 回答几乎没有引用相关图数据，或引用的数据与问题关联度低
+        
+        只返回一个0到1之间的数字表示分数，不要有任何其他文字。
+        """
+        
+        # 使用基类中的LLM回退方法
+        return self.get_llm_fallback_score(prompt, default_score=0.4)
     
     def _extract_keywords(self, question: str) -> List[str]:
         """从问题中提取关键词"""
@@ -801,6 +1042,17 @@ class EntityCoverageMetric(BaseMetric):
             score = self._evaluate_entity_coverage(sample, keywords)
             self.log(f"  实体覆盖率分数: {score:.4f}")
             
+            # 当分数过低时，使用LLM回退
+            if score <= 0.4 and self.llm:
+                self.log("  实体覆盖率过低，尝试使用LLM评估")
+                llm_score = self._llm_fallback_for_entity_coverage(sample, keywords)
+                
+                # 如果LLM给出了更高的分数，使用LLM分数
+                if llm_score > score:
+                    self.log(f"  LLM回退分数更高({llm_score:.4f})，采用LLM评分")
+                    coverage_scores.append(llm_score)
+                    continue
+            
             coverage_scores.append(score)
         
         avg_coverage = sum(coverage_scores) / len(coverage_scores) if coverage_scores else 0.0
@@ -808,6 +1060,50 @@ class EntityCoverageMetric(BaseMetric):
         self.log("======== EntityCoverage 计算结束 ========\n")
         
         return {"entity_coverage": avg_coverage}, coverage_scores
+    
+    def _llm_fallback_for_entity_coverage(self, sample, keywords: List[str]) -> float:
+        """
+        使用LLM评估实体覆盖率
+        
+        Args:
+            sample: 评估样本
+            keywords: 问题关键词
+            
+        Returns:
+            float: LLM评估的实体覆盖率分数
+        """
+        question = sample.question
+        answer = sample.system_answer
+        agent_type = sample.agent_type.lower()
+        
+        # 获取实体ID列表
+        entity_ids = sample.referenced_entities
+        
+        # 实体描述
+        entity_text = ", ".join([str(e) for e in entity_ids[:15]]) if entity_ids else "无实体"
+        
+        # 构建LLM提示
+        prompt = f"""
+        请评估以下AI回答中对相关实体的覆盖程度，给出0到1的分数。
+        
+        问题: {question}
+        代理类型: {agent_type}
+        
+        问题关键词: {', '.join(keywords) if keywords else '无关键词'}
+        引用的实体: {entity_text}
+        
+        回答(部分): {answer[:]}...
+        
+        评分标准:
+        - 高分(0.8-1.0): 回答引用了与问题高度相关的所有重要实体
+        - 中分(0.4-0.7): 回答引用了部分相关实体，但可能遗漏了一些
+        - 低分(0.0-0.3): 回答几乎没有引用相关实体
+        
+        只返回一个0到1之间的数字表示分数，不要有任何其他文字。
+        """
+        
+        # 使用基类中的LLM回退方法
+        return self.get_llm_fallback_score(prompt, default_score=0.4)
     
     def _extract_keywords(self, question: str) -> List[str]:
         """从问题中提取关键词"""
@@ -1040,10 +1336,20 @@ class RelationshipUtilizationMetric(BaseMetric):
             if referenced_rels:
                 self.log(f"  引用关系示例: {referenced_rels[:3]}{'...' if len(referenced_rels) > 3 else ''}")
             
-            # 如果没有引用关系和实体，给予基础分
+            # 如果没有引用关系和实体，给予基础分并尝试LLM回退
             if not referenced_rels and not entity_ids:
-                utilization_scores.append(0.3)
-                self.log(f"  没有引用关系和实体，使用基础分: 0.3")
+                base_score = 0.3
+                self.log(f"  没有引用关系和实体，使用基础分: {base_score}")
+                
+                # 尝试使用LLM评估
+                if self.llm:
+                    llm_score = self._llm_fallback_for_relationship(sample)
+                    if llm_score > base_score:
+                        self.log(f"  LLM回退分数更高({llm_score:.4f})，采用LLM评分")
+                        utilization_scores.append(llm_score)
+                        continue
+                
+                utilization_scores.append(base_score)
                 continue
             
             # 获取关系详细信息
@@ -1060,6 +1366,15 @@ class RelationshipUtilizationMetric(BaseMetric):
                 rel_count = len(referenced_rels)
                 id_based_score = min(0.4, 0.3 + 0.02 * rel_count)  # 每个关系加0.02，最高0.4
                 self.log(f"  没有关系详细信息，基于ID数量评分: {id_based_score:.4f}")
+                
+                # 尝试使用LLM评估
+                if id_based_score <= 0.35 and self.llm:
+                    llm_score = self._llm_fallback_for_relationship(sample)
+                    if llm_score > id_based_score:
+                        self.log(f"  LLM回退分数更高({llm_score:.4f})，采用LLM评分")
+                        utilization_scores.append(llm_score)
+                        continue
+                
                 utilization_scores.append(id_based_score)
                 continue
             
@@ -1071,13 +1386,31 @@ class RelationshipUtilizationMetric(BaseMetric):
                 final_score = 0.3 + implicit_rel_score * 0.4  # 基础分加上推断关系得分
                 self.log(f"  基于推断关系的得分: {final_score:.4f}")
                 
+                # 如果分数较低，尝试LLM回退
+                if final_score <= 0.4 and self.llm:
+                    llm_score = self._llm_fallback_for_relationship(sample)
+                    if llm_score > final_score:
+                        self.log(f"  LLM回退分数更高({llm_score:.4f})，采用LLM评分")
+                        utilization_scores.append(llm_score)
+                        continue
+                
                 utilization_scores.append(final_score)
                 continue
             
-            # 没有有效关系信息，回退到基础分
+            # 没有有效关系信息，回退到基础分并尝试LLM评估
             if not rel_info and not referenced_rels:
-                utilization_scores.append(0.3)
-                self.log(f"  无法获取关系信息，使用基础分: 0.3")
+                base_score = 0.3
+                self.log(f"  无法获取关系信息，使用基础分: {base_score}")
+                
+                # 尝试使用LLM评估
+                if self.llm:
+                    llm_score = self._llm_fallback_for_relationship(sample)
+                    if llm_score > base_score:
+                        self.log(f"  LLM回退分数更高({llm_score:.4f})，采用LLM评分")
+                        utilization_scores.append(llm_score)
+                        continue
+                
+                utilization_scores.append(base_score)
                 continue
             
             # 计算关系利用率的多个维度
@@ -1103,6 +1436,14 @@ class RelationshipUtilizationMetric(BaseMetric):
             self.log(f"  加权总分: {total_score:.4f}")
             self.log(f"  最终得分: {final_score:.4f}")
             
+            # 如果分数较低，尝试LLM回退
+            if final_score <= 0.4 and self.llm:
+                llm_score = self._llm_fallback_for_relationship(sample)
+                if llm_score > final_score:
+                    self.log(f"  LLM回退分数更高({llm_score:.4f})，采用LLM评分")
+                    utilization_scores.append(llm_score)
+                    continue
+            
             utilization_scores.append(final_score)
         
         avg_utilization = sum(utilization_scores) / len(utilization_scores) if utilization_scores else 0.3
@@ -1110,6 +1451,51 @@ class RelationshipUtilizationMetric(BaseMetric):
         self.log("======== RelationshipUtilization 计算结束 ========\n")
         
         return {"relationship_utilization": avg_utilization}, utilization_scores
+    
+    def _llm_fallback_for_relationship(self, sample) -> float:
+        """
+        使用LLM评估关系利用率
+        
+        Args:
+            sample: 评估样本
+            
+        Returns:
+            float: LLM评估的关系利用率分数
+        """
+        question = sample.question
+        answer = sample.system_answer
+        agent_type = sample.agent_type.lower() if sample.agent_type else ""
+        
+        # 获取关系和实体信息
+        relationships = sample.referenced_relationships
+        entities = sample.referenced_entities
+        
+        # 关系描述
+        rel_text = ", ".join([str(r) for r in relationships[:5]]) if relationships else "无"
+        entity_text = ", ".join([str(e) for e in entities[:5]]) if entities else "无"
+        
+        # 构建LLM提示
+        prompt = f"""
+        请评估以下AI回答中对实体关系的利用程度，给出0到1的分数。
+        
+        问题: {question}
+        代理类型: {agent_type}
+        
+        引用的实体: {entity_text}
+        引用的关系: {rel_text}
+        
+        回答(部分): {answer[:]}...
+        
+        评分标准:
+        - 高分(0.8-1.0): 回答充分利用了实体之间的关系，展示了深入的连接性分析
+        - 中分(0.4-0.7): 回答部分利用了实体关系，但可能没有充分挖掘
+        - 低分(0.0-0.3): 回答几乎没有利用实体间的关系
+        
+        只返回一个0到1之间的数字表示分数，不要有任何其他文字。
+        """
+        
+        # 使用基类中的LLM回退方法
+        return self.get_llm_fallback_score(prompt, default_score=0.35)
     
     def _get_relationship_info(self, referenced_rels) -> List[Dict[str, Any]]:
         rel_info = []

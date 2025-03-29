@@ -1,32 +1,44 @@
-from typing import Dict, List, Any
 import os
 import json
+import time
+from typing import Dict, List, Any
 
-from evaluator.base import BaseEvaluator
-from evaluator.answer_evaluator import AnswerEvaluator, AnswerEvaluationData, AnswerEvaluationSample
-from evaluator.retrieval_evaluator import GraphRAGRetrievalEvaluator, RetrievalEvaluationData, RetrievalEvaluationSample
-from evaluator.preprocessing import clean_references, clean_thinking_process, extract_references_from_answer
+from evaluator.core.evaluation_data import (
+    AnswerEvaluationData, AnswerEvaluationSample,
+    RetrievalEvaluationData, RetrievalEvaluationSample
+)
+from evaluator.evaluators.answer_evaluator import AnswerEvaluator
+from evaluator.evaluators.retrieval_evaluator import GraphRAGRetrievalEvaluator
+from evaluator.preprocessing.text_cleaner import clean_references, clean_thinking_process
+from evaluator.preprocessing.reference_extractor import extract_references_from_answer
+from evaluator.evaluator_config.evaluatorConfig import EvaluatorConfig
 
 class CompositeGraphRAGEvaluator:
     """
     组合评估器，同时评估答案质量和检索性能
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any] = None):
         """
         初始化组合评估器
         
         Args:
             config: 评估配置
         """
-        self.config = config
-        self.save_dir = config.get('save_dir', './evaluation_results')
+        # 支持字典或EvaluatorConfig对象
+        if isinstance(config, dict):
+            self.config = EvaluatorConfig(config)
+        else:
+            self.config = config or EvaluatorConfig()
+            
+        self.save_dir = self.config.get('save_dir', './evaluation_results')
+        self.debug = self.config.get('debug', True)
         
         # 确保保存目录存在
         os.makedirs(self.save_dir, exist_ok=True)
         
         # 创建答案评估器
-        answer_config = config.copy()
+        answer_config = self.config.to_dict().copy()
         answer_config['save_dir'] = os.path.join(self.save_dir, 'answer_evaluation')
         
         # 默认的答案质量评估指标
@@ -36,11 +48,11 @@ class CompositeGraphRAGEvaluator:
         ]
         
         # 如果配置中有'llm'参数，添加LLM评估指标
-        if config.get('llm'):
+        if self.config.get('llm'):
             default_answer_metrics.append('llm_evaluation')
         
         # 先使用传入的所有指标，过滤出答案质量相关的
-        passed_metrics = [m for m in config.get('metrics', []) 
+        passed_metrics = [m for m in self.config.get_metrics() 
                           if not m.startswith('retrieval_') and 
                           not m in ['entity_coverage', 'graph_coverage', 'relationship_utilization',
                                    'community_relevance', 'subgraph_quality']]
@@ -53,7 +65,7 @@ class CompositeGraphRAGEvaluator:
         self.answer_evaluator = AnswerEvaluator(answer_config)
         
         # 创建检索评估器
-        retrieval_config = config.copy()
+        retrieval_config = self.config.to_dict().copy()
         retrieval_config['save_dir'] = os.path.join(self.save_dir, 'retrieval_evaluation')
         
         # 默认的检索评估指标
@@ -66,13 +78,13 @@ class CompositeGraphRAGEvaluator:
         
         # 如果支持subgraph_quality指标，添加它
         try:
-            from evaluator.graph_metrics import SubgraphQualityMetric
+            from evaluator.metrics.graph_metrics import SubgraphQualityMetric
             default_retrieval_metrics.append('subgraph_quality')
         except ImportError:
             pass
         
         # 先使用传入的所有指标，过滤出检索相关的
-        passed_retrieval_metrics = [m for m in config.get('metrics', []) 
+        passed_retrieval_metrics = [m for m in self.config.get_metrics() 
                                   if m.startswith('retrieval_') or 
                                   m in ['entity_coverage', 'graph_coverage', 
                                        'relationship_utilization', 'community_relevance', 
@@ -87,16 +99,28 @@ class CompositeGraphRAGEvaluator:
         
         # 代理实例
         self.agents = {
-            "naive": config.get("naive_agent"),
-            "hybrid": config.get("hybrid_agent"),
-            "graph": config.get("graph_agent"),
-            "deep": config.get("deep_agent"),
+            "naive": self.config.get_agent("naive"),
+            "hybrid": self.config.get_agent("hybrid"),
+            "graph": self.config.get_agent("graph"),
+            "deep": self.config.get_agent("deep"),
         }
         
         # 创建存放回答的目录
         self.answers_dir = os.path.join(self.save_dir, "answers")
         os.makedirs(self.answers_dir, exist_ok=True)
+    
+    def log(self, message, *args, **kwargs):
+        """
+        输出调试日志
         
+        Args:
+            message: 日志消息
+            *args, **kwargs: 额外参数
+        """
+        from evaluator import debug_print
+        if self.debug:
+            debug_print(f"[CompositeEvaluator] {message}", *args, **kwargs)
+            
     def evaluate_with_golden_answers(self, agent_name: str, questions: List[str], golden_answers: List[str]) -> Dict[str, float]:
         """
         使用标准答案评估特定代理
@@ -127,7 +151,7 @@ class CompositeGraphRAGEvaluator:
         
         # 处理每个问题
         for i, (question, golden_answer) in enumerate(zip(questions, golden_answers)):
-            print(f"处理问题 {i+1}/{len(questions)}: {question[:30]}...")
+            self.log(f"处理问题 {i+1}/{len(questions)}: {question[:30]}...")
             
             # 创建答案评估样本
             answer_sample = AnswerEvaluationSample(
@@ -141,7 +165,6 @@ class CompositeGraphRAGEvaluator:
             )
 
             # 记录开始时间
-            import time
             start_time = time.time()
             
             try:
@@ -184,10 +207,10 @@ class CompositeGraphRAGEvaluator:
                         entities, relationships = self.retrieval_evaluator._get_relevant_graph_data(question)
                         retrieval_sample.update_retrieval_data(entities, relationships)
                     except Exception as e:
-                        print(f"  获取相关图数据时出错: {e}")
+                        self.log(f"  获取相关图数据时出错: {e}")
                     
             except Exception as e:
-                print(f"  获取{agent_name}对问题的回答时出错: {e}")
+                self.log(f"  获取{agent_name}对问题的回答时出错: {e}")
                 retrieval_time = time.time() - start_time
                 
                 # 保存错误信息
@@ -214,9 +237,9 @@ class CompositeGraphRAGEvaluator:
             try:
                 answer_results = self.answer_evaluator.evaluate(answer_data)
             except Exception as e:
-                print(f"答案评估出错: {e}")
+                self.log(f"答案评估出错: {e}")
                 import traceback
-                print(traceback.format_exc())
+                self.log(traceback.format_exc())
                 answer_results = {"em": 0.0, "f1": 0.0}
         
         # 执行检索评估
@@ -225,7 +248,7 @@ class CompositeGraphRAGEvaluator:
             try:
                 retrieval_results = self.retrieval_evaluator.evaluate(retrieval_data)
             except Exception as e:
-                print(f"检索评估出错: {e}")
+                self.log(f"检索评估出错: {e}")
         
         # 合并结果
         results = {**answer_results, **retrieval_results}
@@ -255,15 +278,15 @@ class CompositeGraphRAGEvaluator:
         
         for agent_name, agent in self.agents.items():
             if agent:
-                print(f"评估代理: {agent_name}")
+                self.log(f"评估代理: {agent_name}")
                 agent_results = self.evaluate_with_golden_answers(agent_name, questions, golden_answers)
                 results[agent_name] = agent_results
                 
                 # 打印结果
-                print(f"{agent_name} 评估结果:")
+                self.log(f"{agent_name} 评估结果:")
                 for metric, score in agent_results.items():
-                    print(f"  {metric}: {score:.4f}")
-                print()
+                    self.log(f"  {metric}: {score:.4f}")
+                self.log("")
         
         # 保存比较结果
         results_path = os.path.join(self.save_dir, "agent_comparison_with_golden.json")
@@ -295,7 +318,7 @@ class CompositeGraphRAGEvaluator:
         
         # 处理每个问题
         for i, question in enumerate(questions):
-            print(f"处理问题 {i+1}/{len(questions)}: {question[:30]}...")
+            self.log(f"处理问题 {i+1}/{len(questions)}: {question[:30]}...")
             
             # 创建检索评估样本
             retrieval_sample = RetrievalEvaluationSample(
@@ -303,7 +326,6 @@ class CompositeGraphRAGEvaluator:
             )
             
             # 记录开始时间
-            import time
             start_time = time.time()
             
             try:
@@ -336,10 +358,10 @@ class CompositeGraphRAGEvaluator:
                         entities, relationships = self.retrieval_evaluator._get_relevant_graph_data(question)
                         retrieval_sample.update_retrieval_data(entities, relationships)
                     except Exception as e:
-                        print(f"  获取相关图数据时出错: {e}")
+                        self.log(f"  获取相关图数据时出错: {e}")
             
             except Exception as e:
-                print(f"  获取{agent_name}对问题的回答时出错: {e}")
+                self.log(f"  获取{agent_name}对问题的回答时出错: {e}")
                 retrieval_time = time.time() - start_time
                 
                 # 保存错误信息
@@ -362,7 +384,7 @@ class CompositeGraphRAGEvaluator:
         try:
             results = self.retrieval_evaluator.evaluate(retrieval_data)
         except Exception as e:
-            print(f"检索评估出错: {e}")
+            self.log(f"检索评估出错: {e}")
             results = {}
         
         # 保存评估结果
@@ -386,15 +408,15 @@ class CompositeGraphRAGEvaluator:
         
         for agent_name, agent in self.agents.items():
             if agent:
-                print(f"评估代理: {agent_name}")
+                self.log(f"评估代理: {agent_name}")
                 agent_results = self.evaluate_retrieval_only(agent_name, questions)
                 results[agent_name] = agent_results
                 
                 # 打印结果
-                print(f"{agent_name} 检索评估结果:")
+                self.log(f"{agent_name} 检索评估结果:")
                 for metric, score in agent_results.items():
-                    print(f"  {metric}: {score:.4f}")
-                print()
+                    self.log(f"  {metric}: {score:.4f}")
+                self.log("")
         
         # 保存比较结果
         results_path = os.path.join(self.save_dir, "retrieval_comparison.json")
@@ -429,7 +451,7 @@ class CompositeGraphRAGEvaluator:
                 f.write(f"{qa['answer']}\n\n")
                 f.write("---\n\n")
         
-        print(f"  已保存{agent_name}的回答到 {answers_path}")
+        self.log(f"  已保存{agent_name}的回答到 {answers_path}")
     
     def format_comparison_table(self, results: Dict[str, Dict[str, float]]) -> str:
         """
@@ -522,6 +544,8 @@ class CompositeGraphRAGEvaluator:
     
     def save_agent_answers(self, questions: List[str], output_dir: str = None):
         """
+        保存代理回答
+        
         Args:
             questions: 问题列表
             output_dir: 输出目录，默认为self.save_dir/answers
@@ -532,7 +556,7 @@ class CompositeGraphRAGEvaluator:
             os.makedirs(output_dir, exist_ok=True)
         
         # 检查是否已经有答案文件
-        print("检查是否需要获取额外回答...")
+        self.log("检查是否需要获取额外回答...")
         
         for agent_name, agent in self.agents.items():
             if not agent:
@@ -542,17 +566,17 @@ class CompositeGraphRAGEvaluator:
             
             # 如果答案文件已存在，跳过
             if os.path.exists(answers_path):
-                print(f"  {agent_name}代理的回答文件已存在，跳过")
+                self.log(f"  {agent_name}代理的回答文件已存在，跳过")
                 continue
                 
-            print(f"获取{agent_name}代理的回答...")
+            self.log(f"获取{agent_name}代理的回答...")
             answers = []
             
             # 使用缓存记录已处理的问题
             processed_questions = {}
             
             for i, question in enumerate(questions):
-                print(f"  问题 {i+1}/{len(questions)}")
+                self.log(f"  问题 {i+1}/{len(questions)}")
                 
                 # 先检查缓存
                 cache_key = f"{agent_name}:{question}"
@@ -561,7 +585,7 @@ class CompositeGraphRAGEvaluator:
                         "question": question,
                         "answer": processed_questions[cache_key]
                     })
-                    print(f"    使用缓存的回答")
+                    self.log(f"    使用缓存的回答")
                     continue
                 
                 try:
@@ -581,7 +605,7 @@ class CompositeGraphRAGEvaluator:
                         "answer": answer
                     })
                 except Exception as e:
-                    print(f"  获取{agent_name}回答时出错: {e}")
+                    self.log(f"  获取{agent_name}回答时出错: {e}")
                     answers.append({
                         "question": question,
                         "answer": f"获取回答时出错: {str(e)}"

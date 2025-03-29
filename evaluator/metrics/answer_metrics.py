@@ -1,96 +1,8 @@
-from typing import Dict, List, Any, Tuple
-from dataclasses import dataclass, field, asdict
-import json
-import os
 import re
-
-from evaluator.base import BaseEvaluator, BaseMetric
-from evaluator.llm_metrics import ResponseCoherence, FactualConsistency, ComprehensiveAnswerMetric, LLMGraphRagEvaluator
-from evaluator.preprocessing import clean_references, clean_thinking_process
-from evaluator.utils import normalize_answer, compute_precision_recall_f1
-
-@dataclass
-class AnswerEvaluationSample:
-    """答案评估样本类，用于存储和更新答案评估数据"""
-    
-    question: str
-    golden_answer: str
-    system_answer: str = ""
-    scores: Dict[str, float] = field(default_factory=dict)
-    agent_type: str = ""  # naive, hybrid, graph, deep
-    
-    def update_system_answer(self, answer: str, agent_type: str = ""):
-        """
-        更新系统回答，自动清理引用数据和思考过程
-        
-        Args:
-            answer: 原始系统回答
-            agent_type: 代理类型
-        """
-        # 先清理思考过程，再清理引用数据
-        cleaned_answer = clean_thinking_process(answer)
-        cleaned_answer = clean_references(cleaned_answer)
-        
-        self.system_answer = cleaned_answer
-        if agent_type:
-            self.agent_type = agent_type
-    
-    def update_evaluation_score(self, metric: str, score: float):
-        """更新评估分数"""
-        self.scores[metric] = score
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        return asdict(self)
-
-@dataclass
-class AnswerEvaluationData:
-    """答案评估数据类，用于管理多个答案评估样本"""
-    
-    samples: List[AnswerEvaluationSample] = field(default_factory=list)
-    
-    def __len__(self) -> int:
-        return len(self.samples)
-    
-    def __getitem__(self, idx: int) -> AnswerEvaluationSample:
-        return self.samples[idx]
-    
-    def append(self, sample: AnswerEvaluationSample):
-        """添加评估样本"""
-        self.samples.append(sample)
-    
-    @property
-    def questions(self) -> List[str]:
-        """获取所有问题"""
-        return [sample.question for sample in self.samples]
-    
-    @property
-    def golden_answers(self) -> List[str]:
-        """获取所有标准答案"""
-        return [sample.golden_answer for sample in self.samples]
-    
-    @property
-    def system_answers(self) -> List[str]:
-        """获取所有系统回答"""
-        return [sample.system_answer for sample in self.samples]
-    
-    def save(self, path: str):
-        """保存评估数据"""
-        with open(path, "w", encoding='utf-8') as f:
-            json.dump([sample.to_dict() for sample in self.samples], f, ensure_ascii=False, indent=2)
-    
-    @classmethod
-    def load(cls, path: str) -> 'AnswerEvaluationData':
-        """加载评估数据"""
-        with open(path, "r", encoding='utf-8') as f:
-            samples_data = json.load(f)
-        
-        data = cls()
-        for sample_data in samples_data:
-            sample = AnswerEvaluationSample(**sample_data)
-            data.append(sample)
-        
-        return data
+from typing import Dict, List, Tuple
+from evaluator.core.base_metric import BaseMetric
+from evaluator.core.evaluation_data import AnswerEvaluationData
+from evaluator.utils.text_utils import normalize_answer
 
 class ExactMatch(BaseMetric):
     """精确匹配评估指标"""
@@ -133,8 +45,8 @@ class ExactMatch(BaseMetric):
         Returns:
             Tuple[Dict[str, float], List[float]]: 总体得分和每个样本的得分
         """
-        print("\n======== ExactMatch 计算日志 ========")
-        print(f"样本总数: {len(data.samples) if hasattr(data, 'samples') else 0}")
+        self.log("======== ExactMatch 计算日志 ========")
+        self.log(f"样本总数: {len(data.samples) if hasattr(data, 'samples') else 0}")
         
         golden_answers = data.golden_answers
         system_answers = data.system_answers
@@ -151,20 +63,20 @@ class ExactMatch(BaseMetric):
             normalized_pred = normalize_answer(cleaned_pred)
             normalized_golden = normalize_answer(golden)
             
-            print(f"\n样本 {idx+1}:")
-            print(f"  标准答案(前30字符): {golden[:30]}...")
-            print(f"  系统答案(前30字符): {pred[:30]}...")
-            print(f"  清理后的系统答案(前30字符): {cleaned_pred[:30]}...")
-            print(f"  标准化后的标准答案(前30字符): {normalized_golden[:30]}...")
-            print(f"  标准化后的系统答案(前30字符): {normalized_pred[:30]}...")
+            self.log(f"\n样本 {idx+1}:")
+            self.log(f"  标准答案(前30字符): {golden[:30]}...")
+            self.log(f"  系统答案(前30字符): {pred[:30]}...")
+            self.log(f"  清理后的系统答案(前30字符): {cleaned_pred[:30]}...")
+            self.log(f"  标准化后的标准答案(前30字符): {normalized_golden[:30]}...")
+            self.log(f"  标准化后的系统答案(前30字符): {normalized_pred[:30]}...")
             
             # 完全匹配
             if normalized_pred == normalized_golden:
                 score = 1.0
-                print(f"  完全匹配 ✓")
+                self.log(f"  完全匹配 ✓")
             else:
                 # 规则匹配失败，回退到LLM评分
-                print(f"  规则匹配失败，回退到LLM评分")
+                self.log(f"  规则匹配失败，回退到LLM评分")
                 
                 # 仅当有LLM可用时使用LLM评分
                 if self.llm:
@@ -186,7 +98,7 @@ class ExactMatch(BaseMetric):
                         response = self.llm.invoke(prompt)
                         score_text = response.content if hasattr(response, 'content') else response
                         
-                        print(f"  LLM响应: {score_text}")
+                        self.log(f"  LLM响应: {score_text}")
                         
                         # 提取数字
                         score_match = re.search(r'(\d+(\.\d+)?)', score_text)
@@ -194,17 +106,17 @@ class ExactMatch(BaseMetric):
                             score = float(score_match.group(1))
                             # 确保在0-1范围内
                             score = max(0.0, min(1.0, score))
-                            print(f"  LLM评估的匹配度分数: {score:.4f}")
+                            self.log(f"  LLM评估的匹配度分数: {score:.4f}")
                         else:
                             score = 0.0
-                            print(f"  无法从LLM响应中提取分数，使用默认分数0.0")
+                            self.log(f"  无法从LLM响应中提取分数，使用默认分数0.0")
                     except Exception as e:
-                        print(f"  LLM评估时出错: {e}")
+                        self.log(f"  LLM评估时出错: {e}")
                         score = 0.0
                 else:
                     # 没有LLM，使用基本规则评分
                     score = 0.0
-                    print(f"  不匹配且没有可用的LLM评分，使用0分")
+                    self.log(f"  不匹配且没有可用的LLM评分，使用0分")
                     
                     # 显示不匹配的详细信息
                     min_len = min(len(normalized_pred), len(normalized_golden))
@@ -218,27 +130,27 @@ class ExactMatch(BaseMetric):
                             break
                     
                     if first_diff_pos is not None:
-                        print(f"  首个差异位置: 字符位置 {first_diff_pos}")
+                        self.log(f"  首个差异位置: 字符位置 {first_diff_pos}")
                         context_start = max(0, first_diff_pos - 10)
                         context_end = min(min_len, first_diff_pos + 10)
                         
                         pred_context = normalized_pred[context_start:context_end]
                         golden_context = normalized_golden[context_start:context_end]
                         
-                        print(f"  差异上下文 - 系统: '...{pred_context}...'")
-                        print(f"  差异上下文 - 标准: '...{golden_context}...'")
+                        self.log(f"  差异上下文 - 系统: '...{pred_context}...'")
+                        self.log(f"  差异上下文 - 标准: '...{golden_context}...'")
                     
                     # 显示长度差异
                     if len(normalized_pred) != len(normalized_golden):
-                        print(f"  答案长度差异: 系统({len(normalized_pred)}) vs 标准({len(normalized_golden)})")
+                        self.log(f"  答案长度差异: 系统({len(normalized_pred)}) vs 标准({len(normalized_golden)})")
             
             metric_score_list.append(score)
         
         em_score = sum(metric_score_list) / len(metric_score_list) if metric_score_list else 0.0
-        print(f"\n样本总数: {len(metric_score_list)}")
-        print(f"匹配样本数: {sum(1 for s in metric_score_list if s > 0)}")
-        print(f"精确匹配平均得分: {em_score:.4f}")
-        print("======== ExactMatch 计算结束 ========\n")
+        self.log(f"\n样本总数: {len(metric_score_list)}")
+        self.log(f"匹配样本数: {sum(1 for s in metric_score_list if s > 0)}")
+        self.log(f"精确匹配平均得分: {em_score:.4f}")
+        self.log("======== ExactMatch 计算结束 ========\n")
         
         return {"em": em_score}, metric_score_list
 
@@ -261,8 +173,8 @@ class F1Score(BaseMetric):
         Returns:
             Tuple[Dict[str, float], List[float]]: 总体得分和每个样本的得分
         """
-        print("\n======== F1Score 计算日志 ========")
-        print(f"样本总数: {len(data.samples) if hasattr(data, 'samples') else 0}")
+        self.log("\n======== F1Score 计算日志 ========")
+        self.log(f"样本总数: {len(data.samples) if hasattr(data, 'samples') else 0}")
         
         golden_answers = data.golden_answers
         system_answers = data.system_answers
@@ -279,9 +191,9 @@ class F1Score(BaseMetric):
             pred_text = normalize_answer(cleaned_pred)
             golden_text = normalize_answer(golden)
             
-            print(f"\n样本 {idx+1}:")
-            print(f"  标准答案(前30字符): {golden[:30]}...")
-            print(f"  系统答案(前30字符): {pred[:30]}...")
+            self.log(f"\n样本 {idx+1}:")
+            self.log(f"  标准答案(前30字符): {golden[:30]}...")
+            self.log(f"  系统答案(前30字符): {pred[:30]}...")
             
             # 尝试使用传统F1计算
             try:
@@ -295,17 +207,17 @@ class F1Score(BaseMetric):
                 pred_tokens = [token for token in pred_tokens if len(token) > 1 and token not in stopwords]
                 golden_tokens = [token for token in golden_tokens if len(token) > 1 and token not in stopwords]
                 
-                print(f"  标准答案分词数: {len(golden_tokens)}")
-                print(f"  系统答案分词数: {len(pred_tokens)}")
+                self.log(f"  标准答案分词数: {len(golden_tokens)}")
+                self.log(f"  系统答案分词数: {len(pred_tokens)}")
                 
                 if not pred_tokens or not golden_tokens:
                     # 空文本处理
                     if not pred_tokens and not golden_tokens:
                         rule_f1 = 1.0  # 两者都为空，视为完全匹配
-                        print(f"  两者都为空，视为完全匹配，F1=1.0")
+                        self.log(f"  两者都为空，视为完全匹配，F1=1.0")
                     else:
                         rule_f1 = 0.0  # 一个为空一个不为空
-                        print(f"  一个为空一个不为空，规则F1=0.0")
+                        self.log(f"  一个为空一个不为空，规则F1=0.0")
                 else:
                     # 计算标准F1
                     common_tokens = set(pred_tokens) & set(golden_tokens)
@@ -317,17 +229,17 @@ class F1Score(BaseMetric):
                     else:
                         rule_f1 = 0.0
                     
-                    print(f"  共有词汇: {len(common_tokens)}/{len(set(pred_tokens) | set(golden_tokens))}")
-                    print(f"  精确率: {precision:.4f}")
-                    print(f"  召回率: {recall:.4f}")
-                    print(f"  规则F1分数: {rule_f1:.4f}")
+                    self.log(f"  共有词汇: {len(common_tokens)}/{len(set(pred_tokens) | set(golden_tokens))}")
+                    self.log(f"  精确率: {precision:.4f}")
+                    self.log(f"  召回率: {recall:.4f}")
+                    self.log(f"  规则F1分数: {rule_f1:.4f}")
             except Exception as e:
-                print(f"  规则F1计算出错: {e}")
+                self.log(f"  规则F1计算出错: {e}")
                 rule_f1 = 0.0
             
             # 如果规则F1太低，回退到LLM评分
             if rule_f1 < 0.3 and self.llm:
-                print(f"  规则F1分数过低 ({rule_f1:.4f})，回退到LLM评分")
+                self.log(f"  规则F1分数过低 ({rule_f1:.4f})，回退到LLM评分")
                 
                 # 构建内容相似度评估提示
                 prompt = f"""
@@ -348,7 +260,7 @@ class F1Score(BaseMetric):
                     response = self.llm.invoke(prompt)
                     score_text = response.content if hasattr(response, 'content') else response
                     
-                    print(f"  LLM响应: {score_text}")
+                    self.log(f"  LLM响应: {score_text}")
                     
                     # 提取数字
                     score_match = re.search(r'(\d+(\.\d+)?)', score_text)
@@ -356,15 +268,15 @@ class F1Score(BaseMetric):
                         llm_f1 = float(score_match.group(1))
                         # 确保在0-1范围内
                         llm_f1 = max(0.0, min(1.0, llm_f1))
-                        print(f"  LLM评估的F1分数: {llm_f1:.4f}")
+                        self.log(f"  LLM评估的F1分数: {llm_f1:.4f}")
                         
                         # 使用LLM的分数
                         f1 = llm_f1
                     else:
-                        print(f"  无法从LLM响应中提取分数，使用规则F1分数")
+                        self.log(f"  无法从LLM响应中提取分数，使用规则F1分数")
                         f1 = rule_f1
                 except Exception as e:
-                    print(f"  LLM评估时出错: {e}")
+                    self.log(f"  LLM评估时出错: {e}")
                     f1 = rule_f1
             else:
                 # 规则F1分数足够好，或者没有LLM可用
@@ -374,76 +286,9 @@ class F1Score(BaseMetric):
         
         avg_f1 = sum(f1_scores) / len(f1_scores) if f1_scores else 0.0
         
-        print(f"\n样本总数: {len(f1_scores)}")
-        print(f"F1得分大于0.5的样本数: {sum(1 for s in f1_scores if s > 0.5)}")
-        print(f"F1平均得分: {avg_f1:.4f}")
-        print("======== F1Score 计算结束 ========\n")
+        self.log(f"\n样本总数: {len(f1_scores)}")
+        self.log(f"F1得分大于0.5的样本数: {sum(1 for s in f1_scores if s > 0.5)}")
+        self.log(f"F1平均得分: {avg_f1:.4f}")
+        self.log("======== F1Score 计算结束 ========\n")
         
         return {"f1": avg_f1}, f1_scores
-
-class AnswerEvaluator(BaseEvaluator):
-    """答案评估器，用于评估系统回答的质量"""
-    
-    def __init__(self, config: Dict[str, Any]):
-        """
-        初始化答案评估器
-        
-        Args:
-            config: 评估配置
-        """
-        super().__init__(config)
-    
-    def evaluate(self, data: AnswerEvaluationData) -> Dict[str, float]:
-        """
-        执行评估 - 修复版本，解决 LLM 评估器的字典类型问题
-        """
-        print("\n======== 开始评估答案质量 ========")
-        print(f"样本总数: {len(data.samples)}")
-        print(f"使用的评估指标: {', '.join(self.metrics)}")
-        
-        result_dict = {}
-        
-        for metric_name in self.metrics:
-            try:
-                print(f"\n开始计算指标: {metric_name}")
-                metric_class_name = self.metric_class[metric_name].__class__.__name__ if metric_name in self.metric_class else "未知"
-                print(f"使用评估类: {metric_class_name}")
-                
-                metric_result, metric_scores = self.metric_class[metric_name].calculate_metric(data)
-                result_dict.update(metric_result)
-                
-                # 统计基本信息 - 处理不同类型的评分
-                if metric_scores and not isinstance(metric_scores[0], dict):
-                    min_score = min(metric_scores)
-                    max_score = max(metric_scores)
-                    avg_score = sum(metric_scores) / len(metric_scores)
-                    print(f"指标统计: 最小值={min_score:.4f}, 最大值={max_score:.4f}, 平均值={avg_score:.4f}")
-                
-                # 更新每个样本的评分
-                for sample, metric_score in zip(data.samples, metric_scores):
-                    sample.update_evaluation_score(metric_name, metric_score)
-                    
-                print(f"完成指标 {metric_name} 计算，总体得分: {list(metric_result.values())[0]:.4f}")
-            except Exception as e:
-                import traceback
-                print(f'评估 {metric_name} 时出错: {e}')
-                print(traceback.format_exc())
-                continue
-        
-        print("\n所有指标计算结果:")
-        for metric, score in result_dict.items():
-            print(f"  {metric}: {score:.4f}")
-        
-        print("======== 答案质量评估结束 ========\n")
-        
-        # 保存评估结果
-        if self.save_metric_flag:
-            self.save_metric_score(result_dict)
-            print(f"评估结果已保存至: {os.path.join(self.save_dir, 'metric_score.txt')}")
-        
-        # 保存评估数据
-        if self.save_data_flag:
-            self.save_data(data)
-            print(f"评估中间数据已保存至: {os.path.join(self.save_dir, 'intermediate_data.json')}")
-        
-        return result_dict

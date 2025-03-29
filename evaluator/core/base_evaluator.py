@@ -1,52 +1,33 @@
 import os
 import json
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Type
 
-class BaseMetric(ABC):
-    """所有评估指标的基类"""
-    
-    metric_name = "base"
-    
-    def __init__(self, config):
-        """
-        初始化评估指标基类
-        
-        Args:
-            config (Dict): 评估配置
-        """
-        self.config = config
-        self.dataset_name = config.get('dataset_name', 'default')
-    
-    @abstractmethod
-    def calculate_metric(self, data):
-        """
-        计算评估指标
-        
-        Args:
-            data: 评估数据对象
-            
-        Returns:
-            Tuple[Dict, List]: 评估结果和每个样本的评分
-        """
-        return {}, []
+from evaluator.evaluator_config.evaluatorConfig import EvaluatorConfig
 
+from evaluator.core.base_metric import BaseMetric
 
 class BaseEvaluator(ABC):
     """评估器基类，定义通用评估功能和接口"""
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config):
         """
         初始化评估器
         
         Args:
-            config (Dict): 评估配置
+            config: 评估配置，可以是字典或EvaluatorConfig对象
         """
-        self.config = config
-        self.save_dir = config.get('save_dir', './evaluation_results')
-        self.save_metric_flag = config.get('save_metric_score', True)
-        self.save_data_flag = config.get('save_intermediate_data', True)
-        self.metrics = [metric.lower() for metric in config.get('metrics', [])]
+        # 支持字典或EvaluatorConfig对象
+        if isinstance(config, dict):
+            self.config = EvaluatorConfig(config)
+        else:
+            self.config = config
+            
+        self.save_dir = self.config.get('save_dir', './evaluation_results')
+        self.save_metric_flag = self.config.get('save_metric_score', True)
+        self.save_data_flag = self.config.get('save_intermediate_data', True)
+        self.metrics = self.config.get_metrics()
+        self.debug = self.config.get('debug', False)
         
         # 确保保存目录存在
         os.makedirs(self.save_dir, exist_ok=True)
@@ -58,12 +39,12 @@ class BaseEvaluator(ABC):
         self.metric_class = {}
         for metric in self.metrics:
             if metric in self.available_metrics:
-                self.metric_class[metric] = self.available_metrics[metric](self.config)
+                self.metric_class[metric] = self.available_metrics[metric](self.config.to_dict())
             else:
                 print(f"{metric} 评估指标未实现!")
-                raise NotImplementedError
+                raise NotImplementedError(f"评估指标 {metric} 未实现")
     
-    def _collect_metrics(self):
+    def _collect_metrics(self) -> Dict[str, Type[BaseMetric]]:
         """收集所有继承自BaseMetric的评估指标类"""
         
         def find_descendants(base_class, subclasses=None):
@@ -81,10 +62,11 @@ class BaseEvaluator(ABC):
         for cls in find_descendants(BaseMetric):
             metric_name = cls.metric_name
             available_metrics[metric_name] = cls
+        
         return available_metrics
     
     @abstractmethod
-    def evaluate(self, data):
+    def evaluate(self, data) -> Dict[str, float]:
         """
         执行评估
         
@@ -101,7 +83,7 @@ class BaseEvaluator(ABC):
         保存评估指标结果
         
         Args:
-            result_dict (Dict): 评估结果字典
+            result_dict: 评估结果字典
         """
         file_name = "metric_score.txt"
         save_path = os.path.join(self.save_dir, file_name)
@@ -155,7 +137,7 @@ class BaseEvaluator(ABC):
         将评估结果格式化为表格形式
         
         Args:
-            results (Dict): 评估结果字典
+            results: 评估结果字典
             
         Returns:
             str: 格式化的表格字符串
@@ -174,3 +156,15 @@ class BaseEvaluator(ABC):
         
         table = "\n".join([header, separator] + rows)
         return table
+    
+    def log(self, message, *args, **kwargs):
+        """
+        输出调试日志
+        
+        Args:
+            message: 日志消息
+            *args, **kwargs: 额外参数
+        """
+        from evaluator import debug_print
+        if self.debug:
+            debug_print(f"[{self.__class__.__name__}] {message}", *args, **kwargs)

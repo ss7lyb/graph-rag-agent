@@ -591,36 +591,6 @@ def get_knowledge_graph(limit: int = 100, query: str = None) -> Dict:
         print(f"获取知识图谱数据失败: {str(e)}")
         return {"error": str(e), "nodes": [], "links": []}
 
-
-def get_entity_types() -> List[str]:
-    """
-    获取数据库中所有可能的实体类型
-    
-    Returns:
-        List[str]: 实体类型列表
-    """
-    try:
-        query = """
-        MATCH (n:__Entity__)
-        UNWIND labels(n) AS label
-        WHERE label <> '__Entity__'
-        RETURN DISTINCT label
-        ORDER BY label
-        """
-        
-        result = driver.execute_query(query)
-        
-        entity_types = []
-        for record in result.records:
-            entity_types.append(record["label"])
-            
-        return entity_types
-        
-    except Exception as e:
-        print(f"获取实体类型失败: {str(e)}")
-        return []
-
-
 def get_source_content(source_id: str) -> str:
     """
     根据源ID获取内容
@@ -782,25 +752,6 @@ def get_chunks(limit: int = 10, offset: int = 0):
         print(f"获取文本块失败: {str(e)}")
         return {"error": str(e), "chunks": []}
     
-def get_relation_types(driver):
-    """获取图谱中的所有关系类型"""
-    try:
-        query = """
-        MATCH ()-[r]-()
-        RETURN DISTINCT type(r) AS relation_type
-        ORDER BY relation_type
-        """
-        
-        result = driver.execute_query(query)
-        
-        relation_types = []
-        for record in result.records:
-            relation_types.append(record["relation_type"])
-            
-        return relation_types
-    except Exception as e:
-        print(f"获取关系类型失败: {str(e)}")
-        return []
 
 def get_shortest_path(driver, entity_a, entity_b, max_hops=3):
     """查询实体A和实体B之间的最短路径"""

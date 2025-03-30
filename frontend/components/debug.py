@@ -429,8 +429,16 @@ def display_debug_panel():
     # 源内容标签
     display_source_content_tab(tabs)
     
-    # 知识图谱管理标签
-    display_kg_management_tab(tabs)
+    # 知识图谱管理标签 - 延迟加载，不自动触发API请求
+    if st.session_state.current_tab == "知识图谱管理":
+        display_kg_management_tab(tabs)
+    else:
+        with tabs[3]:
+            if st.button("加载知识图谱管理面板", key="load_kg_management"):
+                st.session_state.current_tab = "知识图谱管理"
+                st.rerun()
+            else:
+                st.info("点击上方按钮加载知识图谱管理面板")
     
     # 性能监控标签
     add_performance_tab(tabs)

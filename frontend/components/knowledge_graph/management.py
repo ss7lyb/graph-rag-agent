@@ -39,7 +39,13 @@ def display_entity_management():
             search_term = st.text_input("实体名称/ID", key="entity_search_term", placeholder="输入实体名称或ID")
         
         with col2:
-            entity_types = get_entity_types()
+            # 防御性获取实体类型
+            try:
+                entity_types = get_entity_types() or []
+            except Exception as e:
+                st.error(f"获取实体类型失败: {str(e)}")
+                entity_types = []
+                
             selected_type = st.selectbox(
                 "实体类型",
                 options=["全部"] + entity_types,
@@ -59,8 +65,8 @@ def display_entity_management():
                     # 调用API获取实体
                     entities = get_entities(filters)
                     
-                    # 显示结果
-                    if entities and len(entities) > 0:
+                    # 防御性检查返回值
+                    if entities is not None and len(entities) > 0:
                         df = pd.DataFrame(entities)
                         st.dataframe(df, use_container_width=True)
                         st.success(f"找到 {len(entities)} 个实体")
@@ -73,14 +79,18 @@ def display_entity_management():
     with operation_tabs[1]:
         st.markdown("#### 创建实体")
         
-        # 获取可用的实体类型
-        entity_types = get_entity_types()
+        # 防御性获取实体类型
+        try:
+            entity_types = get_entity_types() or []
+        except Exception as e:
+            st.error(f"获取实体类型失败: {str(e)}")
+            entity_types = []
         
         # 创建表单
         with st.form("create_entity_form"):
             entity_id = st.text_input("实体ID *", placeholder="输入唯一实体ID")
             entity_name = st.text_input("实体名称 *", placeholder="输入实体名称")
-            entity_type = st.selectbox("实体类型 *", options=entity_types)
+            entity_type = st.selectbox("实体类型 *", options=entity_types) if entity_types else st.text_input("实体类型 *", placeholder="输入实体类型")
             entity_description = st.text_area("实体描述", placeholder="输入实体描述")
             
             # 添加自定义属性
@@ -126,10 +136,13 @@ def display_entity_management():
                         # 调用API创建实体
                         with st.spinner("正在创建实体..."):
                             result = create_entity(entity_data)
-                            if result and result.get("success", False):
+                            if result is not None and result.get("success", False):
                                 st.success(f"成功创建实体: {entity_id}")
                             else:
-                                st.error(f"创建失败: {result.get('message', '未知错误')}")
+                                error_message = "未知错误"
+                                if result is not None:
+                                    error_message = result.get("message", "未知错误")
+                                st.error(f"创建失败: {error_message}")
                     except Exception as e:
                         st.error(f"创建失败: {str(e)}")
     
@@ -146,11 +159,13 @@ def display_entity_management():
             if lookup_button or "entity_to_update" in st.session_state:
                 try:
                     # 如果没有缓存或ID发生变化，重新查询
-                    if "entity_to_update" not in st.session_state or st.session_state.entity_to_update.get("id") != entity_id_to_update:
+                    if ("entity_to_update" not in st.session_state or 
+                        st.session_state.entity_to_update is None or 
+                        st.session_state.entity_to_update.get("id") != entity_id_to_update):
                         with st.spinner("正在查找实体..."):
                             # 查询实体
                             entities = get_entities({"term": entity_id_to_update})
-                            if entities and len(entities) > 0:
+                            if entities is not None and len(entities) > 0:
                                 # 找到精确匹配的实体
                                 entity = next((e for e in entities if e.get("id") == entity_id_to_update), entities[0])
                                 st.session_state.entity_to_update = entity
@@ -161,7 +176,7 @@ def display_entity_management():
                                 return
                     
                     # 显示实体更新表单
-                    if "entity_to_update" in st.session_state:
+                    if "entity_to_update" in st.session_state and st.session_state.entity_to_update is not None:
                         entity = st.session_state.entity_to_update
                         
                         with st.form("update_entity_form"):
@@ -174,11 +189,20 @@ def display_entity_management():
                             current_name = entity.get("name", "")
                             current_type = entity.get("type", "")
                             current_description = entity.get("description", "")
-                            current_properties = entity.get("properties", {})
+                            current_properties = entity.get("properties", {}) or {}
+                            
+                            # 防御性获取实体类型
+                            try:
+                                entity_types_list = get_entity_types() or []
+                                type_index = entity_types_list.index(current_type) if current_type in entity_types_list else 0
+                            except Exception as e:
+                                st.warning(f"获取实体类型失败，使用当前类型: {str(e)}")
+                                entity_types_list = [current_type] if current_type else ["Unknown"]
+                                type_index = 0
                             
                             # 表单字段
                             new_name = st.text_input("实体名称", value=current_name)
-                            new_type = st.selectbox("实体类型", options=get_entity_types(), index=get_entity_types().index(current_type) if current_type in get_entity_types() else 0)
+                            new_type = st.selectbox("实体类型", options=entity_types_list, index=type_index)
                             new_description = st.text_area("实体描述", value=current_description)
                             
                             # 属性编辑
@@ -245,12 +269,15 @@ def display_entity_management():
                                     # 调用API更新实体
                                     with st.spinner("正在更新实体..."):
                                         result = update_entity(update_data)
-                                        if result and result.get("success", False):
+                                        if result is not None and result.get("success", False):
                                             st.success(f"成功更新实体: {entity.get('id')}")
                                             # 更新缓存的实体
                                             st.session_state.entity_to_update = {**update_data}
                                         else:
-                                            st.error(f"更新失败: {result.get('message', '未知错误')}")
+                                            error_message = "未知错误"
+                                            if result is not None:
+                                                error_message = result.get("message", "未知错误")
+                                            st.error(f"更新失败: {error_message}")
                                 except Exception as e:
                                     st.error(f"更新失败: {str(e)}")
                 
@@ -274,13 +301,18 @@ def display_entity_management():
                     try:
                         with st.spinner("正在删除实体..."):
                             result = delete_entity(delete_id)
-                            if result and result.get("success", False):
+                            if result is not None and result.get("success", False):
                                 st.success(f"成功删除实体: {delete_id}")
                                 # 如果缓存中有此实体，清除缓存
-                                if "entity_to_update" in st.session_state and st.session_state.entity_to_update.get("id") == delete_id:
+                                if ("entity_to_update" in st.session_state and 
+                                    st.session_state.entity_to_update is not None and 
+                                    st.session_state.entity_to_update.get("id") == delete_id):
                                     del st.session_state.entity_to_update
                             else:
-                                st.error(f"删除失败: {result.get('message', '未知错误')}")
+                                error_message = "未知错误"
+                                if result is not None:
+                                    error_message = result.get("message", "未知错误")
+                                st.error(f"删除失败: {error_message}")
                     except Exception as e:
                         st.error(f"删除失败: {str(e)}")
             else:
@@ -306,7 +338,13 @@ def display_relation_management():
             target_entity = st.text_input("目标实体ID", key="relation_search_target", placeholder="目标实体ID (可选)")
         
         with col3:
-            relation_types = get_relation_types()
+            # 防御性获取关系类型
+            try:
+                relation_types = get_relation_types() or []
+            except Exception as e:
+                st.error(f"获取关系类型失败: {str(e)}")
+                relation_types = []
+                
             selected_rel_type = st.selectbox(
                 "关系类型",
                 options=["全部"] + relation_types,
@@ -328,8 +366,8 @@ def display_relation_management():
                     # 调用API获取关系
                     relations = get_relations(filters)
                     
-                    # 显示结果
-                    if relations and len(relations) > 0:
+                    # 防御性检查返回值
+                    if relations is not None and len(relations) > 0:
                         df = pd.DataFrame(relations)
                         st.dataframe(df, use_container_width=True)
                         st.success(f"找到 {len(relations)} 条关系")
@@ -342,13 +380,17 @@ def display_relation_management():
     with operation_tabs[1]:
         st.markdown("#### 创建关系")
         
-        # 获取可用的关系类型
-        relation_types = get_relation_types()
+        # 防御性获取关系类型
+        try:
+            relation_types = get_relation_types() or []
+        except Exception as e:
+            st.error(f"获取关系类型失败: {str(e)}")
+            relation_types = []
         
         # 创建表单
         with st.form("create_relation_form"):
             source_id = st.text_input("源实体ID *", placeholder="输入源实体ID")
-            relation_type = st.selectbox("关系类型 *", options=relation_types)
+            relation_type = st.selectbox("关系类型 *", options=relation_types) if relation_types else st.text_input("关系类型 *", placeholder="输入关系类型")
             target_id = st.text_input("目标实体ID *", placeholder="输入目标实体ID")
             
             relation_description = st.text_area("关系描述", placeholder="输入关系描述")
@@ -398,10 +440,13 @@ def display_relation_management():
                         # 调用API创建关系
                         with st.spinner("正在创建关系..."):
                             result = create_relation(relation_data)
-                            if result and result.get("success", False):
+                            if result is not None and result.get("success", False):
                                 st.success(f"成功创建关系: {source_id} -[{relation_type}]-> {target_id}")
                             else:
-                                st.error(f"创建失败: {result.get('message', '未知错误')}")
+                                error_message = "未知错误"
+                                if result is not None:
+                                    error_message = result.get("message", "未知错误")
+                                st.error(f"创建失败: {error_message}")
                     except Exception as e:
                         st.error(f"创建失败: {str(e)}")
     
@@ -418,9 +463,16 @@ def display_relation_management():
             source_filter = st.text_input("源实体ID", key="update_relation_source")
         
         with col2:
+            # 防御性获取关系类型
+            try:
+                relation_types_list = get_relation_types() or []
+            except Exception as e:
+                st.error(f"获取关系类型失败: {str(e)}")
+                relation_types_list = []
+                
             relation_type_filter = st.selectbox(
                 "关系类型",
-                options=["全部"] + get_relation_types(),
+                options=["全部"] + relation_types_list,
                 key="update_relation_type"
             )
         
@@ -444,7 +496,7 @@ def display_relation_management():
                     # 调用API获取关系
                     relations = get_relations(filters)
                     
-                    if relations and len(relations) > 0:
+                    if relations is not None and len(relations) > 0:
                         # 存储找到的关系
                         st.session_state.found_relations = relations
                         
@@ -471,17 +523,26 @@ def display_relation_management():
                             # 找到选中的关系对象
                             relation = next((r for r in relations if r.get("source") == source and r.get("type") == rel_type and r.get("target") == target), None)
                             
-                            if relation:
+                            if relation is not None:
                                 st.session_state.relation_to_update = relation
                                 
                                 with st.form("update_relation_form"):
                                     st.markdown(f"##### 更新关系: {source} -[{rel_type}]-> {target}")
                                     
+                                    # 防御性获取关系类型
+                                    try:
+                                        rel_types = get_relation_types() or []
+                                        type_index = rel_types.index(rel_type) if rel_type in rel_types else 0
+                                    except Exception as e:
+                                        st.warning(f"获取关系类型失败，使用当前类型: {str(e)}")
+                                        rel_types = [rel_type] if rel_type else ["Unknown"]
+                                        type_index = 0
+                                    
                                     # 关系类型
                                     new_type = st.selectbox(
                                         "关系类型",
-                                        options=get_relation_types(),
-                                        index=get_relation_types().index(rel_type) if rel_type in get_relation_types() else 0
+                                        options=rel_types,
+                                        index=type_index
                                     )
                                     
                                     # 关系描述
@@ -496,7 +557,7 @@ def display_relation_management():
                                     st.markdown("##### 编辑属性")
                                     
                                     # 现有属性
-                                    current_properties = relation.get("properties", {})
+                                    current_properties = relation.get("properties", {}) or {}
                                     st.markdown("现有属性:")
                                     prop_updates = {}
                                     prop_to_delete = []
@@ -559,13 +620,16 @@ def display_relation_management():
                                             # 调用API更新关系
                                             with st.spinner("正在更新关系..."):
                                                 result = update_relation(update_data)
-                                                if result and result.get("success", False):
+                                                if result is not None and result.get("success", False):
                                                     st.success(f"成功更新关系")
                                                     # 清除缓存的关系
                                                     if "relation_to_update" in st.session_state:
                                                         del st.session_state.relation_to_update
                                                 else:
-                                                    st.error(f"更新失败: {result.get('message', '未知错误')}")
+                                                    error_message = "未知错误"
+                                                    if result is not None:
+                                                        error_message = result.get("message", "未知错误")
+                                                    st.error(f"更新失败: {error_message}")
                                         except Exception as e:
                                             st.error(f"更新失败: {str(e)}")
                     else:
@@ -585,7 +649,14 @@ def display_relation_management():
             delete_source = st.text_input("源实体ID *", key="delete_relation_source")
         
         with col2:
-            delete_type = st.selectbox("关系类型 *", options=get_relation_types(), key="delete_relation_type")
+            # 防御性获取关系类型
+            try:
+                relation_types = get_relation_types() or []
+            except Exception as e:
+                st.error(f"获取关系类型失败: {str(e)}")
+                relation_types = []
+                
+            delete_type = st.selectbox("关系类型 *", options=relation_types, key="delete_relation_type") if relation_types else st.text_input("关系类型 *", key="delete_relation_type_input")
         
         with col3:
             delete_target = st.text_input("目标实体ID *", key="delete_relation_target")
@@ -608,10 +679,13 @@ def display_relation_management():
                             }
                             
                             result = delete_relation(delete_data)
-                            if result and result.get("success", False):
+                            if result is not None and result.get("success", False):
                                 st.success(f"成功删除关系: {delete_source} -[{delete_type}]-> {delete_target}")
                             else:
-                                st.error(f"删除失败: {result.get('message', '未知错误')}")
+                                error_message = "未知错误"
+                                if result is not None:
+                                    error_message = result.get("message", "未知错误")
+                                st.error(f"删除失败: {error_message}")
                     except Exception as e:
                         st.error(f"删除失败: {str(e)}")
             else:

@@ -386,8 +386,21 @@ def get_kg_reasoning(reasoning_type, entity_a, entity_b=None, max_depth=3, algor
         st.error(f"知识图谱推理请求失败: {str(e)}")
         return {"error": str(e), "nodes": [], "links": []}
 
+def get_entity_types():
+    """获取所有实体类型"""
+    try:
+        response = requests.get(
+            f"{API_URL}/entity_types",
+            timeout=10
+        )
+        result = response.json()
+        return result.get("entity_types", [])
+    except requests.exceptions.RequestException as e:
+        st.error(f"获取实体类型失败: {str(e)}")
+        return []
+
 def get_relation_types():
-    """获取知识图谱的关系类型"""
+    """获取所有关系类型"""
     try:
         response = requests.get(
             f"{API_URL}/relation_types",
@@ -398,6 +411,118 @@ def get_relation_types():
     except requests.exceptions.RequestException as e:
         st.error(f"获取关系类型失败: {str(e)}")
         return []
+
+def get_entities(filters=None):
+    """获取实体列表，支持筛选"""
+    try:
+        if not filters:
+            filters = {}
+            
+        response = requests.post(
+            f"{API_URL}/entities/search",
+            json=filters,
+            timeout=20
+        )
+        result = response.json()
+        return result.get("entities", [])
+    except requests.exceptions.RequestException as e:
+        st.error(f"获取实体列表失败: {str(e)}")
+        return []
+
+def get_relations(filters=None):
+    """获取关系列表，支持筛选"""
+    try:
+        if not filters:
+            filters = {}
+            
+        response = requests.post(
+            f"{API_URL}/relations/search",
+            json=filters,
+            timeout=20
+        )
+        result = response.json()
+        return result.get("relations", [])
+    except requests.exceptions.RequestException as e:
+        st.error(f"获取关系列表失败: {str(e)}")
+        return []
+
+def create_entity(entity_data):
+    """创建新实体"""
+    try:
+        response = requests.post(
+            f"{API_URL}/entity/create",
+            json=entity_data,
+            timeout=15
+        )
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"创建实体失败: {str(e)}")
+        return {"success": False, "message": str(e)}
+
+def update_entity(entity_data):
+    """更新实体"""
+    try:
+        response = requests.post(
+            f"{API_URL}/entity/update",
+            json=entity_data,
+            timeout=15
+        )
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"更新实体失败: {str(e)}")
+        return {"success": False, "message": str(e)}
+
+def delete_entity(entity_id):
+    """删除实体"""
+    try:
+        response = requests.post(
+            f"{API_URL}/entity/delete",
+            json={"id": entity_id},
+            timeout=15
+        )
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"删除实体失败: {str(e)}")
+        return {"success": False, "message": str(e)}
+
+def create_relation(relation_data):
+    """创建新关系"""
+    try:
+        response = requests.post(
+            f"{API_URL}/relation/create",
+            json=relation_data,
+            timeout=15
+        )
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"创建关系失败: {str(e)}")
+        return {"success": False, "message": str(e)}
+
+def update_relation(relation_data):
+    """更新关系"""
+    try:
+        response = requests.post(
+            f"{API_URL}/relation/update",
+            json=relation_data,
+            timeout=15
+        )
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"更新关系失败: {str(e)}")
+        return {"success": False, "message": str(e)}
+
+def delete_relation(relation_data):
+    """删除关系"""
+    try:
+        response = requests.post(
+            f"{API_URL}/relation/delete",
+            json=relation_data,
+            timeout=15
+        )
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"删除关系失败: {str(e)}")
+        return {"success": False, "message": str(e)}
 
 def clear_chat():
     """清除聊天历史"""

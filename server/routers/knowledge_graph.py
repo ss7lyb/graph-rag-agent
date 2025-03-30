@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from typing import Optional
 import traceback
 from services.kg_service import (
@@ -16,7 +16,8 @@ from services.kg_service import (
     get_simplified_community,
 )
 from server_config.database import get_db_manager
-from models.schemas import ReasoningRequest
+from models.schemas import (ReasoningRequest, EntityData, EntityDeleteData, EntitySearchFilter, EntityUpdateData,
+                            RelationData, RelationDeleteData, RelationSearchFilter, RelationUpdateData)
 
 # 创建路由器
 router = APIRouter()
@@ -258,13 +259,493 @@ async def get_entity_community_from_db(entity_id: str):
         print(f"获取社区信息失败: {str(e)}")
         return None
 
-@router.get("/relation_types")
-async def get_relation_type_list():
-    """获取图谱中所有可能的关系类型"""
+# 获取实体类型
+@router.get("/entity_types")
+def get_entity_types():
+    db_manager = get_db_manager()
     try:
-        db_manager = get_db_manager()
-        driver = db_manager.get_driver()
-        types = get_relation_types(driver)
-        return {"relation_types": types}
+        # 查询实体类型
+        result = db_manager.execute_query("""
+        MATCH (e:__Entity__)
+        RETURN DISTINCT
+        CASE WHEN size(labels(e)) > 1 
+             THEN [lbl IN labels(e) WHERE lbl <> '__Entity__'][0] 
+             ELSE 'Unknown' 
+        END AS entity_type
+        ORDER BY entity_type
+        """)
+        
+        # 提取结果
+        entity_types = [row["entity_type"] for row in result]
+        
+        return {"entity_types": entity_types}
     except Exception as e:
-        return {"error": str(e), "relation_types": []}
+        raise HTTPException(status_code=500, detail=f"获取实体类型失败: {str(e)}")
+
+# 获取关系类型
+@router.get("/relation_types")
+def get_relation_types():
+    db_manager = get_db_manager()
+    try:
+        # 查询关系类型
+        result = db_manager.execute_query("""
+        MATCH ()-[r]->()
+        RETURN DISTINCT type(r) AS relation_type
+        ORDER BY relation_type
+        """)
+        
+        # 提取结果
+        relation_types = [row["relation_type"] for row in result]
+        
+        return {"relation_types": relation_types}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取关系类型失败: {str(e)}")
+
+# 搜索实体
+@router.post("/entities/search")
+def search_entities(filters: EntitySearchFilter):
+    db_manager = get_db_manager()
+    try:
+        # 构建查询条件
+        conditions = ["e:__Entity__"]
+        params = {}
+        
+        if filters.type:
+            conditions.append(f"e:{filters.type}")
+        
+        if filters.term:
+            # 修改查询，只使用id属性进行查询，避免使用可能不存在的属性
+            conditions.append("e.id CONTAINS $term")
+            params["term"] = filters.term
+        
+        # 构建完整查询，修改属性获取方式
+        query = f"""
+        MATCH (e)
+        WHERE {' AND '.join(conditions)}
+        RETURN e.id AS id,
+               COALESCE(e.id, '') AS name,
+               CASE WHEN size(labels(e)) > 1 
+                    THEN [lbl IN labels(e) WHERE lbl <> '__Entity__'][0] 
+                    ELSE 'Unknown' 
+               END AS type,
+               COALESCE(e.description, '') AS description
+        LIMIT {filters.limit}
+        """
+        
+        result = db_manager.execute_query(query, params)
+        
+        # 格式化结果
+        entities = []
+        for row in result:
+            entity = {
+                "id": row["id"],
+                "name": row["name"],
+                "type": row["type"],
+                "description": row["description"] or "",
+                "properties": {}  # 属性为空对象，避免使用不存在的属性
+            }
+            entities.append(entity)
+        
+        return {"entities": entities}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"搜索实体失败: {str(e)}")
+
+# 创建实体
+@router.post("/entity/create")
+def create_entity(entity_data: EntityData):
+    db_manager = get_db_manager()
+    try:
+        # 检查实体是否已存在
+        check_query = """
+        MATCH (e:__Entity__ {id: $id})
+        RETURN count(e) AS count
+        """
+        
+        check_result = db_manager.execute_query(check_query, {"id": entity_data.id})
+        
+        if check_result[0]["count"] > 0:
+            return {"success": False, "message": f"实体ID '{entity_data.id}' 已存在"}
+        
+        # 创建实体，设置基本属性
+        create_query = f"""
+        CREATE (e:__Entity__:{entity_data.type} {{
+            id: $id,
+            name: $name,
+            description: $description
+        }})
+        RETURN e.id AS id
+        """
+        
+        params = {
+            "id": entity_data.id,
+            "name": entity_data.name,
+            "description": entity_data.description
+        }
+        
+        result = db_manager.execute_query(create_query, params)
+        
+        return {"success": True, "id": result[0]["id"]}
+    except Exception as e:
+        return {"success": False, "message": f"创建实体失败: {str(e)}"}
+
+# 更新实体
+@router.post("/entity/update")
+def update_entity(entity_data: EntityUpdateData):
+    db_manager = get_db_manager()
+    try:
+        # 检查实体是否存在
+        check_query = """
+        MATCH (e:__Entity__ {id: $id})
+        RETURN count(e) AS count
+        """
+        
+        check_result = db_manager.execute_query(check_query, {"id": entity_data.id})
+        
+        if check_result[0]["count"] == 0:
+            return {"success": False, "message": f"实体ID '{entity_data.id}' 不存在"}
+        
+        # 构建更新参数
+        params = {"id": entity_data.id}
+        set_clauses = []
+        
+        if entity_data.name is not None:
+            set_clauses.append("e.name = $name")
+            params["name"] = entity_data.name
+        
+        if entity_data.description is not None:
+            set_clauses.append("e.description = $description")
+            params["description"] = entity_data.description
+        
+        # 如果需要更新类型，需要先移除旧标签，再添加新标签
+        if entity_data.type is not None:
+            # 获取当前实体的标签
+            labels_query = """
+            MATCH (e:__Entity__ {id: $id})
+            RETURN labels(e) AS labels
+            """
+            
+            labels_result = db_manager.execute_query(labels_query, {"id": entity_data.id})
+            current_labels = labels_result[0]["labels"]
+            
+            # 移除非__Entity__的标签
+            remove_labels = [label for label in current_labels if label != "__Entity__"]
+            
+            # 执行更新
+            update_type_query = f"""
+            MATCH (e:__Entity__ {{id: $id}})
+            {' '.join(f'REMOVE e:{label}' for label in remove_labels)}
+            SET e:{entity_data.type}
+            RETURN e.id as id
+            """
+            
+            db_manager.execute_query(update_type_query, {"id": entity_data.id})
+        
+        # 执行更新
+        if set_clauses:
+            update_query = f"""
+            MATCH (e:__Entity__ {{id: $id}})
+            SET {', '.join(set_clauses)}
+            RETURN e.id as id
+            """
+            
+            db_manager.execute_query(update_query, params)
+        
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "message": f"更新实体失败: {str(e)}"}
+    
+# 删除实体
+@router.post("/entity/delete")
+def delete_entity(entity_data: EntityDeleteData):
+    db_manager = get_db_manager()
+    try:
+        # 检查实体是否存在
+        check_query = """
+        MATCH (e:__Entity__ {id: $id})
+        RETURN count(e) AS count
+        """
+        
+        check_result = db_manager.execute_query(check_query, {"id": entity_data.id})
+        
+        if check_result[0]["count"] == 0:
+            return {"success": False, "message": f"实体ID '{entity_data.id}' 不存在"}
+        
+        # 删除实体的所有关系
+        delete_rels_query = """
+        MATCH (e:__Entity__ {id: $id})-[r]-()
+        DELETE r
+        """
+        
+        db_manager.execute_query(delete_rels_query, {"id": entity_data.id})
+        
+        # 删除实体
+        delete_query = """
+        MATCH (e:__Entity__ {id: $id})
+        DELETE e
+        """
+        
+        db_manager.execute_query(delete_query, {"id": entity_data.id})
+        
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "message": f"删除实体失败: {str(e)}"}
+
+# 搜索关系
+@router.post("/relations/search")
+def search_relations(filters: RelationSearchFilter):
+    db_manager = get_db_manager()
+    try:
+        # 构建查询条件
+        conditions = []
+        params = {}
+        
+        if filters.source:
+            conditions.append("e1.id = $source")
+            params["source"] = filters.source
+        
+        if filters.target:
+            conditions.append("e2.id = $target")
+            params["target"] = filters.target
+        
+        if filters.type:
+            conditions.append("type(r) = $relType")
+            params["relType"] = filters.type
+        
+        # 构建完整查询
+        where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+        
+        query = f"""
+        MATCH (e1:__Entity__)-[r]->(e2:__Entity__)
+        {where_clause}
+        RETURN e1.id AS source,
+               type(r) AS type,
+               e2.id AS target,
+               COALESCE(r.description, '') AS description,
+               COALESCE(r.weight, 0.5) AS weight
+        LIMIT {filters.limit}
+        """
+        
+        result = db_manager.execute_query(query, params)
+        
+        # 格式化结果
+        relations = []
+        for row in result:
+            relation = {
+                "source": row["source"],
+                "type": row["type"],
+                "target": row["target"],
+                "description": row["description"] or "",
+                "weight": row["weight"] or 0.5,
+                "properties": {}  # 属性为空对象，避免使用不存在的属性
+            }
+            relations.append(relation)
+        
+        return {"relations": relations}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"搜索关系失败: {str(e)}")
+
+# 创建关系
+@router.post("/relation/create")
+def create_relation(relation_data: RelationData):
+    db_manager = get_db_manager()
+    try:
+        # 检查源实体和目标实体是否存在
+        check_query = """
+        MATCH (e1:__Entity__ {id: $source})
+        MATCH (e2:__Entity__ {id: $target})
+        RETURN count(e1) AS source_count, count(e2) AS target_count
+        """
+        
+        check_result = db_manager.execute_query(check_query, {
+            "source": relation_data.source,
+            "target": relation_data.target
+        })
+        
+        if check_result[0]["source_count"] == 0:
+            return {"success": False, "message": f"源实体 '{relation_data.source}' 不存在"}
+        
+        if check_result[0]["target_count"] == 0:
+            return {"success": False, "message": f"目标实体 '{relation_data.target}' 不存在"}
+        
+        # 检查关系是否已存在
+        rel_check_query = """
+        MATCH (e1:__Entity__ {id: $source})-[r]->(e2:__Entity__ {id: $target})
+        WHERE type(r) = $relType
+        RETURN count(r) AS rel_count
+        """
+        
+        rel_check_result = db_manager.execute_query(rel_check_query, {
+            "source": relation_data.source,
+            "target": relation_data.target,
+            "relType": relation_data.type
+        })
+        
+        if rel_check_result[0]["rel_count"] > 0:
+            return {"success": False, "message": f"关系 '{relation_data.source} -[{relation_data.type}]-> {relation_data.target}' 已存在"}
+        
+        # 创建关系，只使用基本属性
+        create_query = f"""
+        MATCH (e1:__Entity__ {{id: $source}})
+        MATCH (e2:__Entity__ {{id: $target}})
+        CREATE (e1)-[r:{relation_data.type} {{
+            description: $description,
+            weight: $weight
+        }}]->(e2)
+        RETURN type(r) AS type
+        """
+        
+        params = {
+            "source": relation_data.source,
+            "target": relation_data.target,
+            "description": relation_data.description,
+            "weight": relation_data.weight
+        }
+        
+        result = db_manager.execute_query(create_query, params)
+        
+        return {"success": True, "type": result[0]["type"]}
+    except Exception as e:
+        return {"success": False, "message": f"创建关系失败: {str(e)}"}
+
+# 更新关系
+@router.post("/relation/update")
+def update_relation(relation_data: RelationUpdateData):
+    db_manager = get_db_manager()
+    try:
+        # 检查关系是否存在
+        check_query = """
+        MATCH (e1:__Entity__ {id: $source})-[r]->(e2:__Entity__ {id: $target})
+        WHERE type(r) = $relType
+        RETURN count(r) AS count
+        """
+        
+        check_result = db_manager.execute_query(check_query, {
+            "source": relation_data.source,
+            "target": relation_data.target,
+            "relType": relation_data.original_type
+        })
+        
+        if check_result[0]["count"] == 0:
+            return {"success": False, "message": f"关系 '{relation_data.source} -[{relation_data.original_type}]-> {relation_data.target}' 不存在"}
+        
+        # 如果需要更改关系类型，需要删除旧关系，创建新关系
+        if relation_data.new_type and relation_data.new_type != relation_data.original_type:
+            # 获取当前关系的所有属性
+            get_props_query = """
+            MATCH (e1:__Entity__ {id: $source})-[r]->(e2:__Entity__ {id: $target})
+            WHERE type(r) = $relType
+            RETURN r.description AS description,
+                   r.weight AS weight
+            """
+            
+            props_result = db_manager.execute_query(get_props_query, {
+                "source": relation_data.source,
+                "target": relation_data.target,
+                "relType": relation_data.original_type
+            })
+            
+            # 删除旧关系
+            delete_query = """
+            MATCH (e1:__Entity__ {id: $source})-[r]->(e2:__Entity__ {id: $target})
+            WHERE type(r) = $relType
+            DELETE r
+            """
+            
+            db_manager.execute_query(delete_query, {
+                "source": relation_data.source,
+                "target": relation_data.target,
+                "relType": relation_data.original_type
+            })
+            
+            # 准备新关系属性
+            props = props_result[0]
+            
+            description = relation_data.description if relation_data.description is not None else props["description"]
+            weight = relation_data.weight if relation_data.weight is not None else props["weight"]
+            
+            # 创建新关系
+            create_query = f"""
+            MATCH (e1:__Entity__ {{id: $source}})
+            MATCH (e2:__Entity__ {{id: $target}})
+            CREATE (e1)-[r:{relation_data.new_type} {{
+                description: $description,
+                weight: $weight
+            }}]->(e2)
+            RETURN type(r) AS type
+            """
+            
+            db_manager.execute_query(create_query, {
+                "source": relation_data.source,
+                "target": relation_data.target,
+                "description": description,
+                "weight": weight
+            })
+        else:
+            # 构建更新参数
+            params = {
+                "source": relation_data.source,
+                "target": relation_data.target,
+                "relType": relation_data.original_type
+            }
+            set_clauses = []
+            
+            if relation_data.description is not None:
+                set_clauses.append("r.description = $description")
+                params["description"] = relation_data.description
+            
+            if relation_data.weight is not None:
+                set_clauses.append("r.weight = $weight")
+                params["weight"] = relation_data.weight
+            
+            # 执行更新
+            if set_clauses:
+                update_query = f"""
+                MATCH (e1:__Entity__ {{id: $source}})-[r]->(e2:__Entity__ {{id: $target}})
+                WHERE type(r) = $relType
+                SET {', '.join(set_clauses)}
+                RETURN type(r) as type
+                """
+                
+                db_manager.execute_query(update_query, params)
+        
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "message": f"更新关系失败: {str(e)}"}
+
+# 删除关系
+@router.post("/relation/delete")
+def delete_relation(relation_data: RelationDeleteData):
+    db_manager = get_db_manager()
+    try:
+        # 检查关系是否存在
+        check_query = """
+        MATCH (e1:__Entity__ {id: $source})-[r]->(e2:__Entity__ {id: $target})
+        WHERE type(r) = $relType
+        RETURN count(r) AS count
+        """
+        
+        check_result = db_manager.execute_query(check_query, {
+            "source": relation_data.source,
+            "target": relation_data.target,
+            "relType": relation_data.type
+        })
+        
+        if check_result[0]["count"] == 0:
+            return {"success": False, "message": f"关系 '{relation_data.source} -[{relation_data.type}]-> {relation_data.target}' 不存在"}
+        
+        # 删除关系
+        delete_query = """
+        MATCH (e1:__Entity__ {id: $source})-[r]->(e2:__Entity__ {id: $target})
+        WHERE type(r) = $relType
+        DELETE r
+        """
+        
+        db_manager.execute_query(delete_query, {
+            "source": relation_data.source,
+            "target": relation_data.target,
+            "relType": relation_data.type
+        })
+        
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "message": f"删除关系失败: {str(e)}"}

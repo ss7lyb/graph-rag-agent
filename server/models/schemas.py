@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from config.settings import community_algorithm
 
 
@@ -74,3 +74,53 @@ class ReasoningRequest(BaseModel):
     entity_b: Optional[str] = None
     max_depth: Optional[int] = 3
     algorithm: Optional[str] = community_algorithm
+
+class EntityData(BaseModel):
+    id: str
+    name: str
+    type: str
+    description: Optional[str] = ""
+    properties: Optional[Dict[str, Any]] = {}
+
+class EntityUpdateData(BaseModel):
+    id: str
+    name: Optional[str] = None
+    type: Optional[str] = None
+    description: Optional[str] = None
+    properties: Optional[Dict[str, Any]] = None
+
+class EntitySearchFilter(BaseModel):
+    term: Optional[str] = None
+    type: Optional[str] = None
+    limit: Optional[int] = 100
+
+class RelationData(BaseModel):
+    source: str
+    type: str
+    target: str
+    description: Optional[str] = ""
+    weight: Optional[float] = 0.5
+    properties: Optional[Dict[str, Any]] = {}
+
+class RelationUpdateData(BaseModel):
+    source: str
+    original_type: str
+    target: str
+    new_type: Optional[str] = None
+    description: Optional[str] = None
+    weight: Optional[float] = None
+    properties: Optional[Dict[str, Any]] = None
+
+class RelationSearchFilter(BaseModel):
+    source: Optional[str] = None
+    target: Optional[str] = None
+    type: Optional[str] = None
+    limit: Optional[int] = 100
+
+class EntityDeleteData(BaseModel):
+    id: str
+
+class RelationDeleteData(BaseModel):
+    source: str
+    type: str
+    target: str

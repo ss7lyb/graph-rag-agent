@@ -4,6 +4,8 @@ import re
 from utils.helpers import display_source_content
 from utils.performance import display_performance_stats, clear_performance_data
 from components.knowledge_graph import display_knowledge_graph_tab
+from components.knowledge_graph.management import display_kg_management_tab
+from components.styles import KG_MANAGEMENT_CSS
 
 def display_source_content_tab(tabs):
     """显示源内容标签页内容"""
@@ -402,7 +404,7 @@ def display_formatted_logs(log_lines):
 
 def add_performance_tab(tabs):
     """添加性能监控标签页"""
-    with tabs[3]:  # 第四个标签页
+    with tabs[4]:  # 第五个标签页
         st.markdown('<div class="debug-header">性能统计</div>', unsafe_allow_html=True)
         display_performance_stats()
         
@@ -416,7 +418,7 @@ def display_debug_panel():
     st.subheader("🔍 调试信息")
     
     # 创建标签页用于不同类型的调试信息
-    tabs = st.tabs(["执行轨迹", "知识图谱", "源内容", "性能监控"])
+    tabs = st.tabs(["执行轨迹", "知识图谱", "源内容", "知识图谱管理", "性能监控"])
     
     # 执行轨迹标签
     display_execution_trace_tab(tabs)
@@ -426,6 +428,9 @@ def display_debug_panel():
     
     # 源内容标签
     display_source_content_tab(tabs)
+    
+    # 知识图谱管理标签
+    display_kg_management_tab(tabs)
     
     # 性能监控标签
     add_performance_tab(tabs)
@@ -439,9 +444,15 @@ def display_debug_panel():
         tab_index = 1
     elif st.session_state.current_tab == "源内容":
         tab_index = 2
-    elif st.session_state.current_tab == "性能监控":
+    elif st.session_state.current_tab == "知识图谱管理":
         tab_index = 3
+    elif st.session_state.current_tab == "性能监控":
+        tab_index = 4
     
+    # 知识图谱管理CSS样式
+    kg_management_css = KG_MANAGEMENT_CSS
+    st.markdown(kg_management_css, unsafe_allow_html=True)
+
     # 使用自定义JS自动切换到指定标签页
     tab_js = f"""
     <script>

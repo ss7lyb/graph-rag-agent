@@ -42,6 +42,14 @@ def init_session_state():
         st.session_state.processing_lock = False
     if 'current_kg_message' not in st.session_state:
         st.session_state.current_kg_message = None
+    
+    # 知识图谱管理相关状态
+    if 'entity_to_update' not in st.session_state:
+        st.session_state.entity_to_update = None
+    if 'found_relations' not in st.session_state:
+        st.session_state.found_relations = None
+    if 'relation_to_update' not in st.session_state:
+        st.session_state.relation_to_update = None
 
     if 'cache' not in st.session_state:
         st.session_state.cache = {

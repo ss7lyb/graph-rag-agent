@@ -190,3 +190,60 @@ def custom_css():
     }
     </style>
     """, unsafe_allow_html=True)
+
+KG_MANAGEMENT_CSS = """
+<style>
+    .kg-form {
+        background-color: #f8f9fa;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 15px;
+    }
+    .kg-form-title {
+        font-weight: bold;
+        margin-bottom: 10px;
+        color: #1976d2;
+    }
+    .kg-entity-card {
+        border: 1px solid #e0e0e0;
+        border-radius: 4px;
+        padding: 10px;
+        margin-bottom: 10px;
+        background-color: white;
+    }
+    .kg-relation-card {
+        border: 1px solid #e0e0e0;
+        border-radius: 4px;
+        padding: 10px;
+        margin-bottom: 10px;
+        background-color: white;
+    }
+    .kg-badge {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 12px;
+        font-size: 12px;
+        margin-right: 8px;
+    }
+    .kg-entity-badge {
+        background-color: #e3f2fd;
+        color: #1976d2;
+    }
+    .kg-relation-badge {
+        background-color: #e8f5e9;
+        color: #388e3c;
+    }
+    .kg-property-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    .kg-property-table th, .kg-property-table td {
+        border: 1px solid #e0e0e0;
+        padding: 8px;
+        text-align: left;
+    }
+    .kg-property-table th {
+        background-color: #f5f5f5;
+    }
+</style>
+"""

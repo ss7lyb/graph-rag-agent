@@ -502,10 +502,17 @@ def format_path_with_names(path):
 
 def get_node_color(node_type, is_center=False):
     """根据节点类型和是否为中心节点返回颜色"""
-    if is_center:
-        return "#4285F4"  # 蓝色 - 中心/源节点
+    from frontend_config.settings import NODE_TYPE_COLORS, KG_COLOR_PALETTE
     
-    # 根据组或社区分配颜色
+    # 如果是中心节点，直接返回中心节点颜色
+    if is_center:
+        return NODE_TYPE_COLORS["Center"]
+    
+    # 检查是否有预定义的颜色映射
+    if node_type in NODE_TYPE_COLORS:
+        return NODE_TYPE_COLORS[node_type]
+    
+    # 处理社区节点
     if isinstance(node_type, str) and "Community" in node_type:
         try:
             # 提取社区ID数字部分
@@ -516,29 +523,12 @@ def get_node_color(node_type, is_center=False):
             else:
                 comm_id = int(comm_id_str)
                 
-            # 社区配色方案
-            colors = ["#7B1FA2", "#0097A7", "#FF6D00", "#C2185B", "#FBC02D", "#388E3C"]
-            
-            # 确保使用正确的索引，社区ID从1开始，但数组索引从0开始
-            # 这里减1并取模，以处理ID=0或大数字的情况
-            color_index = (comm_id - 1) % len(colors) if comm_id > 0 else 0
-            return colors[color_index]
+            # 使用社区ID取模获取颜色索引
+            color_index = (comm_id - 1) % len(KG_COLOR_PALETTE) if comm_id > 0 else 0
+            return KG_COLOR_PALETTE[color_index]
         except (ValueError, TypeError):
-            # 如果转换失败，使用默认颜色
+            # 转换失败，使用默认颜色
             return "#757575"  # 灰色
     
-    # 处理其他特殊组类型
-    if node_type == "Source":
-        return "#4285F4"  # 蓝色
-    elif node_type == "Target":
-        return "#EA4335"  # 红色
-    elif node_type == "Common":
-        return "#34A853"  # 绿色
-    elif node_type == "Level1":
-        return "#0097A7"  # 青色
-    elif node_type == "Level2":
-        return "#FF6D00"  # 橙色
-    elif node_type == "Center":
-        return "#4285F4"  # 蓝色
-    else:
-        return "#757575"  # 灰色
+    # 其他类型节点使用默认颜色
+    return "#757575"  # 灰色

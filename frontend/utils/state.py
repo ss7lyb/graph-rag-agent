@@ -13,7 +13,7 @@ def init_session_state():
     if 'execution_log' not in st.session_state:
         st.session_state.execution_log = []
     if 'agent_type' not in st.session_state:
-        st.session_state.agent_type = "hybrid_agent"  # 默认使用hybrid_agent
+        st.session_state.agent_type = "naive_rag_agent"  # 默认使用naive_rag_agent
     if 'show_thinking' not in st.session_state:
         st.session_state.show_thinking = False  # 默认不显示思考过程
     if 'use_deeper_tool' not in st.session_state:

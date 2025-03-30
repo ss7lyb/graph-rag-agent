@@ -364,7 +364,7 @@ def get_kg_reasoning(reasoning_type, entity_a, entity_b=None, max_depth=3, algor
         if entity_b:
             params["entity_b"] = entity_b.strip()
         
-        print(f"发送知识图谱推理请求: {params}")
+        # print(f"发送知识图谱推理请求: {params}")
         
         # 使用JSON格式发送请求
         response = requests.post(

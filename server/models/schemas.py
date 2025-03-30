@@ -8,7 +8,7 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str
     debug: bool = False
-    agent_type: str = "hybrid_agent"
+    agent_type: str = "naive_rag_agent"
     use_deeper_tool: Optional[bool] = True
     show_thinking: Optional[bool] = False
 
@@ -54,7 +54,7 @@ class FeedbackRequest(BaseModel):
     query: str
     is_positive: bool
     thread_id: str
-    agent_type: Optional[str] = "graph_agent"
+    agent_type: Optional[str] = "naive_rag_agent"
 
 
 class FeedbackResponse(BaseModel):

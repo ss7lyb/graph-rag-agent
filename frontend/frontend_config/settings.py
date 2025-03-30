@@ -20,6 +20,16 @@ KG_COLOR_PALETTE = [
     "#C2185B"   # 粉色
 ]
 
+# 特殊节点类型的颜色映射
+NODE_TYPE_COLORS = {
+    "Center": "#F0B2F4",     # 中心/源节点 -紫色
+    "Source": "#4285F4",     # 源节点 - 蓝色
+    "Target": "#EA4335",     # 目标节点 - 红色
+    "Common": "#34A853",     # 共同邻居 - 绿色
+    "Level1": "#0097A7",     # 一级关联 - 青色
+    "Level2": "#FF6D00",     # 二级关联 - 橙色
+}
+
 # 知识图谱默认设置
 DEFAULT_KG_SETTINGS = {
     "physics_enabled": True,

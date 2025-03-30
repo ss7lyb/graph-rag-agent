@@ -3,7 +3,7 @@ import os
 import streamlit as st
 from pyvis.network import Network
 import streamlit.components.v1 as components
-from frontend_config.settings import KG_COLOR_PALETTE
+from frontend_config.settings import KG_COLOR_PALETTE, NODE_TYPE_COLORS
 
 def visualize_knowledge_graph(kg_data):
     """使用pyvis可视化知识图谱 - 动态节点类型和颜色，支持Neo4j式交互"""
@@ -111,9 +111,6 @@ def visualize_knowledge_graph(kg_data):
     }
     """ % (str(physics_enabled).lower(), st.session_state.kg_display_settings["gravity"], spring_length))
     
-    # 使用更现代化的颜色方案
-    color_palette = KG_COLOR_PALETTE
-    
     # 提取所有唯一组类型
     group_types = set()
     for node in kg_data["nodes"]:
@@ -123,8 +120,37 @@ def visualize_knowledge_graph(kg_data):
     
     # 为每个组分配颜色
     group_colors = {}
-    for i, group in enumerate(sorted(group_types)):
-        group_colors[group] = color_palette[i % len(color_palette)]
+    
+    # 首先分配预定义颜色
+    for group in group_types:
+        if group in NODE_TYPE_COLORS:
+            group_colors[group] = NODE_TYPE_COLORS[group]
+    
+    # 然后为剩余组分配颜色
+    palette_index = 0
+    for group in sorted(group_types):
+        if group not in group_colors:
+            # 处理社区类型
+            if isinstance(group, str) and "Community" in group:
+                try:
+                    # 提取社区ID数字部分
+                    comm_id_str = group.replace("Community", "")
+                    if not comm_id_str:
+                        comm_id = 0
+                    else:
+                        comm_id = int(comm_id_str)
+                    
+                    # 确保使用一致的社区颜色映射
+                    color_index = (comm_id - 1) % len(KG_COLOR_PALETTE) if comm_id > 0 else 0
+                    group_colors[group] = KG_COLOR_PALETTE[color_index]
+                except (ValueError, TypeError):
+                    # 转换失败，使用默认分配
+                    group_colors[group] = KG_COLOR_PALETTE[palette_index % len(KG_COLOR_PALETTE)]
+                    palette_index += 1
+            else:
+                # 普通类型按序分配颜色
+                group_colors[group] = KG_COLOR_PALETTE[palette_index % len(KG_COLOR_PALETTE)]
+                palette_index += 1
     
     # 添加节点，使用更现代的样式并增强交互体验
     for node in kg_data["nodes"]:
@@ -134,7 +160,7 @@ def visualize_knowledge_graph(kg_data):
         description = node.get("description", "")
         
         # 根据节点组类型设置颜色
-        color = group_colors.get(group, "#4285F4")  # 默认使用谷歌蓝
+        color = group_colors.get(group, KG_COLOR_PALETTE[0])  # 默认使用第一个颜色
         
         # 添加节点信息提示，改进格式
         title = f"{label}" + (f": {description}" if description else "")
@@ -225,32 +251,54 @@ def visualize_knowledge_graph(kg_data):
     
     # 显示图例，使用更现代的样式
     st.write("### 图例")
-    
+
+    # 按特定优先级顺序显示图例
+    priority_groups = ["Center", "Source", "Target", "Common"]
+    community_groups = []
+    other_groups = []
+
+    # 对组类型进行分类
+    for group in group_colors.keys():
+        if group in priority_groups:
+            continue  # 这些将单独处理
+        elif isinstance(group, str) and "Community" in group:
+            community_groups.append(group)
+        else:
+            other_groups.append(group)
+
+    # 排序以确保一致的显示顺序
+    community_groups.sort()
+    other_groups.sort()
+
+    # 合并所有组，保持优先顺序
+    all_groups = []
+    for group in priority_groups:
+        if group in group_colors:
+            all_groups.append(group)
+    all_groups.extend(other_groups)
+    all_groups.extend(community_groups)
+
     # 创建多列显示，使用更美观的图例样式
     cols = st.columns(3)
-    for i, (group, color) in enumerate(group_colors.items()):
-        col_idx = i % 3
-        with cols[col_idx]:
-            st.markdown(
-                f'<div style="display:flex;align-items:center;margin-bottom:12px">'
-                f'<div style="width:20px;height:20px;border-radius:50%;background-color:{color};margin-right:10px;box-shadow:0 2px 4px rgba(0,0,0,0.1);"></div>'
-                f'<span style="font-family:sans-serif;color:#333;">{group}</span>'
-                f'</div>',
-                unsafe_allow_html=True
-            )
-    
-    # 显示节点和连接数量，使用更美观的样式
-    st.info(f"📊 显示 {len(kg_data['nodes'])} 个节点 和 {len(kg_data['links'])} 个关系")
-    
-    # 添加交互说明
-    st.markdown("""
-    <div style="background-color:#f8f9fa;padding:10px;border-radius:5px;border-left:4px solid #4285F4;">
-        <h4 style="margin-top:0;">知识图谱交互指南</h4>
-        <ul style="margin-bottom:0;">
-            <li><strong>双击节点</strong>: 聚焦查看该节点及其直接相连的节点</li>
-            <li><strong>右键点击节点</strong>: 打开菜单，进行更多操作</li>
-            <li><strong>单击空白处</strong>: 重置视图，显示所有节点</li>
-            <li><strong>使用控制面板</strong>: 右上角的控制面板提供额外功能</li>
-        </ul>
-    </div>
-    """, unsafe_allow_html=True)
+    for i, group in enumerate(all_groups):
+        if group in group_colors:
+            color = group_colors[group]
+            col_idx = i % 3
+            with cols[col_idx]:
+                group_display_name = group
+                if group == "Center":
+                    group_display_name = "中心节点"
+                elif group == "Source":
+                    group_display_name = "源节点"
+                elif group == "Target":
+                    group_display_name = "目标节点"
+                elif group == "Common":
+                    group_display_name = "共同邻居"
+                    
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;margin-bottom:12px">'
+                    f'<div style="width:20px;height:20px;border-radius:50%;background-color:{color};margin-right:10px;box-shadow:0 2px 4px rgba(0,0,0,0.1);"></div>'
+                    f'<span style="font-family:sans-serif;color:#333;">{group_display_name}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )

@@ -9,6 +9,7 @@ import streamlit as st
 from typing import Dict, Callable
 from frontend_config.settings import API_URL
 from utils.performance import monitor_performance
+from config.settings import community_algorithm
 
 @monitor_performance(endpoint="send_message")
 def send_message(message: str) -> Dict:
@@ -348,6 +349,55 @@ def get_source_file_info_batch(source_ids: list) -> dict:
     except requests.exceptions.RequestException as e:
         st.error(f"批量获取源文件信息时出错: {str(e)}")
         return {sid: {"file_name": f"源文本 {sid}"} for sid in source_ids}
+
+@monitor_performance(endpoint="kg_reasoning")
+def get_kg_reasoning(reasoning_type, entity_a, entity_b=None, max_depth=3, algorithm=community_algorithm):
+    """知识图谱推理API调用"""
+    try:
+        params = {
+            "reasoning_type": reasoning_type,
+            "entity_a": entity_a.strip() if entity_a else "",
+            "max_depth": min(max(1, max_depth), 5),  # 确保在1-5的范围内
+            "algorithm": algorithm
+        }
+        
+        if entity_b:
+            params["entity_b"] = entity_b.strip()
+        
+        print(f"发送知识图谱推理请求: {params}")
+        
+        # 使用JSON格式发送请求
+        response = requests.post(
+            f"{API_URL}/kg_reasoning",
+            json=params,
+            timeout=60  # 社区检测可能需要更长时间
+        )
+        
+        if response.status_code != 200:
+            st.error(f"API请求失败: HTTP {response.status_code}")
+            try:
+                error_details = response.json()
+                return {"error": f"API错误: {error_details.get('detail', '未知错误')}", "nodes": [], "links": []}
+            except:
+                return {"error": f"API错误: HTTP {response.status_code}", "nodes": [], "links": []}
+        
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"知识图谱推理请求失败: {str(e)}")
+        return {"error": str(e), "nodes": [], "links": []}
+
+def get_relation_types():
+    """获取知识图谱的关系类型"""
+    try:
+        response = requests.get(
+            f"{API_URL}/relation_types",
+            timeout=10
+        )
+        result = response.json()
+        return result.get("relation_types", [])
+    except requests.exceptions.RequestException as e:
+        st.error(f"获取关系类型失败: {str(e)}")
+        return []
 
 def clear_chat():
     """清除聊天历史"""

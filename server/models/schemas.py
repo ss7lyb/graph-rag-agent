@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import Optional, List, Dict
+from config.settings import community_algorithm
 
 
 class ChatRequest(BaseModel):
@@ -66,3 +67,10 @@ class SourceInfoBatchRequest(BaseModel):
 
 class ContentBatchRequest(BaseModel):
     chunk_ids: List[str]
+
+class ReasoningRequest(BaseModel):
+    reasoning_type: str
+    entity_a: str
+    entity_b: Optional[str] = None
+    max_depth: Optional[int] = 3
+    algorithm: Optional[str] = community_algorithm

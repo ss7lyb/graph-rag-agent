@@ -781,3 +781,874 @@ def get_chunks(limit: int = 10, offset: int = 0):
     except Exception as e:
         print(f"获取文本块失败: {str(e)}")
         return {"error": str(e), "chunks": []}
+    
+def get_relation_types(driver):
+    """获取图谱中的所有关系类型"""
+    try:
+        query = """
+        MATCH ()-[r]-()
+        RETURN DISTINCT type(r) AS relation_type
+        ORDER BY relation_type
+        """
+        
+        result = driver.execute_query(query)
+        
+        relation_types = []
+        for record in result.records:
+            relation_types.append(record["relation_type"])
+            
+        return relation_types
+    except Exception as e:
+        print(f"获取关系类型失败: {str(e)}")
+        return []
+
+def get_shortest_path(driver, entity_a, entity_b, max_hops=3):
+    """查询实体A和实体B之间的最短路径"""
+    try:
+        # 根据max_hops构建相应的路径模式
+        if max_hops == 1:
+            path_pattern = "[*..1]"
+        elif max_hops == 2:
+            path_pattern = "[*..2]"
+        elif max_hops == 3:
+            path_pattern = "[*..3]"
+        elif max_hops == 4:
+            path_pattern = "[*..4]"
+        elif max_hops >= 5:
+            path_pattern = "[*..5]"
+        else:
+            path_pattern = "[*..3]"
+        
+        query = f"""
+        MATCH (a:__Entity__), (b:__Entity__)
+        WHERE a.id = $entity_a AND b.id = $entity_b
+        MATCH p = shortestPath((a)-{path_pattern}-(b))
+        RETURN p
+        """
+        
+        result = driver.execute_query(query, {
+            "entity_a": entity_a,
+            "entity_b": entity_b
+        })
+        
+        # 转换结果为可视化格式
+        nodes = []
+        links = []
+        node_ids = set()
+        path_info = f"从 {entity_a} 到 {entity_b} 的最短路径"
+        path_length = 0
+        
+        if result.records and len(result.records) > 0:
+            path = result.records[0].get("p")
+            if path:
+                # 处理节点
+                for node in path.nodes:
+                    node_id = node.get("id")
+                    if node_id not in node_ids:
+                        node_ids.add(node_id)
+                        group = [label for label in node.labels if label != "__Entity__"]
+                        group = group[0] if group else "Unknown"
+                        
+                        nodes.append({
+                            "id": node_id,
+                            "label": node_id,
+                            "description": node.get("description", ""),
+                            "group": group
+                        })
+                
+                # 处理关系
+                for rel in path.relationships:
+                    links.append({
+                        "source": rel.start_node.get("id"),
+                        "target": rel.end_node.get("id"),
+                        "label": rel.type,
+                        "weight": 1
+                    })
+                    path_length += 1
+        
+        return {
+            "nodes": nodes,
+            "links": links,
+            "path_info": path_info,
+            "path_length": path_length
+        }
+        
+    except Exception as e:
+        print(f"获取最短路径失败: {str(e)}")
+        return {"nodes": [], "links": [], "error": str(e)}
+
+def get_one_two_hop_paths(driver, entity_a, entity_b):
+    """
+    获取实体A到实体B的一到两步关系路径
+    """
+    try:
+        query = """
+        MATCH p = (a:__Entity__)-[*1..2]-(b:__Entity__)
+        WHERE a.id = $entity_a AND b.id = $entity_b
+        RETURN p
+        """
+        
+        result = driver.execute_query(query, {
+            "entity_a": entity_a,
+            "entity_b": entity_b
+        })
+        
+        # 转换结果为可视化格式
+        nodes = []
+        links = []
+        paths_info = []
+        node_map = {}
+        link_map = {}
+        
+        for record in result.records:
+            path = record.get("p")
+            if path:
+                path_desc = []
+                
+                # 处理节点
+                for node in path.nodes:
+                    node_id = node.get("id")
+                    if node_id not in node_map:
+                        group = [label for label in node.labels if label != "__Entity__"]
+                        group = group[0] if group else "Unknown"
+                        
+                        node_data = {
+                            "id": node_id,
+                            "label": node_id,
+                            "description": node.get("description", ""),
+                            "group": group
+                        }
+                        nodes.append(node_data)
+                        node_map[node_id] = node_data
+                
+                # 处理关系并构建路径描述
+                prev_node = None
+                for i, node in enumerate(path.nodes):
+                    current_id = node.get("id")
+                    if prev_node:
+                        # 找到这两个节点之间的关系
+                        for rel in path.relationships:
+                            start_id = rel.start_node.get("id")
+                            end_id = rel.end_node.get("id")
+                            if (start_id == prev_node and end_id == current_id) or \
+                               (start_id == current_id and end_id == prev_node):
+                                
+                                link_key = f"{start_id}_{end_id}_{rel.type}"
+                                if link_key not in link_map:
+                                    link_data = {
+                                        "source": start_id,
+                                        "target": end_id,
+                                        "label": rel.type,
+                                        "weight": 1
+                                    }
+                                    links.append(link_data)
+                                    link_map[link_key] = link_data
+                                
+                                # 添加到路径描述
+                                path_desc.append(f"{prev_node} -[{rel.type}]-> {current_id}")
+                    
+                    prev_node = current_id
+                
+                # 添加完整路径描述
+                if path_desc:
+                    path_str = " ".join(path_desc)
+                    if path_str not in paths_info:
+                        paths_info.append(path_str)
+        
+        return {
+            "nodes": nodes,
+            "links": links,
+            "paths_info": paths_info,
+            "path_count": len(paths_info)
+        }
+        
+    except Exception as e:
+        print(f"获取一到两跳路径失败: {str(e)}")
+        return {"nodes": [], "links": [], "error": str(e)}
+
+def get_common_neighbors(driver, entity_a, entity_b):
+    """
+    找出与实体A和实体B相关联的实体（共同邻居）
+    """
+    try:
+        query = """
+        MATCH (a:__Entity__ {id: $entity_a})--(x)--(b:__Entity__ {id: $entity_b})
+        RETURN DISTINCT x
+        """
+        
+        result = driver.execute_query(query, {
+            "entity_a": entity_a,
+            "entity_b": entity_b
+        })
+        
+        # 转换结果为可视化格式
+        nodes = []
+        links = []
+        common_neighbors = []
+        node_ids = {entity_a, entity_b}
+        
+        # 首先添加A和B节点
+        a_node = {"id": entity_a, "label": entity_a, "group": "Source", "description": ""}
+        b_node = {"id": entity_b, "label": entity_b, "group": "Target", "description": ""}
+        nodes.append(a_node)
+        nodes.append(b_node)
+        
+        # 处理共同邻居
+        for record in result.records:
+            neighbor = record.get("x")
+            if neighbor:
+                neighbor_id = neighbor.get("id")
+                common_neighbors.append(neighbor_id)
+                
+                if neighbor_id not in node_ids:
+                    node_ids.add(neighbor_id)
+                    group = [label for label in neighbor.labels if label != "__Entity__"]
+                    group = group[0] if group else "Common"
+                    
+                    # 添加邻居节点
+                    nodes.append({
+                        "id": neighbor_id,
+                        "label": neighbor_id,
+                        "description": neighbor.get("description", ""),
+                        "group": group
+                    })
+                
+                # 添加到A和B的连接
+                links.append({
+                    "source": entity_a,
+                    "target": neighbor_id,
+                    "label": "连接",
+                    "weight": 1
+                })
+                
+                links.append({
+                    "source": neighbor_id,
+                    "target": entity_b,
+                    "label": "连接",
+                    "weight": 1
+                })
+        
+        return {
+            "nodes": nodes,
+            "links": links,
+            "common_neighbors": common_neighbors,
+            "neighbor_count": len(common_neighbors)
+        }
+        
+    except Exception as e:
+        print(f"获取共同邻居失败: {str(e)}")
+        return {"nodes": [], "links": [], "error": str(e)}
+
+def get_all_paths(driver, entity_a, entity_b, max_depth=3):
+    """查询两个实体之间的所有路径（有深度限制）"""
+    try: 
+        # 验证实体存在性
+        check_query = """
+        MATCH (a:__Entity__), (b:__Entity__)
+        WHERE a.id = $entity_a AND b.id = $entity_b
+        RETURN a.id AS id_a, b.id AS id_b
+        """
+        
+        check_result = driver.execute_query(check_query, {
+            "entity_a": entity_a,
+            "entity_b": entity_b
+        })
+        
+        if not check_result.records or len(check_result.records) == 0:
+            return {
+                "error": f"实体 '{entity_a}' 或 '{entity_b}' 不存在",
+                "nodes": [],
+                "links": []
+            }
+        
+        # 根据max_depth的值构建不同的查询
+        # Neo4j不允许在路径模式[*1..n]中使用参数，所以我们需要动态构建查询
+        if max_depth == 1:
+            path_pattern = "[*1..1]"
+        elif max_depth == 2:
+            path_pattern = "[*1..2]"
+        elif max_depth == 3:
+            path_pattern = "[*1..3]"
+        elif max_depth == 4:
+            path_pattern = "[*1..4]"
+        elif max_depth >= 5:
+            path_pattern = "[*1..5]"  # 限制最大深度为5
+        else:
+            path_pattern = "[*1..3]"  # 默认值
+            
+        query = f"""
+        MATCH p = (a:__Entity__)-{path_pattern}-(b:__Entity__)
+        WHERE a.id = $entity_a AND b.id = $entity_b
+        RETURN p
+        LIMIT 10
+        """
+        
+        print(f"执行查询: {query}")
+        result = driver.execute_query(query, {
+            "entity_a": entity_a,
+            "entity_b": entity_b
+        })
+        
+        # 转换结果为可视化格式
+        nodes = []
+        links = []
+        paths_info = []
+        node_map = {}
+        link_map = {}
+        
+        for record in result.records:
+            path = record.get("p")
+            if path:
+                path_desc = []
+                
+                # 处理节点
+                for node in path.nodes:
+                    node_id = node.get("id")
+                    if node_id not in node_map:
+                        group = [label for label in node.labels if label != "__Entity__"]
+                        group = group[0] if group else "Unknown"
+                        
+                        node_data = {
+                            "id": node_id,
+                            "label": node_id,
+                            "description": node.get("description", ""),
+                            "group": group
+                        }
+                        nodes.append(node_data)
+                        node_map[node_id] = node_data
+                
+                # 处理关系并构建路径描述
+                path_rels = []
+                for rel in path.relationships:
+                    start_id = rel.start_node.get("id")
+                    end_id = rel.end_node.get("id")
+                    
+                    link_key = f"{start_id}_{end_id}_{rel.type}"
+                    if link_key not in link_map:
+                        link_data = {
+                            "source": start_id,
+                            "target": end_id,
+                            "label": rel.type,
+                            "weight": 1
+                        }
+                        links.append(link_data)
+                        link_map[link_key] = link_data
+                    
+                    path_rels.append((start_id, rel.type, end_id))
+                
+                # 构建路径描述
+                if path_rels:
+                    path_str = " -> ".join([f"{start} -[{rel}]-> {end}" for start, rel, end in path_rels])
+                    if path_str not in paths_info:
+                        paths_info.append(path_str)
+        
+        return {
+            "nodes": nodes,
+            "links": links,
+            "paths_info": paths_info,
+            "path_count": len(paths_info)
+        }
+    except Exception as e:
+        print(f"获取所有路径失败: {str(e)}")
+        return {"nodes": [], "links": [], "error": str(e)}
+
+def get_entity_cycles(driver, entity_id, max_depth=4):
+    """查找实体的环路"""
+    try:
+        # 根据max_depth构建适当的路径模式
+        if max_depth == 1:
+            path_pattern = "[*1..1]"
+        elif max_depth == 2:
+            path_pattern = "[*1..2]"
+        elif max_depth == 3:
+            path_pattern = "[*1..3]"
+        elif max_depth == 4:
+            path_pattern = "[*1..4]"
+        else:
+            path_pattern = "[*1..4]"  # 限制最大为4，防止查询过于复杂
+        
+        query = f"""
+        MATCH p = (a:__Entity__)-{path_pattern}->(a)
+        WHERE a.id = $entity_id
+        RETURN p
+        LIMIT 10
+        """
+        
+        result = driver.execute_query(query, {
+            "entity_id": entity_id
+        })
+        
+        nodes = []
+        links = []
+        cycles_info = []
+        node_map = {}
+        link_map = {}
+        
+        for record in result.records:
+            path = record.get("p")
+            if path:
+                cycle_desc = []
+                
+                # 处理节点
+                for node in path.nodes:
+                    node_id = node.get("id")
+                    if node_id not in node_map:
+                        group = [label for label in node.labels if label != "__Entity__"]
+                        group = group[0] if group else "Unknown"
+                        
+                        node_data = {
+                            "id": node_id,
+                            "label": node_id,
+                            "description": node.get("description", ""),
+                            "group": group
+                        }
+                        nodes.append(node_data)
+                        node_map[node_id] = node_data
+                
+                # 处理关系并构建环路描述
+                cycle_rels = []
+                for rel in path.relationships:
+                    start_id = rel.start_node.get("id")
+                    end_id = rel.end_node.get("id")
+                    
+                    link_key = f"{start_id}_{end_id}_{rel.type}"
+                    if link_key not in link_map:
+                        link_data = {
+                            "source": start_id,
+                            "target": end_id,
+                            "label": rel.type,
+                            "weight": 1
+                        }
+                        links.append(link_data)
+                        link_map[link_key] = link_data
+                    
+                    cycle_rels.append((start_id, rel.type, end_id))
+                
+                # 构建环路描述
+                if cycle_rels:
+                    cycle_str = " -> ".join([f"{start} -[{rel}]-> {end}" for start, rel, end in cycle_rels])
+                    cycle_length = len(cycle_rels)
+                    cycle_info = {
+                        "description": cycle_str,
+                        "length": cycle_length
+                    }
+                    if cycle_str not in [c["description"] for c in cycles_info]:
+                        cycles_info.append(cycle_info)
+        
+        return {
+            "nodes": nodes,
+            "links": links,
+            "cycles_info": cycles_info,
+            "cycle_count": len(cycles_info)
+        }
+    except Exception as e:
+        print(f"查找环路失败: {str(e)}")
+        return {"nodes": [], "links": [], "error": str(e)}
+
+def get_entity_influence(driver, entity_id, max_depth=2):
+    """分析实体的影响范围"""
+    try:
+        # 根据max_depth构建路径模式
+        if max_depth == 1:
+            path_pattern = "[*1..1]"
+        elif max_depth == 2:
+            path_pattern = "[*1..2]"
+        elif max_depth == 3:
+            path_pattern = "[*1..3]"
+        else:
+            path_pattern = "[*1..2]"  # 默认值
+        
+        query = f"""
+        MATCH p = (a:__Entity__)-{path_pattern}-(b:__Entity__)
+        WHERE a.id = $entity_id
+        RETURN p
+        LIMIT 100
+        """
+        
+        result = driver.execute_query(query, {
+            "entity_id": entity_id
+        })
+
+        nodes = []
+        links = []
+        node_map = {}
+        link_map = {}
+        direct_connections = set()
+        connection_types = {}
+        
+        # 首先添加中心实体
+        center_node = {
+            "id": entity_id,
+            "label": entity_id,
+            "description": "",
+            "group": "Center"
+        }
+        nodes.append(center_node)
+        node_map[entity_id] = center_node
+        
+        for record in result.records:
+            path = record.get("p")
+            if path:
+                # 处理节点
+                for node in path.nodes:
+                    node_id = node.get("id")
+                    if node_id != entity_id and node_id not in node_map:
+                        group = [label for label in node.labels if label != "__Entity__"]
+                        group = group[0] if group else "Unknown"
+                        
+                        # 根据与中心实体的距离设置不同的组
+                        for i, path_node in enumerate(path.nodes):
+                            if path_node.get("id") == node_id:
+                                # 计算到中心节点的距离
+                                if i == 1 or i == len(path.nodes) - 2:  # 直接相邻
+                                    group = "Level1"
+                                    direct_connections.add(node_id)
+                                else:
+                                    group = f"Level{min(i, len(path.nodes) - i - 1)}"
+                                break
+                        
+                        node_data = {
+                            "id": node_id,
+                            "label": node_id,
+                            "description": node.get("description", ""),
+                            "group": group
+                        }
+                        nodes.append(node_data)
+                        node_map[node_id] = node_data
+                
+                # 处理关系
+                for rel in path.relationships:
+                    start_id = rel.start_node.get("id")
+                    end_id = rel.end_node.get("id")
+                    rel_type = rel.type
+                    
+                    # 统计关系类型
+                    if rel_type not in connection_types:
+                        connection_types[rel_type] = 0
+                    connection_types[rel_type] += 1
+                    
+                    link_key = f"{start_id}_{end_id}_{rel_type}"
+                    if link_key not in link_map:
+                        link_data = {
+                            "source": start_id,
+                            "target": end_id,
+                            "label": rel_type,
+                            "weight": 1
+                        }
+                        links.append(link_data)
+                        link_map[link_key] = link_data
+        
+        # 构建返回结果
+        influence_stats = {
+            "direct_connections": len(direct_connections),
+            "total_connections": len(nodes) - 1,  # 减去中心节点自身
+            "connection_types": [{"type": k, "count": v} for k, v in connection_types.items()],
+            "relation_distribution": connection_types
+        }
+        
+        return {
+            "nodes": nodes,
+            "links": links,
+            "influence_stats": influence_stats
+        }
+    except Exception as e:
+        print(f"分析实体影响范围失败: {str(e)}")
+        return {"nodes": [], "links": [], "error": str(e)}
+
+def get_simplified_community(driver, entity_id, max_depth=2):
+    """使用简化的方法获取实体所属社区"""
+    try:
+        # 验证实体存在性
+        check_query = """
+        MATCH (a:__Entity__)
+        WHERE a.id = $entity_id
+        RETURN a.id AS id, labels(a) AS labels
+        """
+        
+        check_result = driver.execute_query(check_query, {
+            "entity_id": entity_id
+        })
+        
+        # 如果实体不存在，返回错误信息
+        if not check_result.records or len(check_result.records) == 0:
+            print(f"实体不存在: {entity_id}")
+            return {
+                "error": f"实体 '{entity_id}' 不存在",
+                "nodes": [],
+                "links": []
+            }
+            
+        entity_record = check_result.records[0]
+        print(f"实体存在: {entity_record['id']}, 标签: {entity_record['labels']}")
+        
+        # 根据max_depth构建路径模式
+        if max_depth == 1:
+            path_pattern = "[*0..1]"
+        elif max_depth == 2:
+            path_pattern = "[*0..2]"
+        elif max_depth == 3:
+            path_pattern = "[*0..3]"
+        else:
+            path_pattern = "[*0..2]"  # 默认值
+        
+        # 获取实体所在的N跳邻居
+        neighbors_query = f"""
+        MATCH p = (a:__Entity__)-{path_pattern}-(b:__Entity__)
+        WHERE a.id = $entity_id
+        RETURN DISTINCT b
+        LIMIT 100
+        """
+        
+        # 执行查询并处理结果
+        neighbors_result = driver.execute_query(neighbors_query, {
+            "entity_id": entity_id
+        })
+        
+        print(f"获取到 {len(neighbors_result.records)} 个邻居")
+        
+        # 提取邻居ID
+        entity_ids = []
+        nodes = []
+        node_map = {}
+        
+        for record in neighbors_result.records:
+            entity = record.get("b")
+            if entity:
+                # 处理返回的实体数据
+                try:
+                    node_id = None
+                    node_labels = []
+                    
+                    # 检查是否为节点对象或字典
+                    if hasattr(entity, 'get'):  # 字典类型
+                        node_id = entity.get("id")
+                        # 尝试获取标签，可能存在不同形式
+                        if "labels" in entity:
+                            node_labels = entity["labels"]
+                        elif "_labels" in entity:
+                            node_labels = entity["_labels"]
+                    elif hasattr(entity, 'id'):  # 节点对象
+                        node_id = entity.id
+                        if hasattr(entity, 'labels'):
+                            node_labels = entity.labels
+                    else:
+                        # 如果是其他类型，尝试转为字符串
+                        node_id = str(entity)
+                
+                    if node_id and node_id not in node_map:
+                        # 从标签中确定组类型
+                        group = "Unknown"
+                        if isinstance(node_labels, list):
+                            non_entity_labels = [lbl for lbl in node_labels if lbl != "__Entity__"]
+                            if non_entity_labels:
+                                group = non_entity_labels[0]
+                        elif isinstance(node_labels, (str, dict)):
+                            # 处理其他可能的标签格式
+                            group = str(node_labels)
+                        
+                        # 标记中心实体
+                        if node_id == entity_id:
+                            group = "Center"
+                        
+                        # 获取描述，安全方式
+                        description = ""
+                        if hasattr(entity, 'get'):
+                            description = entity.get("description", "")
+                        elif hasattr(entity, 'description'):
+                            description = entity.description
+                        
+                        node_data = {
+                            "id": node_id,
+                            "label": node_id,
+                            "description": description,
+                            "group": group,
+                            "community": None  # 先初始化为None
+                        }
+                        nodes.append(node_data)
+                        node_map[node_id] = node_data
+                        entity_ids.append(node_id)
+                except Exception as e:
+                    print(f"处理节点数据时出错: {e}")
+                    continue
+        
+        # 获取这些邻居之间的关系
+        relations_query = """
+        MATCH (a:__Entity__)-[r]-(b:__Entity__)
+        WHERE a.id IN $entity_ids AND b.id IN $entity_ids AND a.id <> b.id
+        RETURN DISTINCT a.id as source, b.id as target, type(r) as rel_type
+        LIMIT 500
+        """
+        
+        relations_result = driver.execute_query(relations_query, {
+            "entity_ids": entity_ids
+        })
+        
+        print(f"获取到 {len(relations_result.records)} 条关系")
+        
+        # 提取关系
+        links = []
+        link_map = {}
+        
+        for record in relations_result.records:
+            source_id = record.get("source")
+            target_id = record.get("target") 
+            rel_type = record.get("rel_type")
+            
+            if source_id and target_id and rel_type:
+                link_key = f"{source_id}_{target_id}_{rel_type}"
+                if link_key not in link_map:
+                    link_data = {
+                        "source": source_id,
+                        "target": target_id,
+                        "label": rel_type,
+                        "weight": 1
+                    }
+                    links.append(link_data)
+                    link_map[link_key] = link_data
+        
+        # 使用简单的社区检测模拟
+        communities = {}
+        node_communities = {}
+        
+        # 计算节点的邻居集
+        neighbors = {}
+        for link in links:
+            source = link["source"]
+            target = link["target"]
+            
+            if source not in neighbors:
+                neighbors[source] = set()
+            if target not in neighbors:
+                neighbors[target] = set()
+                
+            neighbors[source].add(target)
+            neighbors[target].add(source)
+        
+        # 分配社区ID（基于连通分量的简单社区检测）
+        community_id = 0
+        visited = set()
+        min_community_size = 2
+        
+         # 先识别主要社区
+        for node_id in entity_ids:
+            if node_id not in visited and len(neighbors.get(node_id, [])) >= 1:  # 至少有一个邻居
+                # 开始一个新社区
+                temp_community = []
+                queue = [node_id]
+                temp_visited = set([node_id])
+                
+                while queue:
+                    current = queue.pop(0)
+                    temp_community.append(current)
+                    
+                    # 检查邻居
+                    for neighbor in neighbors.get(current, []):
+                        if neighbor not in temp_visited:
+                            temp_visited.add(neighbor)
+                            queue.append(neighbor)
+                
+                # 只有社区大小达到阈值才保留
+                if len(temp_community) >= min_community_size:
+                    community_id += 1
+                    communities[community_id] = temp_community
+                    for member in temp_community:
+                        node_communities[member] = community_id
+                        visited.add(member)
+        
+        # 处理剩余孤立节点，将它们归入最近的社区或中心实体的社区
+        for node_id in entity_ids:
+            if node_id not in visited:
+                # 如果是中心实体，创建自己的社区
+                if node_id == entity_id:
+                    community_id += 1
+                    communities[community_id] = [node_id]
+                    node_communities[node_id] = community_id
+                    visited.add(node_id)
+                else:
+                    # 查找与该节点最相关的社区
+                    best_community = None
+                    best_score = 0
+                    
+                    for comm_id, members in communities.items():
+                        score = 0
+                        for member in members:
+                            if member in neighbors.get(node_id, []):
+                                score += 1
+                        
+                        if score > best_score:
+                            best_score = score
+                            best_community = comm_id
+                    
+                    # 如果找到相关社区，加入该社区
+                    if best_community and best_score > 0:
+                        communities[best_community].append(node_id)
+                        node_communities[node_id] = best_community
+                        visited.add(node_id)
+                    # 否则，如果有中心实体社区，加入中心实体社区
+                    elif entity_id in node_communities:
+                        center_community = node_communities[entity_id]
+                        communities[center_community].append(node_id)
+                        node_communities[node_id] = center_community
+                        visited.add(node_id)
+        
+        # 更新节点的社区信息
+        for node in nodes:
+            node_id = node["id"]
+            if node_id in node_communities:
+                node["community"] = node_communities[node_id]
+                # 更新节点组以反映社区
+                if node_id != entity_id:  # 保持中心节点的组
+                    node["group"] = f"Community{node_communities[node_id]}"
+        
+        # 汇总社区统计信息
+        community_stats = []
+        for comm_id, members in communities.items():
+            if members:
+                is_center_in = entity_id in members
+                comm_links = [link for link in links if link["source"] in members and link["target"] in members]
+                
+                # 计算密度 (在大型图中可能需要进一步优化)
+                member_count = len(members)
+                possible_links = max(1, member_count * (member_count - 1) / 2)
+                density = len(comm_links) / possible_links
+                
+                community_stats.append({
+                    "id": comm_id,
+                    "size": member_count,
+                    "density": density,
+                    "contains_center": is_center_in,
+                    "sample_members": members[:min(5, member_count)]
+                })
+        
+        # 过滤微小社区（只有一个成员且不包含中心实体）
+        filtered_communities = {}
+        filtered_stats = []
+        filtered_count = 0
+
+        for comm_id, members in communities.items():
+            # 保留包含中心实体的社区或成员数大于1的社区
+            if entity_id in members or len(members) > 1:
+                filtered_communities[filtered_count + 1] = members
+                
+                # 更新对应的社区统计信息
+                for stat in community_stats:
+                    if stat["id"] == comm_id:
+                        stat_copy = stat.copy()
+                        stat_copy["id"] = filtered_count + 1
+                        filtered_stats.append(stat_copy)
+                        break
+                        
+                filtered_count += 1
+
+        # 使用过滤后的社区数据
+        return {
+            "nodes": nodes,
+            "links": links,
+            "communities": filtered_stats,
+            "community_count": filtered_count,
+            "entity_community": 1 if entity_id in node_communities else None
+        }
+    except Exception as e:
+        print(f"简化社区检测失败: {str(e)}")
+        traceback.print_exc()
+        return {"nodes": [], "links": [], "error": str(e)}

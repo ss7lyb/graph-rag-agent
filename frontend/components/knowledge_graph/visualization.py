@@ -27,21 +27,35 @@ def visualize_knowledge_graph(kg_data):
         ### 显示设置
         """)
         
+        # 为每个checkbox添加唯一的key参数
+        # 通过使用随机生成或基于kg_data一部分内容的哈希值创建唯一键
+        import hashlib
+        
+        # 基于kg_data的节点数量和时间戳创建哈希值的一部分
+        import time
+        timestamp = str(time.time())
+        node_count = str(len(kg_data["nodes"]))
+        base_key = hashlib.md5((node_count + timestamp).encode()).hexdigest()[:8]
+        
         col1, col2 = st.columns(2)
         with col1:
             physics_enabled = st.checkbox("启用物理引擎", 
                                        value=st.session_state.kg_display_settings["physics_enabled"],
+                                       key=f"physics_enabled_{base_key}",
                                        help="控制节点是否可以动态移动")
             node_size = st.slider("节点大小", 10, 50, 
                                 st.session_state.kg_display_settings["node_size"],
+                                key=f"node_size_{base_key}",
                                 help="调整节点的大小")
         
         with col2:
             edge_width = st.slider("连接线宽度", 1, 10, 
                                  st.session_state.kg_display_settings["edge_width"],
+                                 key=f"edge_width_{base_key}", 
                                  help="调整连接线的宽度")
             spring_length = st.slider("弹簧长度", 50, 300, 
                                     st.session_state.kg_display_settings["spring_length"],
+                                    key=f"spring_length_{base_key}", 
                                     help="调整节点之间的距离")
         
         # 更新设置

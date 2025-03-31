@@ -50,18 +50,18 @@ class EmbeddingManager:
         try:
             # 添加实体修改时间追踪
             self.graph.query("""
-            MATCH (e:`__Entity__`)
-            WHERE NOT EXISTS(e.created_at)
-            SET e.created_at = datetime()
+                MATCH (e:`__Entity__`)
+                WHERE e.created_at IS NULL
+                SET e.created_at = datetime()
             """)
-            
+
             # 添加Chunk修改时间追踪
             self.graph.query("""
-            MATCH (c:`__Chunk__`)
-            WHERE NOT EXISTS(c.created_at)
-            SET c.created_at = datetime()
+                MATCH (c:`__Chunk__`)
+                WHERE c.created_at IS NULL
+                SET c.created_at = datetime()
             """)
-            
+
             self.console.print("[green]Embedding更新追踪设置完成[/green]")
             
         except Exception as e:
@@ -80,12 +80,10 @@ class EmbeddingManager:
         query = """
         MATCH (e:`__Entity__`)
         WHERE e.embedding IS NULL 
-           OR e.needs_reembedding = true
-           OR (EXISTS(e.last_updated) AND 
-               (NOT EXISTS(e.last_embedded) OR e.last_updated > e.last_embedded))
-        RETURN id(e) AS neo4j_id,
-               e.id AS entity_id, 
-               CASE WHEN e.description IS NOT NULL THEN e.description ELSE e.id END AS text
+        OR (e.needs_reembedding IS NOT NULL AND e.needs_reembedding = true)
+        RETURN elementId(e) AS neo4j_id,
+            e.id AS entity_id, 
+            CASE WHEN e.description IS NOT NULL THEN e.description ELSE e.id END AS text
         LIMIT $limit
         """
         
@@ -105,10 +103,10 @@ class EmbeddingManager:
         query = """
         MATCH (c:`__Chunk__`)
         WHERE c.embedding IS NULL 
-           OR c.needs_reembedding = true
-           OR (EXISTS(c.last_updated) AND 
-               (NOT EXISTS(c.last_embedded) OR c.last_updated > c.last_embedded))
-        RETURN id(c) AS neo4j_id,
+            OR c.needs_reembedding = true
+            OR (c.last_updated IS NOT NULL AND 
+                (c.last_embedded IS NULL OR c.last_updated > c.last_embedded))
+        RETURN elementId(c) AS neo4j_id,
                c.id AS chunk_id, 
                c.text AS text
         LIMIT $limit
@@ -136,7 +134,7 @@ class EmbeddingManager:
             query = f"""
             MATCH (e:`__Entity__`)
             WHERE e.id IN [{id_list}]
-            RETURN id(e) AS neo4j_id,
+            RETURN elementId(e) AS neo4j_id,
                    e.id AS entity_id, 
                    CASE WHEN e.description IS NOT NULL THEN e.description ELSE e.id END AS text
             """
@@ -181,7 +179,7 @@ class EmbeddingManager:
                 if updates:
                     query = """
                     UNWIND $updates AS update
-                    MATCH (e) WHERE id(e) = update.neo4j_id
+                    MATCH (e) WHERE elementId(e) = update.neo4j_id
                     SET e.embedding = update.embedding,
                         e.last_embedded = datetime(),
                         e.needs_reembedding = false
@@ -233,7 +231,7 @@ class EmbeddingManager:
             query = f"""
             MATCH (c:`__Chunk__`)
             WHERE c.id IN [{id_list}]
-            RETURN id(c) AS neo4j_id,
+            RETURN elementId(c) AS neo4j_id,
                    c.id AS chunk_id, 
                    c.text AS text
             """
@@ -278,7 +276,7 @@ class EmbeddingManager:
                 if updates:
                     query = """
                     UNWIND $updates AS update
-                    MATCH (c) WHERE id(c) = update.neo4j_id
+                    MATCH (c) WHERE elementId(c) = update.neo4j_id
                     SET c.embedding = update.embedding,
                         c.last_embedded = datetime(),
                         c.needs_reembedding = false

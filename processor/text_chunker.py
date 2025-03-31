@@ -1,7 +1,5 @@
 import hanlp
 from typing import List, Tuple
-from config.settings import CHUNK_SIZE, OVERLAP, FILES_DIR
-from processor.file_reader import FileReader
 
 class ChineseTextChunker:
     """中文文本分块器，将长文本分割成带有重叠的文本块"""
@@ -135,28 +133,3 @@ class ChineseTextChunker:
             if self._is_sentence_end(tokens[i]):
                 return i + 1
         return 0
-    
-
-if __name__ == '__main__':
-    # 读取文件
-    fr = FileReader(FILES_DIR)
-    file_contents = fr.read_txt_files()
-    
-    # 创建分块器实例
-    chunker = ChineseTextChunker(CHUNK_SIZE, OVERLAP)
-    
-    # 处理每个文件并添加chunks到file_contents
-    for file_content in file_contents:
-        print("文件名:", file_content[0])
-        chunks = chunker.chunk_text(file_content[1])
-        file_content.append(chunks)
-    
-    # 打印分块结果
-    for file_content in file_contents:
-        print(f"File: {file_content[0]} Chunks: {len(file_content[2])}")
-        for i, chunk in enumerate(file_content[2]):
-            print(f"Chunk {i+1}: {len(chunk)} tokens.")
-    
-    # 打印第一个文件的第一个分块内容
-    if file_contents:
-        print(''.join(file_contents[0][2][0]))

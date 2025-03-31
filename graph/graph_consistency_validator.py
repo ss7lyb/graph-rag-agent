@@ -115,7 +115,7 @@ class GraphConsistencyValidator:
         """
         query = """
         MATCH (c:`__Chunk__`)
-        WHERE NOT exists(c.text) OR c.text = ''
+        WHERE c.text IS NULL OR c.text = ''
         RETURN c.id AS chunk_id, count(c) AS count
         """
         
@@ -129,7 +129,7 @@ class GraphConsistencyValidator:
             # 获取最多1000个空Chunk ID
             id_query = """
             MATCH (c:`__Chunk__`)
-            WHERE NOT exists(c.text) OR c.text = ''
+            WHERE c.text IS NULL OR c.text = ''
             RETURN c.id AS chunk_id
             LIMIT 1000
             """
@@ -321,7 +321,7 @@ class GraphConsistencyValidator:
         repair_query = """
         UNWIND $empty_ids AS chunk_id
         MATCH (c:`__Chunk__` {id: chunk_id})
-        WHERE NOT exists(c.text) OR c.text = ''
+        WHERE c.text IS NULL OR c.text = ''
         SET c.text = '[Empty Chunk]', c.repaired = true
         RETURN count(*) AS repaired
         """

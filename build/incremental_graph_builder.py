@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.table import Table
 
 from config.neo4jdb import get_db_manager
-from file_change_manager import FileChangeManager
+from build.incremental.file_change_manager import FileChangeManager
 from graph.indexing.embedding_manager import EmbeddingManager
 
 class IncrementalGraphUpdater:
@@ -445,7 +445,7 @@ class IncrementalGraphUpdater:
                t.id AS target,
                type(r) AS type,
                properties(r) AS properties,
-               CASE WHEN exists(r.last_updated) THEN r.last_updated ELSE null END AS last_updated
+               CASE WHEN r.last_updated IS NOT NULL THEN r.last_updated ELSE null END AS last_updated
         """
         
         edge_result = self.graph.query(edge_query)

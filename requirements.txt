@@ -27,6 +27,7 @@ pyyaml>=6.0
 pyvis==0.3.2
 Requests==2.32.3
 rich==13.9.4
+schedule==1.2.2
 scikit-learn==1.6.1
 setuptools==75.8.0
 shutup==0.2.0

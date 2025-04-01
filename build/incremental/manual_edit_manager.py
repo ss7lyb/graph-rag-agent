@@ -5,6 +5,7 @@ from typing import Dict, List, Any
 from rich.console import Console
 from rich.table import Table
 from config.neo4jdb import get_db_manager
+from config.settings import conflict_strategy
 
 class ManualEditManager:
     """
@@ -21,14 +22,9 @@ class ManualEditManager:
         self.console = Console()
         self.graph = get_db_manager().graph
 
-        # 先预备生成空属性
-        self.graph.query("""
-        MATCH (e:`__Entity__`)
-        SET e.manual_edit = coalesce(e.manual_edit, false),
-            e.protected = coalesce(e.protected, false)
-        """)
+       # 初始化实体和关系的必要属性
+        self.initialize_entity_properties()
 
-        
         # 性能计时器
         self.detection_time = 0
         self.sync_time = 0
@@ -40,46 +36,128 @@ class ManualEditManager:
             "preserved_edits": 0,
             "conflicts_resolved": 0
         }
+
+    def initialize_entity_properties(self):
+        """
+        初始化实体的常用属性，仅对缺少属性的节点进行初始化，不覆盖已有的值
+        """
+        try:
+            # 初始化manual_edit属性
+            self.graph.query("""
+            MATCH (e:`__Entity__`)
+            WHERE e.manual_edit IS NULL
+            SET e.manual_edit = false
+            """)
+            
+            # 初始化created_by属性
+            self.graph.query("""
+            MATCH (e:`__Entity__`)
+            WHERE e.created_by IS NULL
+            SET e.created_by = null
+            """)
+            
+            # 初始化edited_by属性
+            self.graph.query("""
+            MATCH (e:`__Entity__`)
+            WHERE e.edited_by IS NULL
+            SET e.edited_by = null
+            """)
+            
+            # 初始化created_at属性
+            self.graph.query("""
+            MATCH (e:`__Entity__`)
+            WHERE e.created_at IS NULL
+            SET e.created_at = datetime()
+            """)
+            
+            # 初始化system_generated属性
+            self.graph.query("""
+            MATCH (e:`__Entity__`)
+            WHERE e.system_generated IS NULL
+            SET e.system_generated = true
+            """)
+            
+            # 同样为关系初始化属性
+            self.graph.query("""
+            MATCH ()-[r]->()
+            WHERE r.manual_edit IS NULL
+            SET r.manual_edit = false
+            """)
+            
+            self.graph.query("""
+            MATCH ()-[r]->()
+            WHERE r.created_by IS NULL
+            SET r.created_by = null
+            """)
+            
+            self.graph.query("""
+            MATCH ()-[r]->()
+            WHERE r.edited_by IS NULL
+            SET r.edited_by = null
+            """)
+            
+            self.console.print("[green]实体和关系属性初始化完成[/green]")
+        except Exception as e:
+            self.console.print(f"[yellow]初始化属性时出错: {e}[/yellow]")
     
     def _setup_manual_edit_tracking(self):
         """
         设置手动编辑追踪，确保数据库支持追踪手动编辑
         """
         try:
+            # 检查是否是集群模式，如果是，检查当前节点角色
+            try:
+                cluster_role = self.graph.query("CALL dbms.cluster.role()")
+                if cluster_role and cluster_role[0].get("role") == "FOLLOWER":
+                    self.console.print("[yellow]当前节点为FOLLOWER，无法设置触发器，跳过...[/yellow]")
+                    return
+            except Exception as e:
+                self.console.print(f"[yellow]检查集群角色时出错: {e}[/yellow]")
+                
+            # 查询当前数据库名称
+            try:
+                db_info = self.graph.query("CALL db.info()")
+                db_name = db_info[0]["name"] if db_info and "name" in db_info[0] else "neo4j"
+            except:
+                db_name = "neo4j"  # 默认数据库名称
+                
             # 添加时间戳触发器追踪节点和关系的创建/修改时间
-            self.graph.query("""
-            CALL apoc.trigger.add(
-            'updateTimestamps',
-            '
-            UNWIND $assignedLabels AS label
-            UNWIND $createdNodes AS n
-            WITH n WHERE label = "__Entity__" AND label IN labels(n)
-            SET n.updated_at = datetime(),
-                n.created_at = coalesce(n.created_at, datetime())
-            ',
-            {phase: 'after'}
-            )
-            """)
-            
-            self.console.print("[green]成功设置节点时间戳追踪[/green]")
-            
-            # 添加关系时间戳触发器
-            self.graph.query("""
-            CALL apoc.trigger.add(
-            'updateTimestamps',
-            '
-            UNWIND $assignedLabels AS label
-            UNWIND $createdNodes AS n
-            WITH n WHERE label = "__Entity__" AND label IN labels(n)
-            SET n.updated_at = datetime(),
-                n.created_at = coalesce(n.created_at, datetime())
-            ',
-            {phase: 'after'}
-            )
-            """)
-            
-            self.console.print("[green]成功设置关系时间戳追踪[/green]")
-            
+            try:
+                self.graph.query(f"""
+                CALL apoc.trigger.install(
+                '{db_name}',
+                'updateNodeTimestamps',
+                '
+                UNWIND $assignedLabels AS label
+                UNWIND $createdNodes AS n
+                WITH n WHERE label = "__Entity__" AND label IN labels(n)
+                SET n.updated_at = datetime(),
+                    n.created_at = coalesce(n.created_at, datetime())
+                ',
+                {{phase: 'after'}}
+                )
+                """)
+                
+                self.console.print("[green]成功设置节点时间戳追踪[/green]")
+                
+                # 添加关系时间戳触发器
+                self.graph.query(f"""
+                CALL apoc.trigger.install(
+                '{db_name}',
+                'updateRelationshipTimestamps',
+                '
+                UNWIND $createdRelationships AS r
+                SET r.updated_at = datetime(),
+                    r.created_at = coalesce(r.created_at, datetime())
+                ',
+                {{phase: 'after'}}
+                )
+                """)
+                
+                self.console.print("[green]成功设置关系时间戳追踪[/green]")
+            except Exception as trigger_error:
+                self.console.print(f"[yellow]设置触发器时出错: {trigger_error}[/yellow]")
+                
         except Exception as e:
             self.console.print(f"[yellow]设置手动编辑追踪时出错 (可能APOC未安装): {e}[/yellow]")
             self.console.print("[yellow]将使用基础的手动编辑检测方法[/yellow]")
@@ -93,43 +171,79 @@ class ManualEditManager:
         """
         start_time = time.time()
         
-        # 1. 检测手动创建的实体节点
-        manual_entity_query = """
-        MATCH (e:`__Entity__`)
-        WHERE (e.manual_edit IS NOT NULL AND e.manual_edit = true)
-            OR (e.created_by IS NOT NULL)
-            OR (e.edited_by IS NOT NULL)
-        RETURN count(e) AS manual_entities
-        """
-        
-        entity_result = self.graph.query(manual_entity_query)
-        manual_entities = entity_result[0]["manual_entities"] if entity_result else 0
-        
-        # 2. 检测手动创建的关系
-        manual_relation_query = """
-        MATCH ()-[r]->()
-        WHERE r.manual_edit = true 
-           OR r.created_by IS NOT NULL
-           OR r.edited_by IS NOT NULL
-        RETURN count(r) AS manual_relations
-        """
-        
-        relation_result = self.graph.query(manual_relation_query)
-        manual_relations = relation_result[0]["manual_relations"] if relation_result else 0
-        
-        # 3. 检测通过时间戳识别的可能手动编辑
-        # 如果支持时间戳追踪，则可以通过比较创建时间和文档处理时间来识别
-        timestamp_query = """
-        MATCH (e:`__Entity__`) 
-        WHERE e.created_at IS NOT NULL 
-          AND e.generated_by_system IS NULL
-        RETURN count(e) AS timestamp_entities
-        """
-        
+        # 检查属性是否存在
         try:
-            timestamp_result = self.graph.query(timestamp_query)
-            timestamp_entities = timestamp_result[0]["timestamp_entities"] if timestamp_result else 0
-        except:
+            props_result = self.graph.query("""
+            CALL db.propertyKeys() YIELD propertyKey
+            RETURN collect(propertyKey) AS all_props
+            """)
+            
+            all_props = props_result[0]["all_props"] if props_result and props_result[0]["all_props"] else []
+            
+            # 1. 检测手动创建的实体节点 - 构建动态查询
+            entity_clauses = []
+            if "manual_edit" in all_props:
+                entity_clauses.append("e.manual_edit = true")
+            if "created_by" in all_props:
+                entity_clauses.append("e.created_by IS NOT NULL")
+            if "edited_by" in all_props:
+                entity_clauses.append("e.edited_by IS NOT NULL")
+                
+            # 如果没有可用条件，使用一个始终为假的条件
+            if not entity_clauses:
+                entity_clauses.append("false")
+                
+            manual_entity_query = f"""
+            MATCH (e:`__Entity__`)
+            WHERE {" OR ".join(entity_clauses)}
+            RETURN count(e) AS manual_entities
+            """
+            
+            entity_result = self.graph.query(manual_entity_query)
+            manual_entities = entity_result[0]["manual_entities"] if entity_result else 0
+            
+            # 2. 检测手动创建的关系 - 构建动态查询
+            rel_clauses = []
+            if "manual_edit" in all_props:
+                rel_clauses.append("r.manual_edit = true")
+            if "created_by" in all_props:
+                rel_clauses.append("r.created_by IS NOT NULL")
+            if "edited_by" in all_props:
+                rel_clauses.append("r.edited_by IS NOT NULL")
+                
+            # 如果没有可用条件，使用一个始终为假的条件
+            if not rel_clauses:
+                rel_clauses.append("false")
+                
+            manual_relation_query = f"""
+            MATCH ()-[r]->()
+            WHERE {" OR ".join(rel_clauses)}
+            RETURN count(r) AS manual_relations
+            """
+            
+            relation_result = self.graph.query(manual_relation_query)
+            manual_relations = relation_result[0]["manual_relations"] if relation_result else 0
+            
+            # 3. 检测通过时间戳识别的可能手动编辑
+            timestamp_entities = 0
+            if "created_at" in all_props and "system_generated" in all_props:
+                timestamp_query = """
+                MATCH (e:`__Entity__`) 
+                WHERE e.created_at IS NOT NULL 
+                AND e.system_generated = false
+                RETURN count(e) AS timestamp_entities
+                """
+                
+                try:
+                    timestamp_result = self.graph.query(timestamp_query)
+                    timestamp_entities = timestamp_result[0]["timestamp_entities"] if timestamp_result else 0
+                except:
+                    timestamp_entities = 0
+            
+        except Exception as e:
+            self.console.print(f"[yellow]检测手动编辑时出错: {e}[/yellow]")
+            manual_entities = 0
+            manual_relations = 0
             timestamp_entities = 0
         
         # 更新统计
@@ -142,7 +256,7 @@ class ManualEditManager:
         # 显示检测结果
         self.console.print(f"[blue]手动编辑检测完成，耗时: {self.detection_time:.2f}秒[/blue]")
         self.console.print(f"[blue]检测到 {manual_entities} 个手动编辑的实体节点，"
-                          f"{manual_relations} 个手动编辑的关系[/blue]")
+                        f"{manual_relations} 个手动编辑的关系[/blue]")
         
         return {
             "manual_entities": manual_entities,
@@ -242,28 +356,50 @@ class ManualEditManager:
         
         return preserved_count
     
-    def resolve_conflicts(self, conflict_strategy: str = "manual_first") -> int:
+    def resolve_conflicts(self, conflict_strategy: str = conflict_strategy) -> int:
         """
         解决自动更新和手动编辑之间的冲突
         
         Args:
             conflict_strategy: 冲突解决策略，可以是 "manual_first"（优先保留手动编辑），
-                              "auto_first"（优先自动更新）或 "merge"（尝试合并）
+                            "auto_first"（优先自动更新）或 "merge"（尝试合并）
             
         Returns:
             int: 解决的冲突数量
         """
         start_time = time.time()
         
-        # 查找可能的冲突节点
-        conflict_query = """
-        MATCH (e:`__Entity__`)
-        WHERE (e.manual_edit = true OR e.edited_by IS NOT NULL)
-          AND e.system_generated = true
-        RETURN e.id AS entity_id, e.type AS entity_type
-        """
-        
+        # 检查属性是否存在
         try:
+            props_result = self.graph.query("""
+            CALL db.propertyKeys() YIELD propertyKey
+            RETURN collect(propertyKey) AS all_props
+            """)
+            
+            all_props = props_result[0]["all_props"] if props_result and props_result[0]["all_props"] else []
+            
+            # 构建动态查询条件
+            where_clauses = []
+            if "manual_edit" in all_props:
+                where_clauses.append("e.manual_edit = true")
+            if "edited_by" in all_props:
+                where_clauses.append("e.edited_by IS NOT NULL")
+                
+            # 系统生成条件
+            system_cond = "e.system_generated = true" if "system_generated" in all_props else "true"
+            
+            # 如果没有可用条件，使用一个始终为假的条件
+            if not where_clauses:
+                where_clauses.append("false")
+            
+            # 查找可能的冲突节点
+            conflict_query = f"""
+            MATCH (e:`__Entity__`)
+            WHERE ({" OR ".join(where_clauses)})
+            AND {system_cond}
+            RETURN e.id AS entity_id, e.type AS entity_type
+            """
+            
             conflicts = self.graph.query(conflict_query)
         except Exception as e:
             self.console.print(f"[yellow]查找冲突节点时出错: {e}[/yellow]")
@@ -281,21 +417,32 @@ class ManualEditManager:
                     resolution_query = """
                     MATCH (e:`__Entity__` {id: $entity_id})
                     SET e.conflict_resolved = true,
-                        e.conflict_resolution = 'manual_preferred',
-                        e.system_generated = null
-                    RETURN e.id
+                        e.conflict_resolution = 'manual_preferred'
                     """
+                    
+                    # 如果有system_generated属性，添加设置
+                    if "system_generated" in all_props:
+                        resolution_query += ",\n    e.system_generated = false"
+                    
+                    resolution_query += "\nRETURN e.id"
                 
                 elif conflict_strategy == "auto_first":
                     # 优先自动更新，移除手动编辑标记
                     resolution_query = """
                     MATCH (e:`__Entity__` {id: $entity_id})
                     SET e.conflict_resolved = true,
-                        e.conflict_resolution = 'auto_preferred',
-                        e.manual_edit = null,
-                        e.edited_by = null
-                    RETURN e.id
+                        e.conflict_resolution = 'auto_preferred'
                     """
+                    
+                    # 如果有manual_edit属性，添加设置
+                    if "manual_edit" in all_props:
+                        resolution_query += ",\n    e.manual_edit = false"
+                    
+                    # 如果有edited_by属性，添加设置
+                    if "edited_by" in all_props:
+                        resolution_query += ",\n    e.edited_by = null"
+                    
+                    resolution_query += "\nRETURN e.id"
                 
                 else:  # "merge" 策略
                     # 尝试合并两种编辑

@@ -24,6 +24,9 @@ relationship_types=[
     "互斥",
 ]
 
+# 增量更新设置：冲突解决策略（新文件和手动编辑neo4j之间的冲突），可以是 "manual_first"（优先保留手动编辑），"auto_first"（优先自动更新）或 "merge"（尝试合并）
+conflict_strategy="manual_first"
+
 # 实体相似度
 similarity_threshold = 0.9
 

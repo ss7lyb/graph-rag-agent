@@ -194,51 +194,42 @@ class HybridAgent(BaseAgent):
         ])
 
         # 使用流式模型
-        rag_chain = prompt | self.stream_llm
-        
-        # 处理流式响应
-        result = ""
+        # 用同步模型直接生成完整结果
+        rag_chain = prompt | self.llm | StrOutputParser()
+        response = rag_chain.invoke({
+            "context": docs, 
+            "question": question, 
+            "response_type": response_type
+        })
+
+        # 分块输出结果
+        sentences = re.split(r'([.!?。！？]\s*)', response)
         buffer = ""
-        
-        try:
-            async for chunk in rag_chain.astream({
-                "context": docs, 
-                "question": question, 
-                "response_type": response_type
-            }):
-                # 从 chunk 中提取内容
-                if hasattr(chunk, "content"):
-                    token = chunk.content
-                else:
-                    token = str(chunk)
-                    
-                # 添加到完整结果和缓冲区
-                result += token
-                buffer += token
-                
-                # 当缓冲区达到一定大小或含有自然断句时输出
-                if len(buffer) >= 40 or re.search(r'[.!?。！？]\s*$', buffer):
-                    yield buffer
-                    buffer = ""
-                    await asyncio.sleep(0.01)
-            
-            # 输出剩余内容
-            if buffer:
+
+        for i in range(len(sentences)):
+            buffer += sentences[i]
+            if i % 2 == 1 or len(buffer) >= 40:
                 yield buffer
-            
-            # 缓存完整结果
-            if result and len(result) > 10:
-                self.cache_manager.set(f"generate:{question}", result, thread_id=thread_id)
-        
-        except Exception as e:
-            error_msg = f"生成回答时出错: {str(e)}"
-            yield error_msg
+                buffer = ""
+                await asyncio.sleep(0.01)
+
+        if buffer:
+            yield buffer
 
     async def _stream_process(self, inputs, config):
         """实现流式处理过程"""
         # 实现与 GraphAgent 类似，但针对 HybridAgent 的特性
         thread_id = config.get("configurable", {}).get("thread_id", "default")
-        query = inputs["messages"][-1].content
+        # 安全地获取查询内容
+        query = ""
+        if "messages" in inputs and inputs["messages"] and len(inputs["messages"]) > 0:
+            last_message = inputs["messages"][-1]
+            if hasattr(last_message, "content") and last_message.content:
+                query = last_message.content
+        
+        if not query:
+            yield "无法获取查询内容，请重试。"
+            return
         
         # 缓存检查与处理同GraphAgent相同
         cached_response = self.cache_manager.get(query.strip(), thread_id=thread_id)

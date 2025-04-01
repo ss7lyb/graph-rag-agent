@@ -204,7 +204,9 @@ class LocalSearchTool(BaseSearchTool):
             
             # 记录性能指标
             self.performance_metrics["total_time"] = time.time() - overall_start
-            
+
+            if not result:
+                return "未找到相关信息"
             return result
         except Exception as e:
             print(f"本地搜索失败: {e}")

@@ -486,7 +486,9 @@ class HybridSearchTool(BaseSearchTool):
             )
             
             self.performance_metrics["total_time"] = time.time() - overall_start
-            
+
+            if not result:
+                return "未找到相关信息"
             return result
             
         except Exception as e:

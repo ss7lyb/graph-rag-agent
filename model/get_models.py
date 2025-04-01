@@ -1,5 +1,8 @@
 from langchain_openai import OpenAIEmbeddings
 from langchain_openai import ChatOpenAI
+from langchain.callbacks.streaming_aiter import AsyncIteratorCallbackHandler
+from langchain.callbacks.manager import AsyncCallbackManager
+
 
 import os
 from dotenv import load_dotenv
@@ -26,6 +29,10 @@ def get_llm_model():
     return model
 
 def get_stream_llm_model():
+    callback_handler = AsyncIteratorCallbackHandler()
+    # 将回调handler放进AsyncCallbackManager中
+    manager = AsyncCallbackManager(handlers=[callback_handler])
+
     model = ChatOpenAI(
         model=os.getenv('OPENAI_LLM_MODEL'),
         temperature=os.getenv('TEMPERATURE'),
@@ -33,6 +40,7 @@ def get_stream_llm_model():
         api_key=os.getenv('OPENAI_API_KEY'),
         base_url=os.getenv('OPENAI_BASE_URL'),
         streaming=True,
+        callbacks=manager,
     )
     return model
 

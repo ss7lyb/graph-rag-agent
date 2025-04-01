@@ -1,10 +1,18 @@
 import time
 from typing import Dict, List, Any
 from pathlib import Path
+import os
+import tempfile
+import shutil
 
 from rich.console import Console
 from rich.table import Table
 
+from model.get_models import get_llm_model
+from config.prompt import system_template_build_graph, human_template_build_graph
+from config.settings import entity_types, relationship_types, CHUNK_SIZE, OVERLAP
+from processor.document_processor import DocumentProcessor
+from graph import EntityRelationExtractor, GraphWriter, GraphStructureBuilder
 from config.neo4jdb import get_db_manager
 from build.incremental.file_change_manager import FileChangeManager
 from graph.indexing.embedding_manager import EmbeddingManager
@@ -37,6 +45,30 @@ class IncrementalGraphUpdater:
         # 初始化优化的Embedding管理器
         self.embedding_manager = EmbeddingManager()
         
+        # 保存文件目录路径
+        self.files_dir = files_dir
+        
+        # 初始化LLM模型
+        self.llm = get_llm_model()
+        
+        # 初始化文档处理器
+        self.document_processor = DocumentProcessor(files_dir, CHUNK_SIZE, OVERLAP)
+        
+        # 初始化图结构构建器
+        self.struct_builder = GraphStructureBuilder()
+        
+        # 初始化实体关系抽取器
+        self.entity_extractor = EntityRelationExtractor(
+            self.llm,
+            system_template_build_graph,
+            human_template_build_graph,
+            entity_types,
+            relationship_types
+        )
+        
+        # 初始化图写入器
+        self.graph_writer = GraphWriter(self.graph)
+        
         # 处理统计
         self.stats = {
             "start_time": None,
@@ -57,6 +89,221 @@ class IncrementalGraphUpdater:
             Dict: 文件变更信息
         """
         return self.file_manager.detect_changes()
+    
+    def process_new_files(self, added_files: List[str]) -> Dict[str, Any]:
+        """
+        对新文件执行完整的处理流程（分块、实体抽取、关系创建）
+        
+        Args:
+            added_files: 新增文件路径列表
+            
+        Returns:
+            Dict: 处理结果统计
+        """
+        if not added_files:
+            return {"files_processed": 0, "entities_extracted": 0, "relations_created": 0}
+        
+        results = {
+            "files_processed": 0,
+            "entities_extracted": 0,
+            "relations_created": 0
+        }
+        
+        self.console.print(f"[bold cyan]正在处理 {len(added_files)} 个新文件...[/bold cyan]")
+        
+        # 打印文件路径以便调试
+        for file_path in added_files:
+            self.console.print(f"[blue]处理文件路径: {file_path}[/blue]")
+            if not os.path.exists(file_path):
+                self.console.print(f"[red]警告: 文件不存在: {file_path}[/red]")
+        
+        # 使用临时目录
+        # 1. 创建临时目录并复制新文件
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                # 复制文件到临时目录
+                copy_success = False
+                for file_path in added_files:
+                    try:
+                        if os.path.exists(file_path):
+                            file_name = os.path.basename(file_path)
+                            dest_path = os.path.join(temp_dir, file_name)
+                            shutil.copy2(file_path, dest_path)
+                            self.console.print(f"[green]已复制 {file_path} 到临时目录[/green]")
+                            copy_success = True
+                        elif os.path.exists(os.path.join(self.files_dir, file_path)):
+                            # 尝试将文件路径视为相对于files_dir的路径
+                            full_path = os.path.join(self.files_dir, file_path)
+                            file_name = os.path.basename(file_path)
+                            dest_path = os.path.join(temp_dir, file_name)
+                            shutil.copy2(full_path, dest_path)
+                            self.console.print(f"[green]已复制 {full_path} 到临时目录[/green]")
+                            copy_success = True
+                        else:
+                            # 最后尝试直接使用文件名
+                            file_name = os.path.basename(file_path)
+                            full_path = os.path.join(self.files_dir, file_name)
+                            if os.path.exists(full_path):
+                                dest_path = os.path.join(temp_dir, file_name)
+                                shutil.copy2(full_path, dest_path)
+                                self.console.print(f"[green]已复制 {full_path} 到临时目录[/green]")
+                                copy_success = True
+                            else:
+                                self.console.print(f"[red]复制文件失败，文件不存在: {file_path}[/red]")
+                    except Exception as e:
+                        self.console.print(f"[red]复制文件 {file_path} 到临时目录时出错: {e}[/red]")
+                
+                if not copy_success:
+                    self.console.print("[red]没有成功复制任何文件到临时目录，无法继续处理[/red]")
+                    return results
+                
+                # 2. 保存原始目录并临时修改
+                original_dir = self.document_processor.directory_path
+                self.document_processor.directory_path = temp_dir
+                self.document_processor.file_reader.directory_path = temp_dir
+                
+                # 3. 处理临时目录中的文件
+                processed_documents = self.document_processor.process_directory()
+                
+                # 4. 恢复原始目录
+                self.document_processor.directory_path = original_dir
+                self.document_processor.file_reader.directory_path = original_dir
+                
+                # 记录处理的文件数
+                if processed_documents:
+                    results["files_processed"] = len(processed_documents)
+                    self.console.print(f"[green]成功处理 {len(processed_documents)} 个文件[/green]")
+                    
+                    # 5. 构建图谱结构
+                    for doc in processed_documents:
+                        if "chunks" in doc and doc["chunks"]:
+                            # 创建文档节点
+                            self.console.print(f"[blue]为文件 {doc['filename']} 创建文档节点[/blue]")
+                            self.struct_builder.create_document(
+                                type="local",
+                                uri=str(self.files_dir),
+                                file_name=doc["filename"],
+                                domain="document"
+                            )
+                            
+                            # 创建chunk节点和关系
+                            chunks_count = len(doc['chunks']) if doc['chunks'] else 0
+                            self.console.print(f"[blue]为文件 {doc['filename']} 创建 {chunks_count} 个文本块节点[/blue]")
+                            doc["graph_result"] = self.struct_builder.create_relation_between_chunks(
+                                doc["filename"],
+                                doc["chunks"]
+                            )
+                    
+                    # 6. 准备实体抽取的数据
+                    file_contents_format = []
+                    for doc in processed_documents:
+                        if "chunks" in doc and doc["chunks"]:
+                            file_contents_format.append([
+                                doc["filename"], 
+                                doc["content"], 
+                                doc["chunks"]
+                            ])
+                    
+                    # 7. 抽取实体和关系
+                    if file_contents_format:
+                        self.console.print(f"[cyan]开始抽取实体和关系，文件数: {len(file_contents_format)}[/cyan]")
+                        
+                        total_chunks = sum(len(content[2]) for content in file_contents_format)
+                        self.console.print(f"[blue]总计 {total_chunks} 个文本块需要处理[/blue]")
+                        
+                        processed_chunk_count = 0
+                        def progress_callback(i):
+                            nonlocal processed_chunk_count
+                            processed_chunk_count += 1
+                            if processed_chunk_count % 5 == 0 or processed_chunk_count == total_chunks:
+                                self.console.print(f"[blue]已处理 {processed_chunk_count}/{total_chunks} 个文本块[/blue]")
+                        
+                        # 确保禁用缓存以处理新文件
+                        original_cache_setting = getattr(self.entity_extractor, 'enable_cache', True)
+                        self.entity_extractor.enable_cache = False
+                        
+                        try:
+                            processed_contents = self.entity_extractor.process_chunks(
+                                file_contents_format, 
+                                progress_callback=progress_callback
+                            )
+                            
+                            # 恢复缓存设置
+                            self.entity_extractor.enable_cache = original_cache_setting
+                            
+                            # 输出处理结果
+                            if processed_contents:
+                                self.console.print(f"[green]实体抽取完成，已处理 {len(processed_contents)} 个文件[/green]")
+                            
+                                # 打印调试信息
+                                for i, content in enumerate(processed_contents):
+                                    if len(content) > 3:
+                                        entity_data = content[3]
+                                        entity_count = sum(1 for data in entity_data if '("entity"' in str(data))
+                                        relation_count = sum(1 for data in entity_data if '("relationship"' in str(data))
+                                        self.console.print(f"[blue]文件 {i+1}: {content[0]}, 抽取了 {entity_count} 个实体和 {relation_count} 个关系[/blue]")
+                                    else:
+                                        self.console.print(f"[yellow]文件 {i+1}: {content[0]}, 没有返回实体数据[/yellow]")
+                            
+                                # 8. 处理结果并写入图数据库
+                                graph_writer_data = []
+                                for doc in processed_documents:
+                                    if "chunks" in doc and doc["chunks"] and "graph_result" in doc:
+                                        # 查找对应的处理结果
+                                        entity_data = None
+                                        for content in processed_contents:
+                                            if content[0] == doc["filename"] and len(content) > 3:
+                                                entity_data = content[3]
+                                                break
+                                        
+                                        if entity_data:
+                                            # 估算实体和关系数量
+                                            entity_count = sum(1 for data in entity_data if '("entity"' in str(data))
+                                            relation_count = sum(1 for data in entity_data if '("relationship"' in str(data))
+                                            self.console.print(f"[green]文件 {doc['filename']} 中识别出 {entity_count} 个实体和 {relation_count} 个关系[/green]")
+                                            
+                                            # 添加到写入数据
+                                            graph_writer_data.append([
+                                                doc["filename"],
+                                                doc["content"],
+                                                doc["chunks"],
+                                                doc["graph_result"],
+                                                entity_data
+                                            ])
+                                            
+                                            # 更新统计
+                                            results["entities_extracted"] += entity_count
+                                            results["relations_created"] += relation_count
+                                
+                                # 9. 写入图数据库
+                                if graph_writer_data:
+                                    self.console.print(f"[cyan]开始写入 {len(graph_writer_data)} 个文件的图数据...[/cyan]")
+                                    self.graph_writer.process_and_write_graph_documents(graph_writer_data)
+                                    self.console.print(f"[green]图数据写入完成[/green]")
+                                else:
+                                    self.console.print("[yellow]没有有效的图数据需要写入[/yellow]")
+                            else:
+                                self.console.print("[yellow]实体抽取过程没有返回有效结果[/yellow]")
+                        
+                        except Exception as e:
+                            self.console.print(f"[red]实体抽取过程中出错: {e}[/red]")
+                            import traceback
+                            self.console.print(f"[red]{traceback.format_exc()}[/red]")
+                    else:
+                        self.console.print("[yellow]没有找到可用于抽取实体的文本块[/yellow]")
+                else:
+                    self.console.print("[yellow]没有处理到任何文件[/yellow]")
+            
+            except Exception as e:
+                self.console.print(f"[red]处理新文件时发生错误: {e}[/red]")
+                import traceback
+                self.console.print(f"[red]{traceback.format_exc()}[/red]")
+        
+        self.console.print(f"[green]已完成处理 {results['files_processed']} 个新文件[/green]")
+        if results["entities_extracted"] > 0 or results["relations_created"] > 0:
+            self.console.print(f"[green]抽取了 {results['entities_extracted']} 个实体和 {results['relations_created']} 个关系[/green]")
+        
+        return results
     
     def integrate_new_entities(self, new_entities: List[Dict[str, Any]]) -> int:
         """
@@ -649,10 +896,10 @@ class IncrementalGraphUpdater:
             modified_files = changes.get("modified", [])
             deleted_files = changes.get("deleted", [])
             
-            changed_files = added_files + modified_files
-            self.stats["files_processed"] = len(changed_files) + len(deleted_files)
+            changed_files = modified_files  # 只有修改的文件需要更新embedding
+            self.stats["files_processed"] = len(added_files) + len(modified_files) + len(deleted_files)
             
-            if not changed_files and not deleted_files:
+            if not added_files and not changed_files and not deleted_files:
                 self.console.print("[yellow]未检测到文件变更[/yellow]")
                 return self.stats
             
@@ -661,7 +908,15 @@ class IncrementalGraphUpdater:
                 self.console.print("[bold cyan]处理已删除的文件...[/bold cyan]")
                 self.process_deleted_files(deleted_files)
             
-            # 3. 更新变更文件的Embedding
+            # 3. 处理新文件 - 执行完整的处理流程
+            if added_files:
+                self.console.print("[bold cyan]处理新增文件...[/bold cyan]")
+                new_file_results = self.process_new_files(added_files)
+                # 更新统计信息
+                self.stats["entities_integrated"] += new_file_results.get("entities_extracted", 0)
+                self.stats["relations_integrated"] += new_file_results.get("relations_created", 0)
+            
+            # 4. 更新变更文件的Embedding
             if changed_files:
                 self.console.print("[bold cyan]更新变更文件的Embedding...[/bold cyan]")
                 embedding_stats = self.update_changed_file_embeddings(changed_files)
@@ -670,10 +925,10 @@ class IncrementalGraphUpdater:
                 self.console.print(f"[green]更新的实体Embedding: {embedding_stats['entities']}[/green]")
                 self.console.print(f"[green]更新的Chunk Embedding: {embedding_stats['chunks']}[/green]")
             
-            # 4. 更新文件注册表
+            # 5. 更新文件注册表
             self.file_manager.update_registry()
             
-            # 5. 显示图谱统计信息
+            # 6. 显示图谱统计信息
             self.console.print("[bold cyan]图谱统计信息[/bold cyan]")
             self.display_graph_statistics()
             
@@ -686,6 +941,9 @@ class IncrementalGraphUpdater:
             self.console.print("\n[bold green]增量更新完成![/bold green]")
             self.console.print(f"[green]总耗时: {self.stats['total_time']:.2f}秒[/green]")
             self.console.print(f"[green]处理的文件数: {self.stats['files_processed']}[/green]")
+            if added_files:
+                self.console.print(f"[green]新增实体数: {self.stats['entities_integrated']}[/green]")
+                self.console.print(f"[green]新增关系数: {self.stats['relations_integrated']}[/green]")
             
             return self.stats
             

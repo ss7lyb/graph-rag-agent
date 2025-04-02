@@ -15,6 +15,8 @@ def display_knowledge_graph_tab(tabs):
         elif st.session_state.agent_type == "deep_research_agent":
             st.info("Deep Research Agent 专注于深度推理过程，没有知识图谱的可视化。请查看执行轨迹标签页了解详细推理过程。")
             return
+        elif st.session_state.agent_type == "fusion_agent":
+            st.info("Fusion Agent 使用多种知识图谱技术进行融合分析。查看图谱可以了解实体间的关联和社区结构。")
         
         # 添加标签页，分离图谱显示和推理问答
         kg_tabs = st.tabs(["图谱显示", "推理问答"])

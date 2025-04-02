@@ -12,12 +12,13 @@ def display_sidebar():
         st.header("Agent 选择")
         agent_type = st.radio(
             "选择检索策略:",
-            ["graph_agent", "hybrid_agent", "naive_rag_agent", "deep_research_agent"],
+            ["graph_agent", "hybrid_agent", "naive_rag_agent", "deep_research_agent", "fusion_agent"],
             index=0 if st.session_state.agent_type == "graph_agent" 
                     else (1 if st.session_state.agent_type == "hybrid_agent" 
                          else (2 if st.session_state.agent_type == "naive_rag_agent" 
-                              else 3)),
-            help="graph_agent：使用知识图谱的局部与全局搜索；hybrid_agent：使用混合搜索方式；naive_rag_agent：使用朴素RAG；deep_research_agent：私域深度研究",
+                              else (3 if st.session_state.agent_type == "deep_research_agent"
+                                   else 4))),
+            help="graph_agent：使用知识图谱的局部与全局搜索；hybrid_agent：使用混合搜索方式；naive_rag_agent：使用朴素RAG；deep_research_agent：私域深度研究；fusion_agent：融合式图谱Agent",
             key="sidebar_agent_type"
         )
         # 更新全局agent_type

@@ -97,12 +97,13 @@ class CompositeGraphRAGEvaluator:
         retrieval_config['metrics'] = passed_retrieval_metrics
         self.retrieval_evaluator = GraphRAGRetrievalEvaluator(retrieval_config)
         
-        # 代理实例
+        # Agent实例
         self.agents = {
             "naive": self.config.get_agent("naive"),
             "hybrid": self.config.get_agent("hybrid"),
             "graph": self.config.get_agent("graph"),
             "deep": self.config.get_agent("deep"),
+            "fusion" : self.config.get_agent("fusion"),
         }
         
         # 创建存放回答的目录
@@ -123,10 +124,10 @@ class CompositeGraphRAGEvaluator:
             
     def evaluate_with_golden_answers(self, agent_name: str, questions: List[str], golden_answers: List[str]) -> Dict[str, float]:
         """
-        使用标准答案评估特定代理
+        使用标准答案评估特定Agent
         
         Args:
-            agent_name: 代理名称
+            agent_name: Agent名称
             questions: 问题列表
             golden_answers: 标准答案列表
                 
@@ -138,7 +139,7 @@ class CompositeGraphRAGEvaluator:
                 
         agent = self.agents.get(agent_name)
         if not agent:
-            raise ValueError(f"未找到代理: {agent_name}")
+            raise ValueError(f"未找到Agent: {agent_name}")
         
         # 创建答案评估数据集
         answer_data = AnswerEvaluationData()
@@ -262,14 +263,14 @@ class CompositeGraphRAGEvaluator:
     
     def compare_agents_with_golden_answers(self, questions: List[str], golden_answers: List[str]) -> Dict[str, Dict[str, float]]:
         """
-        使用标准答案比较所有代理
+        使用标准答案比较所有Agent
         
         Args:
             questions: 问题列表
             golden_answers: 标准答案列表
             
         Returns:
-            Dict[str, Dict[str, float]]: 每个代理的评估结果
+            Dict[str, Dict[str, float]]: 每个Agent的评估结果
         """
         if len(questions) != len(golden_answers):
             raise ValueError("问题和标准答案数量不匹配")
@@ -278,7 +279,7 @@ class CompositeGraphRAGEvaluator:
         
         for agent_name, agent in self.agents.items():
             if agent:
-                self.log(f"评估代理: {agent_name}")
+                self.log(f"评估Agent: {agent_name}")
                 agent_results = self.evaluate_with_golden_answers(agent_name, questions, golden_answers)
                 results[agent_name] = agent_results
                 
@@ -300,7 +301,7 @@ class CompositeGraphRAGEvaluator:
         仅评估检索性能
         
         Args:
-            agent_name: 代理名称
+            agent_name: Agent名称
             questions: 问题列表
             
         Returns:
@@ -308,7 +309,7 @@ class CompositeGraphRAGEvaluator:
         """
         agent = self.agents.get(agent_name)
         if not agent:
-            raise ValueError(f"未找到代理: {agent_name}")
+            raise ValueError(f"未找到Agent: {agent_name}")
         
         # 准备存储回答的结构
         answers = []
@@ -329,7 +330,7 @@ class CompositeGraphRAGEvaluator:
             start_time = time.time()
             
             try:
-                # 获取回答 - 直接询问代理一次
+                # 获取回答 - 直接询问Agent一次
                 answer = agent.ask(question)
                 
                 # 计算检索时间
@@ -402,13 +403,13 @@ class CompositeGraphRAGEvaluator:
             questions: 问题列表
             
         Returns:
-            Dict[str, Dict[str, float]]: 每个代理的评估结果
+            Dict[str, Dict[str, float]]: 每个Agent的评估结果
         """
         results = {}
         
         for agent_name, agent in self.agents.items():
             if agent:
-                self.log(f"评估代理: {agent_name}")
+                self.log(f"评估Agent: {agent_name}")
                 agent_results = self.evaluate_retrieval_only(agent_name, questions)
                 results[agent_name] = agent_results
                 
@@ -427,10 +428,10 @@ class CompositeGraphRAGEvaluator:
     
     def _save_agent_answers(self, agent_name: str, answers: List[Dict[str, str]]):
         """
-        保存代理回答
+        保存Agent回答
         
         Args:
-            agent_name: 代理名称
+            agent_name: Agent名称
             answers: 回答列表
         """
         # 确保答案目录存在
@@ -444,7 +445,7 @@ class CompositeGraphRAGEvaluator:
         # 生成更易读的markdown格式
         markdown_path = os.path.join(self.answers_dir, f"{agent_name}_answers.md")
         with open(markdown_path, "w", encoding="utf-8") as f:
-            f.write(f"# {agent_name.capitalize()} 代理的回答\n\n")
+            f.write(f"# {agent_name.capitalize()} Agent的回答\n\n")
             
             for i, qa in enumerate(answers):
                 f.write(f"## 问题 {i+1}: {qa['question']}\n\n")
@@ -544,7 +545,7 @@ class CompositeGraphRAGEvaluator:
     
     def save_agent_answers(self, questions: List[str], output_dir: str = None):
         """
-        保存代理回答
+        保存Agent回答
         
         Args:
             questions: 问题列表
@@ -566,10 +567,10 @@ class CompositeGraphRAGEvaluator:
             
             # 如果答案文件已存在，跳过
             if os.path.exists(answers_path):
-                self.log(f"  {agent_name}代理的回答文件已存在，跳过")
+                self.log(f"  {agent_name}Agent的回答文件已存在，跳过")
                 continue
                 
-            self.log(f"获取{agent_name}代理的回答...")
+            self.log(f"获取{agent_name}Agent的回答...")
             answers = []
             
             # 使用缓存记录已处理的问题

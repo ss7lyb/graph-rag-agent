@@ -15,9 +15,9 @@ from agent.base import BaseAgent
 
 class DeepResearchAgent(BaseAgent):
     """
-    深度研究代理：使用DeepResearcher实现多步骤推理的代理
+    深度研究Agent：使用DeepResearcher实现多步骤推理的Agent
     
-    该代理扩展了基础代理架构，使用多回合的思考、搜索和推理来解决复杂问题。
+    该Agent扩展了基础Agent架构，使用多回合的思考、搜索和推理来解决复杂问题。
     主要特点：
     1. 显式推理过程
     2. 迭代式搜索
@@ -28,7 +28,7 @@ class DeepResearchAgent(BaseAgent):
     
     def __init__(self, use_deeper_tool=True):
         """
-        初始化深度研究代理
+        初始化深度研究Agent
         
         Args:
             use_deeper_tool: 是否使用增强版研究工具
@@ -100,12 +100,25 @@ class DeepResearchAgent(BaseAgent):
         except Exception as e:
             return {"messages": [AIMessage(content=f"生成回答时出错: {str(e)}")]}
 
+        # 首先尝试全局缓存
+        global_result = self.global_cache_manager.get(question)
+        if global_result:
+            self._log_execution("generate", 
+                            {"question": question, "source": "全局缓存"}, 
+                            "全局缓存命中")
+            return {"messages": [AIMessage(content=global_result)]}
+
         # 获取当前会话ID
         thread_id = state.get("configurable", {}).get("thread_id", "default")
             
-        # 检查缓存
-        cached_result = self.cache_manager.get(f"generate:{question}", thread_id=thread_id)
+        # 然后检查会话缓存
+        cached_result = self.cache_manager.get(question, thread_id=thread_id)
         if cached_result:
+            self._log_execution("generate", 
+                            {"question": question, "source": "会话缓存"}, 
+                            "会话缓存命中")
+            # 将命中内容同步到全局缓存
+            self.global_cache_manager.set(question, cached_result)
             return {"messages": [AIMessage(content=cached_result)]}
 
         # 检查流式输出的情况
@@ -116,7 +129,10 @@ class DeepResearchAgent(BaseAgent):
         if not isinstance(retrieval_result, str) or not retrieval_result.startswith("<think>"):
             # 直接返回检索结果
             if self.cache_manager.validate_answer(question, retrieval_result):
-                self.cache_manager.set(f"generate:{question}", retrieval_result, thread_id=thread_id)
+                # 更新会话缓存
+                self.cache_manager.set(question, retrieval_result, thread_id=thread_id)
+                # 更新全局缓存
+                self.global_cache_manager.set(question, retrieval_result)
             return {"messages": [AIMessage(content=retrieval_result)]}
         
         # 处理思考过程（当使用思考工具时）
@@ -149,9 +165,12 @@ class DeepResearchAgent(BaseAgent):
                 "response_type": response_type
             })
             
-            # 缓存结果
+            # 缓存结果 - 同时更新会话缓存和全局缓存
             if self.cache_manager.validate_answer(question, response):
-                self.cache_manager.set(f"generate:{question}", response, thread_id=thread_id)
+                # 更新会话缓存
+                self.cache_manager.set(question, response, thread_id=thread_id)
+                # 更新全局缓存
+                self.global_cache_manager.set(question, response)
             
             return {"messages": [AIMessage(content=response)]}
             

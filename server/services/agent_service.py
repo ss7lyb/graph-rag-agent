@@ -14,6 +14,7 @@ class AgentManager:
         from agent.hybrid_agent import HybridAgent
         from agent.naive_rag_agent import NaiveRagAgent
         from agent.deep_research_agent import DeepResearchAgent 
+        from agent.fusion_agent import FusionGraphRAGAgent 
         
         # 初始化Agent类
         self.agent_classes = {
@@ -21,6 +22,7 @@ class AgentManager:
             "hybrid_agent": HybridAgent,
             "naive_rag_agent": NaiveRagAgent,
             "deep_research_agent": DeepResearchAgent,
+            "fusion_agent": FusionGraphRAGAgent,
         }
         
         # 保留Agent实例池

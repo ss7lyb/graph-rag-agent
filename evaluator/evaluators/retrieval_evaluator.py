@@ -32,7 +32,7 @@ class GraphRAGRetrievalEvaluator(BaseEvaluator):
             
             # 打印基本信息
             self.log(f"  问题: {sample.question[:50]}...")
-            self.log(f"  代理类型: {sample.agent_type}")
+            self.log(f"  Agent类型: {sample.agent_type}")
 
             # 增强实体和关系处理
             self._enhance_entity_data(sample)
@@ -58,9 +58,9 @@ class GraphRAGRetrievalEvaluator(BaseEvaluator):
             self.log(f"    关系: {refs.get('relationships', [])[:5]}{'...' if len(refs.get('relationships', [])) > 5 else ''}")
             self.log(f"    文本块: {refs.get('chunks', [])[:3]}{'...' if len(refs.get('chunks', [])) > 3 else ''}")
             
-            # 1. 处理naive代理 - 确保文本块数据正确存储
+            # 1. 处理naiveAgent - 确保文本块数据正确存储
             if sample.agent_type.lower() == "naive":
-                self.log("  处理Naive代理的引用数据...")
+                self.log("  处理NaiveAgent的引用数据...")
                 
                 # 将文本块ID从referenced_relationships移到referenced_entities
                 if not sample.referenced_entities and isinstance(sample.referenced_relationships, list):
@@ -76,9 +76,9 @@ class GraphRAGRetrievalEvaluator(BaseEvaluator):
                         sample.referenced_entities.append(chunk_id)
                         self.log(f"  添加文本块ID: {chunk_id[:10]}...")
             
-            # 2. 处理其他代理 - 确保实体和关系ID正确存储
+            # 2. 处理其他Agent - 确保实体和关系ID正确存储
             else:
-                self.log("  处理非Naive代理的引用数据...")
+                self.log("  处理非NaiveAgent的引用数据...")
                 
                 # 更新实体ID
                 added_entities = 0
@@ -334,10 +334,10 @@ class GraphRAGRetrievalEvaluator(BaseEvaluator):
         
     def evaluate_agent(self, agent_name: str, questions: List[str]) -> Dict[str, float]:
         """
-        评估特定代理的检索性能
+        评估特定Agent的检索性能
         
         Args:
-            agent_name: 代理名称 (naive, hybrid, graph, deep)
+            agent_name: Agent名称 (naive, hybrid, graph, deep)
             questions: 问题列表
             
         Returns:
@@ -345,7 +345,7 @@ class GraphRAGRetrievalEvaluator(BaseEvaluator):
         """
         agent = self.config.get_agent(agent_name)
         if not agent:
-            raise ValueError(f"未找到代理: {agent_name}")
+            raise ValueError(f"未找到Agent: {agent_name}")
         
         # 创建评估数据集
         eval_data = RetrievalEvaluationData()
@@ -384,20 +384,20 @@ class GraphRAGRetrievalEvaluator(BaseEvaluator):
     
     def compare_agents(self, questions: List[str]) -> Dict[str, Dict[str, float]]:
         """
-        比较所有代理的检索性能
+        比较所有Agent的检索性能
         
         Args:
             questions: 问题列表
             
         Returns:
-            Dict[str, Dict[str, float]]: 每个代理的评估结果
+            Dict[str, Dict[str, float]]: 每个Agent的评估结果
         """
         results = {}
         
         for agent_name in ["naive", "hybrid", "graph", "deep"]:
             agent = self.config.get_agent(agent_name)
             if agent:
-                self.log(f"评估代理: {agent_name}")
+                self.log(f"评估Agent: {agent_name}")
                 agent_results = self.evaluate_agent(agent_name, questions)
                 results[agent_name] = agent_results
                 

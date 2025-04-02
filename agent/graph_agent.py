@@ -176,12 +176,23 @@ class GraphAgent(BaseAgent):
         question = messages[-3].content
         docs = messages[-1].content
 
-        # 检查缓存
-        cached_result = self.cache_manager.get(f"generate:{question}")
+        # 首先尝试全局缓存
+        global_result = self.global_cache_manager.get(question)
+        if global_result:
+            self._log_execution("generate", 
+                            {"question": question, "docs_length": len(docs)}, 
+                            "全局缓存命中")
+            return {"messages": [AIMessage(content=global_result)]}
+
+        # 然后检查会话缓存
+        thread_id = state.get("configurable", {}).get("thread_id", "default")
+        cached_result = self.cache_manager.get(question, thread_id=thread_id)
         if cached_result:
             self._log_execution("generate", 
-                               {"question": question, "docs_length": len(docs)}, 
-                               cached_result)
+                            {"question": question, "docs_length": len(docs)}, 
+                            "会话缓存命中")
+            # 将命中内容同步到全局缓存
+            self.global_cache_manager.set(question, cached_result)
             return {"messages": [AIMessage(content=cached_result)]}
 
         prompt = ChatPromptTemplate.from_messages([
@@ -209,12 +220,16 @@ class GraphAgent(BaseAgent):
             "response_type": response_type
         })
         
-        # 缓存结果
-        self.cache_manager.set(f"generate:{question}", response)
+        # 缓存结果 - 同时更新会话缓存和全局缓存
+        if response and len(response) > 10:
+            # 更新会话缓存
+            self.cache_manager.set(question, response, thread_id=thread_id)
+            # 更新全局缓存
+            self.global_cache_manager.set(question, response)
         
         self._log_execution("generate", 
-                           {"question": question, "docs_length": len(docs)}, 
-                           response)
+                        {"question": question, "docs_length": len(docs)}, 
+                        response)
         
         return {"messages": [AIMessage(content=response)]}
 
@@ -405,7 +420,7 @@ class GraphAgent(BaseAgent):
             async for token in self._generate_node_stream(workflow_state):
                 yield token
         else:
-            # 不需要工具，直接返回代理的响应
+            # 不需要工具，直接返回Agent的响应
             final_msg = workflow_state["messages"][-1]
             content = final_msg.content if hasattr(final_msg, "content") else str(final_msg)
             

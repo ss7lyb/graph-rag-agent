@@ -153,7 +153,7 @@ class RetrievalPrecision(BaseMetric):
         请评估以下检索到的实体与用户引用实体的匹配程度，给出0到1的分数。
         
         问题: {question}
-        代理类型: {agent_type}
+        Agent类型: {agent_type}
         
         检索到的实体: [{retr_str}]
         用户引用的实体: [{ref_str}]
@@ -338,7 +338,7 @@ class RetrievalUtilization(BaseMetric):
         请评估系统在回答用户问题时对检索实体的利用程度，给出0到1的分数。
         
         问题: {question}
-        代理类型: {agent_type}
+        Agent类型: {agent_type}
         
         检索到的实体: [{retr_str}]
         用户引用的实体: [{ref_str}]
@@ -439,7 +439,7 @@ class ChunkUtilization(BaseMetric):
             chunk_ids = refs.get("chunks", [])
             
             self.log(f"  问题: {question[:50]}...")
-            self.log(f"  代理类型: {agent_type}")
+            self.log(f"  Agent类型: {agent_type}")
             self.log(f"  提取的文本块ID数量: {len(chunk_ids)}")
             if chunk_ids:
                 self.log(f"  文本块ID样例: {chunk_ids[:3]}{'...' if len(chunk_ids) > 3 else ''}")
@@ -584,7 +584,7 @@ class ChunkUtilization(BaseMetric):
         请评估以下AI回答对检索文本块的利用程度，给出0到1的分数。
         
         问题: {question}
-        代理类型: {agent_type}
+        Agent类型: {agent_type}
         
         引用的文本块数量: {len(chunk_ids)}
         """

@@ -15,6 +15,7 @@ from CacheManage.manager import (
     ContextAwareCacheKeyStrategy, 
     HybridCacheBackend
 )
+from CacheManage.strategies.global_strategy import GlobalCacheKeyStrategy
 
 class BaseAgent(ABC):
     """Agent 基类，定义通用功能和接口"""
@@ -33,7 +34,8 @@ class BaseAgent(ABC):
         
         self.memory = MemorySaver()
         self.execution_log = []
-
+    
+        # 常规上下文感知缓存（会话内）
         self.cache_manager = CacheManager(
             key_strategy=ContextAwareCacheKeyStrategy(),
             storage_backend=HybridCacheBackend(
@@ -42,6 +44,18 @@ class BaseAgent(ABC):
                 disk_max_size=2000
             ) if not memory_only else None,
             cache_dir=cache_dir,
+            memory_only=memory_only
+        )
+        
+        # 全局缓存（跨会话）
+        self.global_cache_manager = CacheManager(
+            key_strategy=GlobalCacheKeyStrategy(),
+            storage_backend=HybridCacheBackend(
+                cache_dir=f"{cache_dir}/global",
+                memory_max_size=500,
+                disk_max_size=5000
+            ) if not memory_only else None,
+            cache_dir=f"{cache_dir}/global",
             memory_only=memory_only
         )
         
@@ -72,7 +86,7 @@ class BaseAgent(ABC):
         workflow.add_node("retrieve", ToolNode(self.tools))
         workflow.add_node("generate", self._generate_node)
         
-        # 添加从开始到代理的边
+        # 添加从开始到Agent的边
         workflow.add_edge(START, "agent")
         workflow.add_conditional_edges(
             "agent",
@@ -278,6 +292,19 @@ class BaseAgent(ABC):
         # 确保查询字符串是干净的
         safe_query = query.strip()
         
+        # 首先尝试全局缓存（跨会话缓存）
+        global_cache_start = time.time()
+        global_result = self.global_cache_manager.get(safe_query)
+        global_cache_time = time.time() - global_cache_start
+        
+        if global_result:
+            print(f"全局缓存命中: {safe_query[:30]}... ({global_cache_time:.4f}s)")
+            
+            return {
+                "answer": global_result,
+                "execution_log": [{"node": "global_cache_hit", "timestamp": time.time(), "input": safe_query, "output": "全局缓存命中"}]
+            }
+        
         # 首先尝试快速路径 - 跳过验证的高质量缓存
         fast_cache_start = time.time()
         fast_result = self.check_fast_cache(safe_query, thread_id)
@@ -285,6 +312,9 @@ class BaseAgent(ABC):
         
         if fast_result:
             print(f"快速路径缓存命中: {safe_query[:30]}... ({fast_cache_time:.4f}s)")
+            
+            # 将命中的内容同步到全局缓存
+            self.global_cache_manager.set(safe_query, fast_result)
             
             return {
                 "answer": fast_result,
@@ -298,6 +328,9 @@ class BaseAgent(ABC):
         
         if cached_response:
             print(f"完整问答缓存命中: {safe_query[:30]}... ({cache_time:.4f}s)")
+            
+            # 将命中的内容同步到全局缓存
+            self.global_cache_manager.set(safe_query, cached_response)
             
             return {
                 "answer": cached_response,
@@ -326,9 +359,12 @@ class BaseAgent(ABC):
             chat_history = self.memory.get(config)["channel_values"]["messages"]
             answer = chat_history[-1].content
             
-            # 缓存处理结果
+            # 缓存处理结果 - 同时更新会话缓存和全局缓存
             if answer and len(answer) > 10:
+                # 更新会话缓存
                 self.cache_manager.set(safe_query, answer, thread_id=thread_id)
+                # 更新全局缓存
+                self.global_cache_manager.set(safe_query, answer)
             
             process_time = time.time() - process_start
             print(f"完整处理耗时: {process_time:.4f}s")
@@ -351,7 +387,7 @@ class BaseAgent(ABC):
                 "answer": f"抱歉，处理您的问题时遇到了错误。请稍后再试或换一种提问方式。错误详情: {str(e)}",
                 "execution_log": self.execution_log + [{"node": "error", "timestamp": time.time(), "input": query, "output": str(e)}]
             }
-    
+        
     def ask(self, query: str, thread_id: str = "default", recursion_limit: int = 5):
         """向Agent提问"""
         overall_start = time.time()
@@ -359,13 +395,24 @@ class BaseAgent(ABC):
         # 确保查询字符串是干净的
         safe_query = query.strip()
         
-        # 首先尝试快速路径 - 跳过验证的高质量缓存
+        # 首先尝试全局缓存（跨会话缓存）
+        global_cache_start = time.time()
+        global_result = self.global_cache_manager.get(safe_query)
+        global_cache_time = time.time() - global_cache_start
+        
+        if global_result:
+            print(f"全局缓存命中: {safe_query[:30]}... ({global_cache_time:.4f}s)")
+            return global_result
+        
+        # 接下来尝试快速路径 - 跳过验证的高质量缓存
         fast_cache_start = time.time()
         fast_result = self.check_fast_cache(safe_query, thread_id)
         fast_cache_time = time.time() - fast_cache_start
         
         if fast_result:
             print(f"快速路径缓存命中: {safe_query[:30]}... ({fast_cache_time:.4f}s)")
+            # 将命中的内容同步到全局缓存
+            self.global_cache_manager.set(safe_query, fast_result)
             return fast_result
         
         # 尝试常规缓存路径，但优化验证
@@ -375,6 +422,8 @@ class BaseAgent(ABC):
         
         if cached_response:
             print(f"常规缓存命中，跳过验证: {safe_query[:30]}... ({cache_time:.4f}s)")
+            # 将命中的内容同步到全局缓存
+            self.global_cache_manager.set(safe_query, cached_response)
             return cached_response
         
         # 未命中缓存，执行标准流程
@@ -392,13 +441,16 @@ class BaseAgent(ABC):
         try:
             for output in self.graph.stream(inputs, config=config):
                 pass
-                
+                    
             chat_history = self.memory.get(config)["channel_values"]["messages"]
             answer = chat_history[-1].content
             
-            # 缓存处理结果
+            # 缓存处理结果 - 同时更新会话缓存和全局缓存
             if answer and len(answer) > 10:
+                # 更新会话缓存
                 self.cache_manager.set(safe_query, answer, thread_id=thread_id)
+                # 更新全局缓存
+                self.global_cache_manager.set(safe_query, answer)
             
             process_time = time.time() - process_start
             overall_time = time.time() - overall_start
@@ -423,7 +475,7 @@ class BaseAgent(ABC):
             query: 用户问题
             thread_id: 会话ID
             recursion_limit: 递归限制
-            
+                
         返回:
             AsyncGenerator[str, None]: 流式响应生成器
         """
@@ -431,6 +483,28 @@ class BaseAgent(ABC):
         
         # 确保查询字符串是干净的
         safe_query = query.strip()
+        
+        # 首先尝试全局缓存（跨会话缓存）
+        global_result = self.global_cache_manager.get(safe_query)
+        if global_result:
+            # 对于缓存响应，按自然语言单位分块返回
+            import re
+            chunks = re.split(r'([.!?。！？]\s*)', global_result)
+            buffer = ""
+            
+            for i in range(0, len(chunks)):
+                buffer += chunks[i]
+                
+                # 当缓冲区包含完整句子或达到合理大小时输出
+                if (i % 2 == 1) or len(buffer) >= 40:
+                    yield buffer
+                    buffer = ""
+                    await asyncio.sleep(0.01)
+            
+            # 输出任何剩余内容
+            if buffer:
+                yield buffer
+            return
         
         # 首先尝试快速路径 - 跳过验证的高质量缓存
         fast_result = self.check_fast_cache(safe_query, thread_id)
@@ -452,6 +526,9 @@ class BaseAgent(ABC):
             # 输出任何剩余内容
             if buffer:
                 yield buffer
+                
+            # 将命中的内容同步到全局缓存
+            self.global_cache_manager.set(safe_query, fast_result)
             return
         
         # 尝试常规缓存路径
@@ -477,6 +554,9 @@ class BaseAgent(ABC):
             # 输出任何剩余内容
             if buffer:
                 yield buffer
+                
+            # 将命中的内容同步到全局缓存
+            self.global_cache_manager.set(safe_query, cached_response)
             return
         
         # 未命中缓存，执行标准流程
@@ -497,9 +577,12 @@ class BaseAgent(ABC):
                 yield chunk
                 answer += chunk
             
-            # 缓存完整回答
+            # 缓存完整回答 - 同时更新会话缓存和全局缓存
             if answer and len(answer) > 10:
+                # 更新会话缓存
                 self.cache_manager.set(safe_query, answer, thread_id=thread_id)
+                # 更新全局缓存
+                self.global_cache_manager.set(safe_query, answer)
             
             process_time = time.time() - overall_start
             self._log_performance("ask_stream", {
@@ -535,17 +618,68 @@ class BaseAgent(ABC):
         })
     
     def clear_cache_for_query(self, query: str, thread_id: str = "default"):
-        """清除特定查询的缓存"""
-        # 提取关键词
-        keywords = self._extract_keywords(query)
-        cache_params = {
-            "thread_id": thread_id,
-            "low_level_keywords": keywords.get("low_level", []),
-            "high_level_keywords": keywords.get("high_level", [])
-        }
+        """
+        清除特定查询的缓存（会话缓存和全局缓存）
         
-        # 调用缓存管理器的删除方法，传递相关参数
-        return self.cache_manager.delete(query.strip(), **cache_params)
+        参数:
+            query: 查询字符串
+            thread_id: 会话ID
+        
+        返回:
+            bool: 是否成功删除
+        """
+        # 清除会话缓存
+        success = False
+        
+        try:
+            # 尝试移除可能存在的前缀
+            clean_query = query.strip()
+            if ":" in clean_query:
+                parts = clean_query.split(":", 1)
+                if len(parts) > 1:
+                    clean_query = parts[1].strip()
+            
+            # 清除原始查询的会话缓存
+            session_cache_deleted = self.cache_manager.delete(query.strip(), thread_id=thread_id)
+            success = session_cache_deleted
+            
+            # 清除没有前缀的查询缓存
+            if clean_query != query.strip():
+                self.cache_manager.delete(clean_query, thread_id=thread_id)
+            
+            # 清除带前缀的查询缓存变体
+            prefixes = ["generate:", "deep:", "query:"]
+            for prefix in prefixes:
+                self.cache_manager.delete(f"{prefix}{clean_query}", thread_id=thread_id)
+            
+            # 清除全局缓存 - 使用所有可能的变体
+            if hasattr(self, 'global_cache_manager'):
+                # 删除原始查询
+                global_cache_deleted = self.global_cache_manager.delete(query.strip())
+                success = success or global_cache_deleted
+                
+                # 删除清理后的查询
+                if clean_query != query.strip():
+                    self.global_cache_manager.delete(clean_query)
+                
+                # 删除带前缀的查询变体
+                for prefix in prefixes:
+                    self.global_cache_manager.delete(f"{prefix}{clean_query}")
+            
+            # 强制刷新缓存写入
+            if hasattr(self.cache_manager.storage, '_flush_write_queue'):
+                self.cache_manager.storage._flush_write_queue()
+            
+            if hasattr(self, 'global_cache_manager') and hasattr(self.global_cache_manager.storage, '_flush_write_queue'):
+                self.global_cache_manager.storage._flush_write_queue()
+                
+            # 记录日志
+            print(f"已清除查询缓存: {query.strip()}")
+            
+            return success
+        except Exception as e:
+            print(f"清除缓存时出错: {e}")
+            return False
     
     def _validate_answer(self, query: str, answer: str, thread_id: str = "default") -> bool:
         """验证答案质量"""
@@ -588,3 +722,7 @@ class BaseAgent(ABC):
         # 确保所有延迟写入的缓存项都被保存
         if hasattr(self.cache_manager.storage, '_flush_write_queue'):
             self.cache_manager.storage._flush_write_queue()
+            
+        # 同样确保全局缓存的写入被保存
+        if hasattr(self.global_cache_manager.storage, '_flush_write_queue'):
+            self.global_cache_manager.storage._flush_write_queue()

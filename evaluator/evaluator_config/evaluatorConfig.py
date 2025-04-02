@@ -92,13 +92,13 @@ class EvaluatorConfig:
     
     def get_agent(self, agent_type: str) -> Optional[Any]:
         """
-        获取指定类型的代理实例
+        获取指定类型的Agent实例
         
         Args:
-            agent_type: 代理类型，可选值: naive, hybrid, graph, deep
+            agent_type: Agent类型，可选值: naive, hybrid, graph, deep
             
         Returns:
-            Any: 代理实例或None
+            Any: Agent实例或None
         """
         agent_key = f"{agent_type}_agent"
         return self.config.get(agent_key)

@@ -10,7 +10,7 @@ from evaluator.evaluators.composite_evaluator import CompositeGraphRAGEvaluator
 from evaluator.evaluator_config.agent_evaluation_config import get_agent_metrics
 
 def load_agent(agent_type: str):
-    """加载指定类型的代理"""
+    """加载指定类型的Agent"""
     try:
         if agent_type == "graph":
             from agent.graph_agent import GraphAgent
@@ -21,6 +21,9 @@ def load_agent(agent_type: str):
         elif agent_type == "naive":
             from agent.naive_rag_agent import NaiveRagAgent
             return NaiveRagAgent()
+        elif agent_type == "fusion":
+            from agent.fusion_agent import FusionGraphRAGAgent
+            return FusionGraphRAGAgent()
         elif agent_type == "deep":
             # 根据配置加载标准DeepSearchAgent或增强版
             try:
@@ -32,9 +35,9 @@ def load_agent(agent_type: str):
                 from agent.deep_research_agent import DeepResearchAgent
                 return DeepResearchAgent(use_deeper_tool=False)
         else:
-            raise ValueError(f"不支持的代理类型: {agent_type}")
+            raise ValueError(f"不支持的Agent类型: {agent_type}")
     except ImportError as e:
-        raise ImportError(f"无法导入{agent_type}代理: {e}")
+        raise ImportError(f"无法导入{agent_type}Agent: {e}")
 
 def load_dependencies():
     """加载Neo4j和LLM依赖"""
@@ -66,10 +69,10 @@ def evaluate_agent(
     verbose: bool = False
 ) -> Dict[str, float]:
     """
-    评估指定类型的代理
+    评估指定类型的Agent
     
     Args:
-        agent_type: 代理类型
+        agent_type: Agent类型
         questions: 问题列表
         golden_answers: 标准答案列表（可选）
         save_dir: 保存目录
@@ -85,23 +88,23 @@ def evaluate_agent(
     
     # 设置日志记录
     logger = setup_logger("evaluation", os.path.join(agent_save_dir, "evaluation.log"))
-    logger.info(f"开始评估{agent_type}代理")
+    logger.info(f"开始评估{agent_type}Agent")
     
     # 设置全局调试模式
     set_debug_mode(verbose)
     
-    # 加载代理
+    # 加载Agent
     try:
         agent = load_agent(agent_type)
-        logger.info(f"成功加载{agent_type}代理")
+        logger.info(f"成功加载{agent_type}Agent")
     except Exception as e:
-        logger.error(f"加载代理失败: {e}")
+        logger.error(f"加载Agent失败: {e}")
         return {}
         
     # 加载依赖
     neo4j, llm = load_dependencies()
     
-    # 默认使用代理类型对应的全部指标
+    # 默认使用Agent类型对应的全部指标
     if not metrics:
         metrics = get_agent_metrics(agent_type)
     
@@ -139,8 +142,8 @@ def evaluate_agent(
             logger.info("仅评估检索性能...")
             results = evaluator.evaluate_retrieval_only(agent_type, questions)
         
-        # 保存代理回答
-        logger.info("保存代理回答以供人工检查...")
+        # 保存Agent回答
+        logger.info("保存Agent回答以供人工检查...")
         evaluator.save_agent_answers(questions, output_dir=os.path.join(agent_save_dir, "answers"))
         
     except Exception as e:

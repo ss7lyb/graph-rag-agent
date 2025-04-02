@@ -149,6 +149,8 @@ python build/incremental_update.py --daemon
 ```bash
 cd graph-rag-agent/test
 
+# 查询前可以注释掉不想测试的Agent，防止运行过慢
+
 # 非流式查询
 python search_without_stream.py
 

@@ -15,7 +15,7 @@ def init_session_state():
     if 'agent_type' not in st.session_state:
         st.session_state.agent_type = "naive_rag_agent"  # 默认使用naive_rag_agent
     if 'show_thinking' not in st.session_state:
-        st.session_state.show_thinking = False  # 默认不显示思考过程
+        st.session_state.show_thinking = True  # 默认显示思考过程
     if 'use_deeper_tool' not in st.session_state:
         st.session_state.use_deeper_tool = True  # 默认使用增强版研究工具
     
@@ -50,6 +50,8 @@ def init_session_state():
         st.session_state.found_relations = None
     if 'relation_to_update' not in st.session_state:
         st.session_state.relation_to_update = None
+    if 'use_chain_exploration' not in st.session_state:
+        st.session_state.use_chain_exploration = True
 
     if 'cache' not in st.session_state:
         st.session_state.cache = {

@@ -36,7 +36,7 @@ class AnswerEvaluationSample:
         
         Args:
             answer: 原始系统回答
-            agent_type: 代理类型
+            agent_type: Agent类型
         """
         # 先清理思考过程，再清理引用数据
         cleaned_answer = clean_thinking_process(answer)

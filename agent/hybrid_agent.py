@@ -82,15 +82,25 @@ class HybridAgent(BaseAgent):
         except Exception:
             docs = "无法获取检索结果"
 
+        # 首先尝试全局缓存
+        global_result = self.global_cache_manager.get(question)
+        if global_result:
+            self._log_execution("generate", 
+                            {"question": question, "docs_length": len(docs)}, 
+                            "全局缓存命中")
+            return {"messages": [AIMessage(content=global_result)]}
+
         # 获取当前会话ID，用于上下文感知缓存
         thread_id = state.get("configurable", {}).get("thread_id", "default")
             
-        # 检查缓存 - 仅传递thread_id，让默认的上下文感知策略生效
-        cached_result = self.cache_manager.get(f"generate:{question}", thread_id=thread_id)
+        # 然后检查会话缓存
+        cached_result = self.cache_manager.get(question, thread_id=thread_id)
         if cached_result:
             self._log_execution("generate", 
-                               {"question": question, "docs_length": len(docs)}, 
-                               "缓存命中")
+                            {"question": question, "docs_length": len(docs)}, 
+                            "会话缓存命中")
+            # 将命中内容同步到全局缓存
+            self.global_cache_manager.set(question, cached_result)
             return {"messages": [AIMessage(content=cached_result)]}
 
         prompt = ChatPromptTemplate.from_messages([
@@ -119,20 +129,23 @@ class HybridAgent(BaseAgent):
                 "response_type": response_type
             })
             
-            # 只缓存有效的生成结果 - 仅传递thread_id
+            # 缓存结果 - 同时更新会话缓存和全局缓存
             if response and len(response) > 10:
-                self.cache_manager.set(f"generate:{question}", response, thread_id=thread_id)
+                # 更新会话缓存
+                self.cache_manager.set(question, response, thread_id=thread_id)
+                # 更新全局缓存
+                self.global_cache_manager.set(question, response)
             
             self._log_execution("generate", 
-                              {"question": question, "docs_length": len(docs)}, 
-                              response)
+                            {"question": question, "docs_length": len(docs)}, 
+                            response)
             
             return {"messages": [AIMessage(content=response)]}
         except Exception as e:
             error_msg = f"生成回答时出错: {str(e)}"
             self._log_execution("generate_error", 
-                              {"question": question, "docs_length": len(docs)}, 
-                              error_msg)
+                            {"question": question, "docs_length": len(docs)}, 
+                            error_msg)
             return {"messages": [AIMessage(content=f"抱歉，我无法回答这个问题。技术原因: {str(e)}")]}
     
     async def _generate_node_stream(self, state):
@@ -279,7 +292,7 @@ class HybridAgent(BaseAgent):
             async for token in self._generate_node_stream(workflow_state):
                 yield token
         else:
-            # 不需要工具，直接返回代理的响应
+            # 不需要工具，直接返回Agent的响应
             final_msg = workflow_state["messages"][-1]
             content = final_msg.content if hasattr(final_msg, "content") else str(final_msg)
             

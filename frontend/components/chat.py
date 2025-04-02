@@ -27,13 +27,14 @@ def display_chat_interface():
             previous_agent = st.session_state.agent_type
             agent_type = st.selectbox(
                 "选择 Agent 类型",
-                options=["graph_agent", "hybrid_agent", "naive_rag_agent", "deep_research_agent"],
+                options=["graph_agent", "hybrid_agent", "naive_rag_agent", "deep_research_agent", "fusion_agent"],
                 key="header_agent_type",
                 help="选择不同的Agent以体验不同的检索策略",
                 index=0 if st.session_state.agent_type == "graph_agent" 
                         else (1 if st.session_state.agent_type == "hybrid_agent" 
                              else (2 if st.session_state.agent_type == "naive_rag_agent"
-                                  else 3)),
+                                  else (3 if st.session_state.agent_type == "deep_research_agent"
+                                       else 4))),
                 on_change=reset_processing_lock
             )
             

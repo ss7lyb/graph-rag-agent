@@ -26,20 +26,20 @@ def parse_args():
     parser.add_argument("--verbose", action="store_true",
                         help="是否打印详细评估过程")
     parser.add_argument("--metrics", type=str, default="",
-                        help="要评估的指标，用逗号分隔，留空则使用所有代理共有的指标")
-    parser.add_argument("--agents", type=str, default="graph,hybrid,naive,deep",
-                        help="要评估的代理类型，用逗号分隔，默认评估所有代理")
+                        help="要评估的指标，用逗号分隔，留空则使用所有Agent共有的指标")
+    parser.add_argument("--agents", type=str, default="graph,hybrid,naive,fusion,deep",
+                        help="要评估的Agent类型，用逗号分隔，默认评估所有Agent")
     parser.add_argument("--eval_type", type=str, default="all",
                         choices=["all", "answer", "retrieval"],
                         help="评估类型: all(全面评估), answer(仅答案质量), retrieval(仅检索性能)")
     parser.add_argument("--skip_missing", action="store_true",
-                        help="如果某个代理无法加载，跳过它而不是终止评估")
+                        help="如果某个Agent无法加载，跳过它而不是终止评估")
     parser.add_argument("--use_deeper", action="store_true",
                         help="是否为Deep Research Agent使用增强版工具")
     return parser.parse_args()
 
 def get_common_metrics(agent_types: List[str], metric_type: str = None) -> List[str]:
-    """获取所有指定代理类型共有的评估指标"""
+    """获取所有指定Agent类型共有的评估指标"""
     all_metrics = set()
     common_metrics = None
     
@@ -73,9 +73,9 @@ def main():
     # 设置全局调试模式
     set_debug_mode(args.verbose)
     
-    # 解析要评估的代理类型
+    # 解析要评估的Agent类型
     agent_types = args.agents.split(',')
-    logger.info(f"将评估以下代理: {', '.join(agent_types)}")
+    logger.info(f"将评估以下Agent: {', '.join(agent_types)}")
     
     # 确定使用哪些指标
     metrics = []
@@ -84,7 +84,7 @@ def main():
         metrics = args.metrics.split(',')
         logger.info(f"使用用户指定的评估指标: {args.metrics}")
     else:
-        # 获取所有待评估代理共有的指标
+        # 获取所有待评估Agent共有的指标
         metric_type = None
         if args.eval_type == "answer":
             metric_type = "answer"
@@ -94,7 +94,7 @@ def main():
             logger.info("使用检索评估指标")
         
         metrics = get_common_metrics(agent_types, metric_type)
-        logger.info(f"使用所有代理共有的评估指标: {', '.join(metrics)}")
+        logger.info(f"使用所有Agent共有的评估指标: {', '.join(metrics)}")
     
     # 加载依赖
     neo4j, llm = load_dependencies()
@@ -109,28 +109,28 @@ def main():
         logger.error(f"加载问题和答案时出错: {e}")
         return
     
-    # 加载所有代理
+    # 加载所有Agent
     agents = {}
     for agent_type in agent_types:
         try:
             if agent_type == "deep" and args.use_deeper:
-                # 特殊处理深度研究代理，使用增强版
+                # 特殊处理深度研究Agent，使用增强版
                 from agent.deep_research_agent import DeepResearchAgent
                 agents[agent_type] = DeepResearchAgent(use_deeper_tool=True)
-                logger.info(f"成功加载{agent_type}代理(增强版)")
+                logger.info(f"成功加载{agent_type}Agent(增强版)")
             else:
                 agents[agent_type] = load_agent(agent_type)
-                logger.info(f"成功加载{agent_type}代理")
+                logger.info(f"成功加载{agent_type}Agent")
         except Exception as e:
-            logger.error(f"加载{agent_type}代理失败: {e}")
+            logger.error(f"加载{agent_type}Agent失败: {e}")
             if args.skip_missing:
-                logger.warning(f"已跳过{agent_type}代理评估")
+                logger.warning(f"已跳过{agent_type}Agent评估")
                 continue
             else:
                 return
     
     if not agents:
-        logger.error("没有成功加载任何代理，无法进行评估")
+        logger.error("没有成功加载任何Agent，无法进行评估")
         return
     
     # 创建评估器
@@ -142,7 +142,7 @@ def main():
         "llm": llm
     }
     
-    # 添加代理到配置
+    # 添加Agent到配置
     for agent_type, agent in agents.items():
         config[f"{agent_type}_agent"] = agent
     
@@ -170,9 +170,9 @@ def main():
     
     # 打印比较结果
     if all_results:
-        logger.info("\n代理性能比较结果:")
+        logger.info("\nAgent性能比较结果:")
         for agent_type, results in all_results.items():
-            logger.info(f"\n{agent_type}代理:")
+            logger.info(f"\n{agent_type}Agent:")
             for metric, score in results.items():
                 logger.info(f"  {metric}: {score:.4f}")
     
@@ -189,7 +189,7 @@ def main():
             table_path = os.path.join(args.save_dir, "agents_comparison.md")
             
             with open(table_path, "w", encoding="utf-8") as f:
-                f.write("# 代理性能对比表\n\n")
+                f.write("# Agent性能对比表\n\n")
                 f.write(comparison_table)
             
             logger.info(f"比较表格已保存至: {table_path}")
@@ -198,14 +198,14 @@ def main():
     else:
         logger.error("评估未生成任何结果")
     
-    # 关闭所有代理
+    # 关闭所有Agent
     for agent_type, agent in agents.items():
         if hasattr(agent, 'close') and callable(agent.close):
             try:
                 agent.close()
-                logger.info(f"已关闭{agent_type}代理")
+                logger.info(f"已关闭{agent_type}Agent")
             except Exception as e:
-                logger.warning(f"关闭{agent_type}代理时出错: {e}")
+                logger.warning(f"关闭{agent_type}Agent时出错: {e}")
 
 if __name__ == "__main__":
     main()

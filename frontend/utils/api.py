@@ -24,10 +24,14 @@ def send_message(message: str) -> Dict:
             "agent_type": st.session_state.agent_type
         }
         
-        # 如果是深度研究代理，添加是否使用增强版工具的参数
+        # 如果是深度研究Agent，添加是否使用增强版工具的参数
         if st.session_state.agent_type == "deep_research_agent":
             params["use_deeper_tool"] = st.session_state.get("use_deeper_tool", True)
             params["show_thinking"] = st.session_state.get("show_thinking", False)
+        
+        # 如果是融合Agent，添加特定参数
+        if st.session_state.agent_type == "fusion_agent":
+            params["use_chain_exploration"] = st.session_state.get("use_chain_exploration", True)
         
         response = requests.post(
             f"{API_URL}/chat",
@@ -89,10 +93,14 @@ def send_message_stream(message: str, on_token: Callable[[str, bool], None]) -> 
             "agent_type": st.session_state.agent_type
         }
         
-        # 如果是深度研究代理，添加特定参数
+        # 如果是深度研究Agent，添加特定参数
         if st.session_state.agent_type == "deep_research_agent":
             params["use_deeper_tool"] = st.session_state.get("use_deeper_tool", True)
             params["show_thinking"] = st.session_state.get("show_thinking", False)
+        
+        # 如果是融合Agent，添加特定参数
+        if st.session_state.agent_type == "fusion_agent":
+            params["use_chain_exploration"] = st.session_state.get("use_chain_exploration", True)
         
         # 设置 SSE 连接
         import sseclient

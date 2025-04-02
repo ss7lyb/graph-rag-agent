@@ -29,13 +29,13 @@ class CommunityRelevanceMetric(BaseMetric):
             
             self.log(f"\n样本 {idx+1}:")
             self.log(f"  问题: {question[:50]}...")
-            self.log(f"  代理类型: {agent_type}")
+            self.log(f"  Agent类型: {agent_type}")
             
             # 提取问题关键词
             keywords = re.findall(r'\b[\w\u4e00-\u9fa5]{2,}\b', normalize_answer(question))
             keywords = [k for k in keywords if len(k) > 1 and len(k) < 15]
             
-            # 特殊处理naive代理
+            # 特殊处理naiveAgent
             if agent_type == "naive":
                 chunks = sample.referenced_entities  # 可能存放的是文本块ID
                 
@@ -103,7 +103,7 @@ class CommunityRelevanceMetric(BaseMetric):
                 relevance_scores.append(score)
                 continue
             
-            # 处理其他代理的社区相关性
+            # 处理其他Agent的社区相关性
             entity_ids = sample.referenced_entities
             
             # 查询与实体关联的社区
@@ -154,28 +154,28 @@ class CommunityRelevanceMetric(BaseMetric):
                 matched = sum(1 for k in keywords if k.lower() in community_info.lower())
                 match_rate = matched / len(keywords) if keywords else 0
                 
-                # 基础分根据代理类型不同
+                # 基础分根据Agent类型不同
                 base_score = 0.3
                 if agent_type == "graph":
                     base_score = 0.4
-                    match_rate *= 1.2  # 给graph代理更高加成
+                    match_rate *= 1.2  # 给graphAgent更高加成
                 elif agent_type == "hybrid":
                     base_score = 0.35
-                    match_rate *= 1.1  # 给hybrid代理小幅加成
+                    match_rate *= 1.1  # 给hybridAgent小幅加成
                 
                 # 计算最终分数
                 score = base_score + 0.5 * match_rate
                 score = min(1.0, score)  # 确保不超过1.0
-                self.log(f"  基于社区内容和代理类型的得分: {score:.4f}")
+                self.log(f"  基于社区内容和Agent类型的得分: {score:.4f}")
             else:
-                # 没有社区信息或关键词，基于代理类型给予基础分
+                # 没有社区信息或关键词，基于Agent类型给予基础分
                 if agent_type == "graph":
                     score = 0.4
                 elif agent_type == "hybrid":
                     score = 0.35
                 else:
                     score = 0.3
-                self.log(f"  基于代理类型的基础分: {score:.4f}")
+                self.log(f"  基于Agent类型的基础分: {score:.4f}")
             
             # 如果分数较低，尝试LLM回退
             if score <= 0.4 and self.llm:
@@ -221,7 +221,7 @@ class CommunityRelevanceMetric(BaseMetric):
         请评估以下AI回答与知识社区的相关性，给出0到1的分数。
         
         问题: {question}
-        代理类型: {agent_type}
+        Agent类型: {agent_type}
         
         问题关键词: {keywords_text}
         引用的实体: {entity_text}
@@ -358,10 +358,10 @@ class SubgraphQualityMetric(BaseMetric):
             self.log(f"  连通性权重: {self.connectivity_weight}")
             self.log(f"  加权质量分数: {quality:.4f}")
             
-            # 根据代理类型略微调整（保持差异较小）
+            # 根据Agent类型略微调整（保持差异较小）
             if sample.agent_type == "graph":
                 quality = min(1.0, quality * 1.05)  # 只给予5%的额外奖励
-                self.log(f"  Graph代理奖励后: {quality:.4f}")
+                self.log(f"  GraphAgent奖励后: {quality:.4f}")
             
             # 确保基础分至少为0.3
             quality = max(0.3, quality)
@@ -420,7 +420,7 @@ class SubgraphQualityMetric(BaseMetric):
         请评估以下AI回答中引用的子图质量，给出0到1的分数。
         
         问题: {question}
-        代理类型: {agent_type}
+        Agent类型: {agent_type}
         
         引用的实体数量: {len(entities) if entities else 0}
         引用实体示例: {entity_text}
@@ -658,16 +658,16 @@ class GraphCoverageMetric(BaseMetric):
             
             self.log(f"\n样本 {idx+1}:")
             self.log(f"  问题: {question[:50]}...")
-            self.log(f"  代理类型: {agent_type}")
+            self.log(f"  Agent类型: {agent_type}")
             
             # 提取关键词
             keywords = self._extract_keywords(question)
             self.log(f"  提取关键词: {keywords}")
             
-            # 特殊处理naive代理
+            # 特殊处理naiveAgent
             if agent_type == "naive":
                 naive_score = self._evaluate_naive_coverage(sample, keywords)
-                self.log(f"  Naive代理的图覆盖率分数: {naive_score:.4f}")
+                self.log(f"  NaiveAgent的图覆盖率分数: {naive_score:.4f}")
                 
                 # 当分数过低时，使用LLM回退
                 if naive_score <= 0.3 and self.llm:
@@ -681,7 +681,7 @@ class GraphCoverageMetric(BaseMetric):
                 coverage_scores.append(naive_score)
                 continue
             
-            # 对于graph和hybrid代理，使用统一的评估方法
+            # 对于graph和hybridAgent，使用统一的评估方法
             graph_score = self._evaluate_graph_coverage(sample, keywords)
             self.log(f"  图覆盖率分数: {graph_score:.4f}")
             
@@ -730,7 +730,7 @@ class GraphCoverageMetric(BaseMetric):
         请评估以下AI回答中对图数据的覆盖程度，给出0到1的分数。
         
         问题: {question}
-        代理类型: {agent_type}
+        Agent类型: {agent_type}
         
         问题关键词: {', '.join(keywords) if keywords else '无关键词'}
         引用的实体ID: {entity_text}
@@ -755,7 +755,7 @@ class GraphCoverageMetric(BaseMetric):
         return [k for k in keywords if len(k) > 1 and len(k) < 15]
     
     def _evaluate_naive_coverage(self, sample, keywords: List[str]) -> float:
-        """评估naive代理的图覆盖率（基于文本块）"""
+        """评估naiveAgent的图覆盖率（基于文本块）"""
         chunks = sample.referenced_entities  # 可能存放的是文本块ID
         chunk_count = len(chunks) if chunks else 0
         
@@ -801,7 +801,7 @@ class GraphCoverageMetric(BaseMetric):
         return base_score + chunk_bonus
     
     def _evaluate_graph_coverage(self, sample, keywords: List[str]) -> float:
-        """统一评估graph和hybrid代理的图覆盖率"""
+        """统一评估graph和hybridAgent的图覆盖率"""
         # 获取引用的实体和关系
         entity_ids = sample.referenced_entities
         relationship_data = sample.referenced_relationships
@@ -839,7 +839,7 @@ class GraphCoverageMetric(BaseMetric):
         self.log(f"  连通性得分: {connectedness_score:.4f}")
         
         # 计算加权总分 - 结构占30%，相关性占40%，连通性占30%
-        base_score = 0.3  # 所有代理类型使用同一基础分
+        base_score = 0.3  # 所有Agent类型使用同一基础分
         total_score = base_score + 0.7 * (
             0.3 * structure_score + 
             0.4 * relevance_score + 
@@ -1032,7 +1032,7 @@ class EntityCoverageMetric(BaseMetric):
             
             self.log(f"\n样本 {idx+1}:")
             self.log(f"  问题: {question[:50]}...")
-            self.log(f"  代理类型: {agent_type}")
+            self.log(f"  Agent类型: {agent_type}")
             
             # 提取问题关键词
             keywords = self._extract_keywords(question)
@@ -1087,7 +1087,7 @@ class EntityCoverageMetric(BaseMetric):
         请评估以下AI回答中对相关实体的覆盖程度，给出0到1的分数。
         
         问题: {question}
-        代理类型: {agent_type}
+        Agent类型: {agent_type}
         
         问题关键词: {', '.join(keywords) if keywords else '无关键词'}
         引用的实体: {entity_text}
@@ -1112,7 +1112,7 @@ class EntityCoverageMetric(BaseMetric):
         return [k for k in keywords if len(k) > 1 and len(k) < 15]
     
     def _evaluate_naive_chunks(self, sample, keywords: List[str]) -> float:
-        """评估naive代理基于文本块的覆盖率"""
+        """评估naiveAgent基于文本块的覆盖率"""
         chunks = sample.referenced_entities  # 存放文本块ID
         
         # 获取文本块内容进行评估
@@ -1271,7 +1271,7 @@ class EntityCoverageMetric(BaseMetric):
         return 0.4
     
     def _calculate_graph_relevance(self, entity_ids: List[str], keywords: List[str]) -> float:
-        """计算graph代理特有的实体相关性得分"""
+        """计算graphAgent特有的实体相关性得分"""
         if not self.neo4j_client or not entity_ids or not keywords:
             return 0.0
             
@@ -1323,7 +1323,7 @@ class RelationshipUtilizationMetric(BaseMetric):
             agent_type = sample.agent_type.lower() if sample.agent_type else ""
             
             self.log(f"\n样本 {idx+1}:")
-            self.log(f"  代理类型: {agent_type}")
+            self.log(f"  Agent类型: {agent_type}")
             
             # 获取引用的关系和实体
             referenced_rels = sample.referenced_relationships
@@ -1479,7 +1479,7 @@ class RelationshipUtilizationMetric(BaseMetric):
         请评估以下AI回答中对实体关系的利用程度，给出0到1的分数。
         
         问题: {question}
-        代理类型: {agent_type}
+        Agent类型: {agent_type}
         
         引用的实体: {entity_text}
         引用的关系: {rel_text}

@@ -270,7 +270,7 @@ async def process_chat_stream(
         # 保存执行轨迹（针对调试模式）
         execution_log = []
         
-        # 对于深度研究代理使用思考流
+        # 对于深度研究Agent使用思考流
         if agent_type == "deep_research_agent" and show_thinking:
             # 获取思考过程的流处理
             thinking_step = False
@@ -302,7 +302,7 @@ async def process_chat_stream(
             
             return
         
-        # 对于其他代理类型，使用标准流式处理
+        # 对于其他Agent类型，使用标准流式处理
         if agent_type in ["hybrid_agent", "graph_agent", "naive_rag_agent"]:
             # 为调试模式收集执行轨迹
             if debug:
@@ -327,14 +327,14 @@ async def process_chat_stream(
                     yield json.dumps({"status": "token", "content": chunk})
                     await asyncio.sleep(0.01)  # 小延迟模拟流式输出
             else:
-                # 使用代理的流式接口
+                # 使用Agent的流式接口
                 async for chunk in selected_agent.ask_stream(message, thread_id=session_id):
                     yield json.dumps({"status": "token", "content": chunk})
             
             # 发送完成消息
             yield json.dumps({"status": "done"})
         else:
-            # 对于不支持流式处理的代理，回退到非流式处理并模拟流
+            # 对于不支持流式处理的Agent，回退到非流式处理并模拟流
             if debug:
                 # 首先获取执行轨迹
                 trace_result = await asyncio.to_thread(
@@ -634,7 +634,14 @@ async def process_feedback(message_id: str, query: str, is_positive: bool, threa
             else:
                 # 负面反馈 - 从缓存中移除该回答
                 selected_agent.clear_cache_for_query(query, thread_id)
-                action = "缓存已被清除"
+                
+                # 同时清除全局缓存
+                if hasattr(selected_agent, 'global_cache_manager'):
+                    # 直接使用原始查询作为键
+                    selected_agent.global_cache_manager.delete(query)
+                    action = "会话缓存和全局缓存已被清除"
+                else:
+                    action = "会话缓存已被清除，但无法访问全局缓存"
                 
             # 更新操作时间戳
             feedback_manager.update_timestamp(lock_key)

@@ -12,6 +12,7 @@
 - [大模型推理能力不断增强，RAG 和 Agent 何去何从](https://www.bilibili.com/video/BV1i6RNYpEwV)  
 - [企业级知识图谱交互问答系统方案](https://www.bilibili.com/video/BV1U599YrE26)  
 - [Jean - 用国产大模型 + LangChain + Neo4j 建图全过程](https://zhuanlan.zhihu.com/p/716089164)
+- [GraphRAG vs DeepSearch？GraphRAG 提出者给你答案](https://mp.weixin.qq.com/s/FOT4pkEPHJR8xFvcVk1YFQ)
 
 ![svg](./assets/deepsearch.svg)
 
@@ -27,6 +28,7 @@
    从多格式文档中提取实体关系，自动构建 Neo4j 知识图谱。
 
 2. **增量更新**
+   
    支持已有图谱基础上的动态增量构建与去重更新。
 
 3. **GraphRAG**  
@@ -35,17 +37,20 @@
 4. **私域 DeepSearch**  
    实现深度语义搜索 + 推理路径回溯，提升问答可解释性。
 
-5. **评估机制**  
-   多维度自动评估 RAG 效果（精确率、召回率、推理路径等）。
+5. **GraphRAG + DeepSearch 融合**  
+   将知识图谱增强的上下文与深度搜索的推理路径相结合，提供更精准且易于追溯的生成式答案。
 
-6. **前后端联动与流式输出**  
-   Streamlit 前端 + FastAPI 后端，支持流式返回与多 Agent 策略选择。
+6. **评估机制**  
+   提供多维度自动评估 RAG 效果的能力，包括精确率、召回率、推理路径评估、生成质量评分等。
 
-7. **图谱推理问答**  
-   支持基于知识图谱的结构化图算法推理问答，如实体间最短路径查询、共同邻居检索、多跳关系追踪等。
+7. **前后端联动与流式输出**  
+   使用 Streamlit 前端与 FastAPI 后端框架，实现前后端实时交互，支持答案流式返回与多 Agent 策略动态选择。
 
-8. **图谱增删改查**  
-   内置图谱编辑接口，支持图谱动态维护。
+8. **图谱推理问答**  
+   基于知识图谱实现结构化推理算法，包括实体间最短路径查询、共同邻居检索、多跳关系追踪等高级图查询功能。
+
+9. **图谱增删改查接口**  
+   内置完善的图谱编辑 API 接口，支持知识图谱动态增删改查及实时维护。
 
 
 ## 参考与致谢
@@ -53,5 +58,5 @@
 - [GraphRAG](https://github.com/microsoft/graphrag) – 微软开源的知识图谱增强 RAG 框架  
 - [llm-graph-builder](https://github.com/neo4j-labs/llm-graph-builder) – Neo4j 官方 LLM 建图工具  
 - [LightRAG](https://github.com/HKUDS/LightRAG) – 轻量级知识增强生成方案  
-- [deep-searcher](https://github.com/zilliztech/deep-searcher) – Milvus 团队开源的私域语义搜索框架  
-- [ragflow](https://github.com/infiniflow/ragflow) – 支持自动管道构建的 RAG 系统  
+- [deep-searcher](https://github.com/zilliztech/deep-searcher) – 硅基流动团队开源的私域语义搜索框架  
+- [ragflow](https://github.com/infiniflow/ragflow) – 开源的企业级 RAG 系统

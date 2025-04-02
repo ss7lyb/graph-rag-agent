@@ -131,7 +131,15 @@ naive_description = "基础检索工具，返回最相关的原文段落。"
 
 ```bash
 cd graph-rag-agent/
+
+# 初始全量构建
 python build/main.py
+
+# 单次变量（增量、减量）构建：
+python build/incremental_update.py --once
+
+# 后台守护进程，定期变量更新：
+python build/incremental_update.py --daemon
 ```
 
 **注意：** `main.py`是构建的全流程，如果需要单独跑某个流程，请先完成实体索引的构建，再进行 chunk 索引构建，否则会报错（chunk 索引依赖实体索引）。

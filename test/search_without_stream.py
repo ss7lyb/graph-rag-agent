@@ -2,6 +2,7 @@ from agent.deep_research_agent import DeepResearchAgent
 from agent.naive_rag_agent import NaiveRagAgent
 from agent.graph_agent import GraphAgent
 from agent.hybrid_agent import HybridAgent
+from agent.fusion_agent import FusionGraphRAGAgent
 
 # DeepResearchAgent 非流式示例
 def test_deep_research_agent():
@@ -95,10 +96,24 @@ def test_naive_agent():
     print("\n --- 带执行轨迹的结果 ---")
     print(trace_result.get("answer"))
 
+def test_fusion_agent():
+    print("\n======= FusinGraphRagAgent 非流式输出 =======")
+    agent = FusionGraphRAGAgent()
+    # 简单问答
+    answer = agent.ask("优秀学生要如何申请？")
+    print("\n --- ask方法结果 ---")
+    print(answer)
+
+    # 使用ask_with_trace获取执行轨迹
+    trace_result = agent.ask_with_trace("优秀学生要如何申请")
+    print("\n --- 带执行轨迹的结果 ---")
+    print(trace_result.get("answer"))
+
 # 运行所有非流式测试
 if __name__ == "__main__":
     test_deep_research_agent()
-    test_deeper_research_tool()
+    test_fusion_agent()
+    # test_deeper_research_tool()
     test_graph_agent()
     test_hybrid_agent()
     test_naive_agent()

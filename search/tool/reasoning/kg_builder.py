@@ -16,7 +16,7 @@ class DynamicKnowledgeGraphBuilder:
         初始化动态知识图谱构建器
         
         Args:
-            graph: Neo4j图数据库连接
+            graph: 图数据库连接
             entity_relation_extractor: 实体关系提取器
         """
         self.graph = graph
@@ -39,6 +39,10 @@ class DynamicKnowledgeGraphBuilder:
         Returns:
             nx.DiGraph: 构建的知识图谱
         """
+        # 确保有有效的实体
+        if not entities:
+            return self.knowledge_graph
+            
         # 重置图谱
         self.knowledge_graph = nx.DiGraph()
         self.seed_entities = set(entities)
@@ -140,135 +144,63 @@ class DynamicKnowledgeGraphBuilder:
         except Exception as e:
             print(f"探索图谱时出错: {e}")
     
-    def get_entity_neighborhood(self, entity: str, depth: int = 1) -> Dict:
+    def build_hierarchical_graph(self, documents):
         """
-        获取实体的邻域信息
+        构建包含文档层级、章节和特殊元素的图谱
         
         Args:
-            entity: 目标实体
-            depth: 探索深度
-            
-        Returns:
-            Dict: 包含邻域信息的字典
+            documents: 文档列表
         """
-        if entity not in self.knowledge_graph:
-            return {"entity": entity, "neighbors": []}
+        # 清理原图谱
+        self.knowledge_graph = nx.DiGraph()
         
-        neighborhood = {"entity": entity, "neighbors": []}
-        
-        # BFS探索邻域
-        visited = {entity}
-        current_level = {entity}
-        
-        for _ in range(depth):
-            next_level = set()
+        for doc in documents:
+            doc_id = doc.get('id')
+            # 添加文档节点
+            self.knowledge_graph.add_node(
+                doc_id,
+                type="document",
+                properties={"title": doc.get('title', ''), "type": doc.get('type', '')}
+            )
             
-            # 遍历当前层的所有节点
-            for node in current_level:
-                # 获取所有出边邻居
-                for successor in self.knowledge_graph.successors(node):
-                    if successor not in visited:
-                        edge_data = self.knowledge_graph.get_edge_data(node, successor)
-                        neighborhood["neighbors"].append({
-                            "from": node,
-                            "to": successor,
-                            "relation": edge_data.get("type", "unknown"),
-                            "direction": "outgoing"
-                        })
-                        next_level.add(successor)
-                        visited.add(successor)
+            # 添加章节节点和关系
+            for section in doc.get('sections', []):
+                section_id = f"{doc_id}_section_{section.get('id')}"
+                self.knowledge_graph.add_node(
+                    section_id,
+                    type="section",
+                    properties={"title": section.get('title', ''), "content": section.get('content', '')}
+                )
+                # 添加文档到章节的关系
+                self.knowledge_graph.add_edge(doc_id, section_id, type="HAS_SECTION")
                 
-                # 获取所有入边邻居
-                for predecessor in self.knowledge_graph.predecessors(node):
-                    if predecessor not in visited:
-                        edge_data = self.knowledge_graph.get_edge_data(predecessor, node)
-                        neighborhood["neighbors"].append({
-                            "from": predecessor,
-                            "to": node,
-                            "relation": edge_data.get("type", "unknown"),
-                            "direction": "incoming"
-                        })
-                        next_level.add(predecessor)
-                        visited.add(predecessor)
-            
-            # 更新当前层
-            current_level = next_level
-            if not current_level:
-                break
+                # 添加段落节点
+                for i, paragraph in enumerate(section.get('paragraphs', [])):
+                    para_id = f"{section_id}_para_{i}"
+                    self.knowledge_graph.add_node(
+                        para_id,
+                        type="paragraph",
+                        properties={"content": paragraph, "index": i}
+                    )
+                    # 添加章节到段落的关系
+                    self.knowledge_graph.add_edge(section_id, para_id, type="HAS_PARAGRAPH")
+                    
+                # 添加特殊元素（图表、公式等）
+                for element in section.get('special_elements', []):
+                    element_id = f"{section_id}_{element.get('type')}_{element.get('id')}"
+                    self.knowledge_graph.add_node(
+                        element_id,
+                        type=element.get('type'),  # 如：formula, table, figure
+                        properties={"content": element.get('content', ''), "description": element.get('description', '')}
+                    )
+                    # 添加章节到特殊元素的关系
+                    self.knowledge_graph.add_edge(section_id, element_id, type=f"HAS_{element.get('type').upper()}")
         
-        return neighborhood
+        print(f"构建层级图谱完成，包含 {self.knowledge_graph.number_of_nodes()} 个节点和 "
+              f"{self.knowledge_graph.number_of_edges()} 个关系")
+        
+        return self.knowledge_graph
     
-    def find_paths(self, source: str, target: str, max_paths: int = 3) -> List[List[Dict]]:
-        """
-        查找从源实体到目标实体的路径
-        
-        Args:
-            source: 源实体
-            target: 目标实体
-            max_paths: 最大路径数
-            
-        Returns:
-            List[List[Dict]]: 路径列表，每个路径是节点和关系的序列
-        """
-        # 检查实体是否在图谱中
-        if source not in self.knowledge_graph or target not in self.knowledge_graph:
-            return []
-        
-        try:
-            # 使用NetworkX查找所有简单路径
-            all_paths = list(nx.all_simple_paths(
-                self.knowledge_graph, 
-                source=source, 
-                target=target, 
-                cutoff=6  # 限制路径长度
-            ))
-            
-            # 限制路径数量
-            paths = all_paths[:max_paths]
-            
-            # 格式化路径
-            formatted_paths = []
-            for path in paths:
-                formatted_path = []
-                
-                # 添加第一个节点
-                formatted_path.append({
-                    "type": "entity",
-                    "id": path[0],
-                    "properties": self.knowledge_graph.nodes[path[0]].get("properties", {})
-                })
-                
-                # 添加后续节点和关系
-                for i in range(len(path) - 1):
-                    source_node = path[i]
-                    target_node = path[i + 1]
-                    
-                    # 获取关系数据
-                    edge_data = self.knowledge_graph.get_edge_data(source_node, target_node)
-                    relation_type = edge_data.get("type", "unknown")
-                    
-                    # 添加关系
-                    formatted_path.append({
-                        "type": "relation",
-                        "relation": relation_type,
-                        "from": source_node,
-                        "to": target_node
-                    })
-                    
-                    # 添加目标节点
-                    formatted_path.append({
-                        "type": "entity",
-                        "id": target_node,
-                        "properties": self.knowledge_graph.nodes[target_node].get("properties", {})
-                    })
-                
-                formatted_paths.append(formatted_path)
-            
-            return formatted_paths
-            
-        except Exception as e:
-            print(f"查找路径时出错: {e}")
-            return []
     
     def extract_subgraph_from_chunk(self, chunk_text: str, chunk_id: str) -> bool:
         """

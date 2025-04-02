@@ -1,7 +1,6 @@
 from typing import List, Dict, Any
 import time
 import numpy as np
-import jieba
 import jieba.analyse
 import re
 from sklearn.metrics.pairwise import cosine_similarity
@@ -108,7 +107,10 @@ class CommunityAwareSearchEnhancer:
                     
                 try:
                     comm_embedding = self.embeddings.embed_query(comm['summary'])
-                    similarity = self._calculate_similarity(query_embedding, comm_embedding)
+                    similarity = cosine_similarity(
+                        np.array(query_embedding).reshape(1, -1),
+                        np.array(comm_embedding).reshape(1, -1)
+                    )[0][0]
                     
                     # 关键词匹配得分
                     high_level_kw = keywords.get('high_level', [])
@@ -155,7 +157,7 @@ class CommunityAwareSearchEnhancer:
     
     def extract_community_knowledge(self, communities: List[Dict]) -> Dict:
         """
-        从社区中提取有用的知识
+        从社区中提取有用的知识，增加摘要的权重
         
         Args:
             communities: 相关社区列表
@@ -169,28 +171,40 @@ class CommunityAwareSearchEnhancer:
         community_ids = [c['community_id'] for c in communities]
         summaries = [c['summary'] for c in communities]
         
-        # 获取社区中的核心实体
         try:
+            # 获取社区中的核心实体，加入PageRank权重
             entity_query = """
             MATCH (c:__Community__)<-[:IN_COMMUNITY]-(e:__Entity__)
             WHERE c.id IN $community_ids
+            WITH e, c
+            MATCH (chunk:__Chunk__)-[:MENTIONS]->(e)
+            WITH e, c, count(chunk) as mention_count
             RETURN e.id AS entity_id, e.description AS description,
-                   c.id AS community_id
+                c.id AS community_id, mention_count
+            ORDER BY mention_count DESC
             LIMIT 50
             """
             
             entities = self.graph.query(entity_query, params={"community_ids": community_ids})
             
-            # 获取实体间的关系
+            # 获取实体间的关系，并获取路径重要性
             if entities:
                 entity_ids = [e['entity_id'] for e in entities]
                 
                 rel_query = """
                 MATCH (e1:__Entity__)-[r]->(e2:__Entity__)
                 WHERE e1.id IN $entity_ids AND e2.id IN $entity_ids
+                WITH e1, e2, r
+                OPTIONAL MATCH (chunk:__Chunk__)-[:MENTIONS]->(e1)
+                WITH e1, e2, r, count(chunk) as e1_mentions
+                OPTIONAL MATCH (chunk:__Chunk__)-[:MENTIONS]->(e2)
+                WITH e1, e2, r, e1_mentions, count(chunk) as e2_mentions
+                WITH e1, e2, r, e1_mentions + e2_mentions as path_importance
                 RETURN e1.id AS source, e2.id AS target,
-                       type(r) AS relation_type,
-                       r.weight AS weight
+                    type(r) AS relation_type,
+                    r.weight AS weight,
+                    path_importance
+                ORDER BY path_importance DESC
                 LIMIT 100
                 """
                 
@@ -198,16 +212,44 @@ class CommunityAwareSearchEnhancer:
             else:
                 relationships = []
                 
-            # 返回结构化知识
+            # 获取社区摘要的时序信息
+            summaries_with_time = []
+            for summary in summaries:
+                # 提取时序信息或其他增强数据
+                time_info = self._extract_temporal_info(summary)
+                summaries_with_time.append({
+                    "summary": summary,
+                    "temporal_info": time_info
+                })
+                
+            # 返回增强的结构化知识
             return {
                 "entities": entities,
                 "relationships": relationships,
-                "summaries": summaries
+                "summaries": summaries_with_time
             }
-            
+                
         except Exception as e:
             print(f"提取社区知识时出错: {e}")
             return {"entities": [], "relationships": [], "summaries": []}
+
+    def _extract_temporal_info(self, text):
+        """提取文本中的时序信息"""
+        # 简单的正则表达式匹配时序信息
+        import re
+        time_patterns = [
+            r'\d{4}年\d{1,2}月\d{1,2}日',
+            r'\d{4}-\d{1,2}-\d{1,2}',
+            r'\d{4}年\d{1,2}月',
+            r'\d{4}-\d{1,2}',
+            r'\d{4}年'
+        ]
+        
+        matches = []
+        for pattern in time_patterns:
+            matches.extend(re.findall(pattern, text))
+        
+        return matches
     
     def generate_search_strategy(self, query: str, 
                                community_knowledge: Dict) -> Dict:
@@ -289,19 +331,3 @@ class CommunityAwareSearchEnhancer:
                 "follow_up_queries": [],
                 "focus_entities": [e['entity_id'] for e in entities[:5]]
             }
-    
-    def _calculate_similarity(self, embedding1, embedding2):
-        """计算两个向量的余弦相似度"""
-        # 确保向量形状兼容
-        if not isinstance(embedding1, np.ndarray):
-            embedding1 = np.array(embedding1)
-        if not isinstance(embedding2, np.ndarray):
-            embedding2 = np.array(embedding2)
-            
-        # 重塑为2D数组
-        embedding1 = embedding1.reshape(1, -1)
-        embedding2 = embedding2.reshape(1, -1)
-        
-        # 计算余弦相似度
-        sim = cosine_similarity(embedding1, embedding2)[0][0]
-        return sim

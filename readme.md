@@ -58,5 +58,5 @@
 - [GraphRAG](https://github.com/microsoft/graphrag) – 微软开源的知识图谱增强 RAG 框架  
 - [llm-graph-builder](https://github.com/neo4j-labs/llm-graph-builder) – Neo4j 官方 LLM 建图工具  
 - [LightRAG](https://github.com/HKUDS/LightRAG) – 轻量级知识增强生成方案  
-- [deep-searcher](https://github.com/zilliztech/deep-searcher) – 硅基流动团队开源的私域语义搜索框架  
-- [ragflow](https://github.com/infiniflow/ragflow) – 开源的企业级 RAG 系统
+- [deep-searcher](https://github.com/zilliztech/deep-searcher) – Zilliz团队开源的私域语义搜索框架  
+- [ragflow](https://github.com/infiniflow/ragflow) – 企业级 RAG 系统

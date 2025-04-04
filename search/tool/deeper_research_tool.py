@@ -963,7 +963,7 @@ class DeeperResearchTool:
                         if community_summaries:
                             enhancement_note += "\n相关知识社区见解:\n"
                             for i, summary in enumerate(community_summaries[:1]):
-                                enhancement_note += f"- {summary[:150]}...\n"
+                                enhancement_note += f"- {summary[:]}...\n"
                         
                         enhanced_final = clean_answer + enhancement_note
                         

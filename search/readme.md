@@ -46,7 +46,7 @@ search/
 
 3. **高级搜索策略**：
    - `HybridSearchTool`：类似LightRAG实现，结合低级实体详情和高级主题概念
-   - `NaiveSearchTool`：简单的向量搜索实现，适合作为备选方案
+   - `NaiveSearchTool`：简单的向量搜索实现，适合作为备选方案（根据微软的Graphrag实现，我们已经有了`__Chunk__`节点，为了简单，直接在Neo4j里做向量化即可，没有采用向量数据库）
    - `DeepResearchTool`：实现多步骤的思考-搜索-推理过程，适合复杂问题
    - `DeeperResearchTool`：增强版深度研究，添加社区感知和知识图谱分析
 

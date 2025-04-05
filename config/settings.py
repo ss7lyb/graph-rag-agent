@@ -38,7 +38,8 @@ community_algorithm = 'leiden'
 BASE_DIR = Path(__file__).resolve().parent.parent
 FILES_DIR = BASE_DIR / 'files'
 
-# 文本分块
+# 文本分块，注意如果是本地的embedding模型，比如BAAI/bge-large-zh-v1.5, 他的上下文才512token，这里的数字需要调的很小
+# 而用openai的text-embedding-3-large，上下文有8192token，这里的数字可以适当大点
 CHUNK_SIZE=500
 OVERLAP=100
 

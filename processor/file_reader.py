@@ -7,7 +7,6 @@ import csv
 import json
 import yaml
 from yaml import CLoader as Loader
-import textract
 
 from config.settings import FILES_DIR
 

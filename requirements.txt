@@ -38,4 +38,19 @@ uvicorn==0.29.0
 
 # linux: sudo apt-get install python-dev-is-python3 libxml2-dev libxslt1-dev antiword unrtf poppler-utils
 textract==1.6.3
-# windows: pywin32>=302
+
+# windows
+# pywin32>=302
+
+# 以下是GRPO训练所需的额外依赖， vllm在windows下不可用
+unsloth>=0.4.0
+trl==0.14.0
+peft>=0.8.0
+transformers>=4.38.0
+torch>=2.0.0
+tiktoken>=0.5.0
+networkx>=3.0
+vllm>=0.3.0
+triton==3.1.0
+regex>=2023.0.0
+tenacity>=8.2.0

@@ -245,6 +245,61 @@ class QueryGenerator:
         except Exception as e:
             print(f"[子查询生成错误] {str(e)}")
             return [original_query]
+    
+    def generate_multiple_hypotheses(query: str, llm) -> List[str]:
+        """
+        为查询生成多个假设
+        
+        Args:
+            query: 查询字符串
+            llm: 语言模型
+            
+        Returns:
+            List[str]: 假设列表
+        """
+        prompt = f"""
+        为以下问题生成2-3个可能的假设，这些假设应该代表不同角度或思路：
+        
+        问题: "{query}"
+        
+        每个假设应该:
+        1. 不同于其他假设
+        2. 提供一种可能的思考方向
+        3. 有助于深入分析问题
+        
+        以列表形式返回假设，每个假设简短明了。
+        """
+        
+        try:
+            response = llm.invoke(prompt)
+            content = response.content if hasattr(response, 'content') else str(response)
+            
+            # 使用正则表达式提取假设
+            import re
+            
+            # 尝试匹配编号列表 (1. xxx 2. xxx)
+            numbered_pattern = re.compile(r'\d+\.\s*(.*?)(?=\d+\.|$)', re.DOTALL)
+            numbered_matches = numbered_pattern.findall(content)
+            
+            if numbered_matches:
+                return [match.strip() for match in numbered_matches if match.strip()]
+            
+            # 尝试匹配破折号列表 (- xxx)
+            dash_pattern = re.compile(r'-\s*(.*?)(?=-|$)', re.DOTALL)
+            dash_matches = dash_pattern.findall(content)
+            
+            if dash_matches:
+                return [match.strip() for match in dash_matches if match.strip()]
+            
+            # 如果上述方法失败，按行分割并过滤
+            lines = [line.strip() for line in content.split('\n') if line.strip()]
+            potential_hypotheses = [line for line in lines if len(line) > 10 and not line.startswith("假设") and not line.startswith("以下是")]
+            
+            return potential_hypotheses[:3]  # 最多返回3个假设
+            
+        except Exception as e:
+            print(f"生成假设失败: {e}")
+            return []
         
     def generate_followup_queries(self, original_query: str, retrieved_info: List[str]) -> List[str]:
         """

@@ -1,4 +1,4 @@
-from typing import List, Dict, Generator, AsyncGenerator
+from typing import List, Dict, AsyncGenerator
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -15,7 +15,7 @@ from agent.base import BaseAgent
 
 class DeepResearchAgent(BaseAgent):
     """
-    深度研究Agent：使用DeepResearcher实现多步骤推理的Agent
+    深度研究Agent
     
     该Agent扩展了基础Agent架构，使用多回合的思考、搜索和推理来解决复杂问题。
     主要特点：
@@ -24,11 +24,14 @@ class DeepResearchAgent(BaseAgent):
     3. 高质量知识整合
     4. 支持流式输出
     5. 社区感知和知识图谱增强
+    6. 多分支推理和矛盾检测
+    7. 知识图谱探索能力
+    8. 推理链分析
     """
     
     def __init__(self, use_deeper_tool=True):
         """
-        初始化深度研究Agent
+        初始化增强版深度研究Agent
         
         Args:
             use_deeper_tool: 是否使用增强版研究工具
@@ -41,39 +44,67 @@ class DeepResearchAgent(BaseAgent):
             try:
                 self.research_tool = DeeperResearchTool()
                 print("已加载增强版深度研究工具")
+                
+                # 加载额外工具
+                self.exploration_tool = self.research_tool.get_exploration_tool()
+                self.reasoning_analysis_tool = self.research_tool.get_reasoning_analysis_tool()
+                self.stream_tool = self.research_tool.get_stream_tool()
             except Exception as e:
                 print(f"加载增强版研究工具失败: {e}，将使用标准版")
                 self.research_tool = DeepResearchTool()
                 self.use_deeper_tool = False
+                
+                # 标准版工具
+                self.stream_tool = self.research_tool.get_thinking_stream_tool()
         else:
             # 使用标准版研究工具
             self.research_tool = DeepResearchTool()
+            self.stream_tool = self.research_tool.get_thinking_stream_tool()
         
         # 设置缓存目录
-        self.cache_dir = "./cache/deep_research_agent"
+        self.cache_dir = "./cache/enhanced_research_agent"
         
         # 设置查看推理过程的模式
         self.show_thinking = False
+        
+        # 添加会话上下文
+        self.session_context = {}
+        
+        # 加载社区知识增强器
+        if use_deeper_tool and hasattr(self.research_tool, 'community_search'):
+            self.community_enhancer = self.research_tool.community_search
+        else:
+            self.community_enhancer = None
 
         # 调用父类构造函数
         super().__init__(cache_dir=self.cache_dir)
     
     def _setup_chains(self):
-        # DeepResearchTool 主要通过 thinking 方法和其他工具来处理查询
-        # 不需要处理链
+        """设置处理链 - 由于我们直接使用工具，不需要特别设置"""
         pass
     
     def _setup_tools(self) -> List:
-        """设置工具"""
+        """设置工具，根据模式选择不同的工具组合"""
         tools = []
         
-        # 根据模式选择不同的工具
+        # 基础研究工具 - 根据显示思考过程的模式选择
         if self.show_thinking:
             # 思考过程可见模式
             tools.append(self.research_tool.get_thinking_tool())
         else:
             # 标准模式
             tools.append(self.research_tool.get_tool())
+        
+        # 添加增强工具 - 只有使用增强版深度研究工具时才有
+        if self.use_deeper_tool:
+            # 添加知识图谱探索工具
+            tools.append(self.exploration_tool)
+            
+            # 添加推理链分析工具
+            tools.append(self.reasoning_analysis_tool)
+        
+        # 流式工具总是添加
+        tools.append(self.stream_tool)
             
         return tools
     
@@ -88,7 +119,7 @@ class DeepResearchAgent(BaseAgent):
         return self.research_tool.extract_keywords(query)
     
     def _generate_node(self, state):
-        """生成回答节点逻辑"""
+        """生成回答节点逻辑 - 处理各种返回格式"""
         messages = state["messages"]
         
         # 安全地获取问题和检索结果
@@ -121,11 +152,30 @@ class DeepResearchAgent(BaseAgent):
             self.global_cache_manager.set(question, cached_result)
             return {"messages": [AIMessage(content=cached_result)]}
 
-        # 检查流式输出的情况
-        if isinstance(retrieval_result, (Generator, dict)) and not isinstance(retrieval_result, str):
+        # 处理流式输出的情况 - 生成器或字典结果
+        if isinstance(retrieval_result, (AsyncGenerator, Dict)) and not isinstance(retrieval_result, str):
+            # 如果结果是字典且包含'answer'字段，提取答案
+            if isinstance(retrieval_result, dict) and 'answer' in retrieval_result:
+                answer = retrieval_result['answer']
+                # 根据结果结构处理
+                if '<think>' in answer and '</think>' in answer:
+                    # 包含思考过程，提取干净的答案
+                    clean_answer = re.sub(r'<think>.*?</think>\s*', '', answer, flags=re.DOTALL)
+                    # 缓存清理后的答案
+                    if clean_answer and len(clean_answer) > 10:
+                        self.cache_manager.set(question, clean_answer, thread_id=thread_id)
+                        self.global_cache_manager.set(question, clean_answer)
+                    return {"messages": [AIMessage(content=clean_answer)]}
+                else:
+                    # 没有特殊标记，直接使用
+                    if answer and len(answer) > 10:
+                        self.cache_manager.set(question, answer, thread_id=thread_id)
+                        self.global_cache_manager.set(question, answer)
+                    return {"messages": [AIMessage(content=answer)]}
+            # 生成器或其他复杂结构，直接返回
             return {"messages": [AIMessage(content=retrieval_result)]}
 
-        # 如果检索结果不是思考过程（当使用非思考工具时）
+        # 如果检索结果不是包含思考过程的字符串，直接返回
         if not isinstance(retrieval_result, str) or not retrieval_result.startswith("<think>"):
             # 直接返回检索结果
             if self.cache_manager.validate_answer(question, retrieval_result):
@@ -152,6 +202,8 @@ class DeepResearchAgent(BaseAgent):
                     {question}
                     
                     请生成一个全面、有深度的回答，不要重复思考过程，直接给出最终综合结论。
+                    结论应该清晰、直接地回答问题，包含相关的事实和见解。
+                    如果有不同的观点或矛盾的信息，请指出并提供平衡的视角。
                     """),
             ])
             
@@ -178,68 +230,8 @@ class DeepResearchAgent(BaseAgent):
             error_msg = f"处理思考过程时出错: {str(e)}"
             return {"messages": [AIMessage(content=error_msg)]}
     
-    async def _stream_process(self, inputs, config):
-        """实现流式处理过程"""
-        query = inputs["messages"][-1].content
-        thread_id = config.get("configurable", {}).get("thread_id", "default")
-        show_thinking = config.get("configurable", {}).get("show_thinking", False)
-        
-        # 根据流式模式选择适当的处理方法
-        if show_thinking:
-            # 使用工具的流式思考接口
-            if self.use_deeper_tool:
-                async for chunk in self.research_tool.thinking_stream(query):
-                    if isinstance(chunk, dict) and "answer" in chunk:
-                        # 这是最终答案，分块返回
-                        final_answer = chunk["answer"]
-                        chunk_size = 4  # 每个分块的字符数
-                        for i in range(0, len(final_answer), chunk_size):
-                            yield final_answer[i:i+chunk_size]
-                            await asyncio.sleep(0.01)
-                        return
-                    else:
-                        # 思考过程，直接返回
-                        yield chunk
-            else:
-                # 标准版深度研究工具
-                async for chunk in self.research_tool.thinking_stream(query):
-                    if isinstance(chunk, dict) and "answer" in chunk:
-                        # 最终答案，分块返回
-                        final_answer = chunk["answer"]
-                        chunk_size = 4
-                        for i in range(0, len(final_answer), chunk_size):
-                            yield final_answer[i:i+chunk_size]
-                            await asyncio.sleep(0.01)
-                        return
-                    else:
-                        # 思考过程，直接返回
-                        yield chunk
-        else:
-            # 普通搜索模式，不显示思考过程
-            cached_response = self.cache_manager.get(f"deep:{query}", thread_id=thread_id)
-            if cached_response:
-                # 缓存命中，分块返回
-                chunk_size = 4
-                for i in range(0, len(cached_response), chunk_size):
-                    yield cached_response[i:i+chunk_size]
-                    await asyncio.sleep(0.01)
-                return
-            
-            # 无缓存，执行搜索并仅返回最终答案
-            result = self.ask_with_thinking(query, thread_id=thread_id)
-            answer = result.get("answer", "")
-            
-            # 缓存结果
-            if answer and len(answer) > 10:
-                self.cache_manager.set(f"deep:{query}", answer, thread_id=thread_id)
-            
-            # 分块返回最终答案
-            chunk_size = 4
-            for i in range(0, len(answer), chunk_size):
-                yield answer[i:i+chunk_size]
-                await asyncio.sleep(0.01)
-    
-    def ask(self, query: str, thread_id: str = "default", recursion_limit: int = 5, show_thinking: bool = False):
+    def ask(self, query: str, thread_id: str = "default", recursion_limit: int = 5, 
+            show_thinking: bool = False, exploration_mode: bool = False):
         """
         向Agent提问，可选显示思考过程
         
@@ -248,6 +240,7 @@ class DeepResearchAgent(BaseAgent):
             thread_id: 会话ID
             recursion_limit: 递归限制
             show_thinking: 是否显示思考过程
+            exploration_mode: 是否使用知识图谱探索模式
                 
         返回:
             str: 生成的回答或包含思考过程的字典
@@ -257,32 +250,55 @@ class DeepResearchAgent(BaseAgent):
         self.show_thinking = show_thinking
         
         try:
-            # 调用父类方法
+            # 检查是否使用知识图谱探索模式
+            if exploration_mode and self.use_deeper_tool:
+                # 知识图谱探索模式
+                return self.explore_knowledge(query, thread_id)
+            
+            # 正常模式 - 调用父类方法
             result = super().ask(query, thread_id, recursion_limit)
             return result
         finally:
             # 重置状态
             self.show_thinking = old_thinking
     
-    def ask_with_thinking(self, query: str, thread_id: str = "default"):
+    def ask_with_thinking(self, query: str, thread_id: str = "default", community_aware: bool = True):
         """
         提问并返回带思考过程的答案
         
         参数:
             query: 用户问题
             thread_id: 会话ID
+            community_aware: 是否启用社区感知
             
         返回:
             dict: 包含思考过程和答案的字典
         """
-        # 直接调用研究工具的thinking方法
-        result = self.research_tool.thinking(query)
-        
-        # 确保结果包含执行日志
-        if "execution_logs" not in result:
-            result["execution_logs"] = []
+        # 如果启用社区感知且工具支持
+        if community_aware and self.community_enhancer:
+            # 提取关键词
+            keywords = self.research_tool.extract_keywords(query)
             
-        return result
+            # 使用社区感知增强搜索
+            enhanced_context = self.community_enhancer.enhance_search(query, keywords)
+            
+            # 传递增强上下文到思考过程
+            result = self.research_tool.thinking(query)
+            
+            # 添加社区上下文到结果
+            if "community_info" in enhanced_context:
+                result["community_context"] = enhanced_context["community_info"]
+            
+            return result
+        else:
+            # 直接调用研究工具的thinking方法
+            result = self.research_tool.thinking(query)
+            
+            # 确保结果包含执行日志
+            if "execution_logs" not in result:
+                result["execution_logs"] = []
+                
+            return result
     
     async def ask_stream(self, query: str, thread_id: str = "default", 
                          recursion_limit: int = 5, show_thinking: bool = False) -> AsyncGenerator[str, None]:
@@ -298,29 +314,51 @@ class DeepResearchAgent(BaseAgent):
         返回:
             AsyncGenerator: 流式响应内容
         """
-        # 检查缓存
+        # 使用父类的缓存检查逻辑
         fast_result = self.check_fast_cache(query, thread_id)
         if fast_result:
-            # 缓存命中，分块返回
-            chunk_size = 4
-            for i in range(0, len(fast_result), chunk_size):
-                yield fast_result[i:i+chunk_size]
-                await asyncio.sleep(0.01)
-            return
+            # 缓存命中，按句子分割返回
+            chunks = re.split(r'([.!?。！？]\s*)', fast_result)
+            buffer = ""
             
-        # 无缓存，根据是否显示思考过程决定调用哪个流式方法
+            for i in range(0, len(chunks)):
+                buffer += chunks[i]
+                
+                # 当缓冲区包含完整句子或达到合理大小时输出
+                if (i % 2 == 1) or len(buffer) >= 80:
+                    yield buffer
+                    buffer = ""
+                    await asyncio.sleep(0.01)
+            
+            # 输出任何剩余内容
+            if buffer:
+                yield buffer
+            return
+        
+        # 无缓存，根据是否显示思考过程和工具类型选择流式方法
         if show_thinking:
             # 使用工具的流式思考接口
             if self.use_deeper_tool:
                 async for chunk in self.research_tool.thinking_stream(query):
                     if isinstance(chunk, dict) and "answer" in chunk:
-                        # 这是最终答案，分块返回
+                        # 这是最终答案，处理后返回
                         final_answer = chunk["answer"]
-                        chunk_size = 4
-                        for i in range(0, len(final_answer), chunk_size):
-                            yield final_answer[i:i+chunk_size]
-                            await asyncio.sleep(0.01)
-                        return
+                        
+                        # 如果包含思考标记，提取干净部分
+                        if "<think>" in final_answer and "</think>" in final_answer:
+                            clean_answer = re.sub(r'<think>.*?</think>\s*', '', final_answer, flags=re.DOTALL)
+                            
+                            # 缓存清理后的答案
+                            if clean_answer and len(clean_answer) > 10:
+                                self.cache_manager.set(f"deep:{query}", clean_answer, thread_id=thread_id)
+                            
+                            yield clean_answer
+                        else:
+                            # 没有思考标记，直接使用
+                            if final_answer and len(final_answer) > 10:
+                                self.cache_manager.set(f"deep:{query}", final_answer, thread_id=thread_id)
+                            
+                            yield final_answer
                     else:
                         # 思考过程，直接返回
                         yield chunk
@@ -328,35 +366,240 @@ class DeepResearchAgent(BaseAgent):
                 # 标准版深度研究工具
                 async for chunk in self.research_tool.thinking_stream(query):
                     if isinstance(chunk, dict) and "answer" in chunk:
-                        # 最终答案，分块返回
+                        # 最终答案，提取干净部分
                         final_answer = chunk["answer"]
-                        chunk_size = 4
-                        for i in range(0, len(final_answer), chunk_size):
-                            yield final_answer[i:i+chunk_size]
-                            await asyncio.sleep(0.01)
-                        return
+                        if "<think>" in final_answer and "</think>" in final_answer:
+                            clean_answer = re.sub(r'<think>.*?</think>\s*', '', final_answer, flags=re.DOTALL)
+                            # 缓存清理后的答案
+                            if clean_answer and len(clean_answer) > 10:
+                                self.cache_manager.set(f"deep:{query}", clean_answer, thread_id=thread_id)
+                            yield clean_answer
+                        else:
+                            # 没有思考标记，直接使用
+                            if final_answer and len(final_answer) > 10:
+                                self.cache_manager.set(f"deep:{query}", final_answer, thread_id=thread_id)
+                            yield final_answer
                     else:
                         # 思考过程，直接返回
                         yield chunk
         else:
             # 普通搜索，仅返回最终答案
             if self.use_deeper_tool:
-                # 增强版深度研究工具
+                # 增强版深度研究工具的流式搜索
                 async for chunk in self.research_tool.search_stream(query):
                     yield chunk
             else:
-                # 标准版深度研究工具
+                # 标准版深度研究工具的流式搜索
                 async for chunk in self.research_tool.search_stream(query):
                     yield chunk
+            
+    def explore_knowledge(self, query: str, thread_id: str = "default"):
+        """
+        使用知识图谱探索模式探索主题
+        
+        参数:
+            query: 用户查询或探索主题
+            thread_id: 会话ID
+            
+        返回:
+            dict: 包含探索结果的字典
+        """
+        # 需要使用增强版工具且有探索工具
+        if not self.use_deeper_tool or not hasattr(self, 'exploration_tool'):
+            return {"error": "知识图谱探索功能需要使用增强版研究工具"}
+        
+        # 提取关键词作为起始实体
+        keywords = self.research_tool.extract_keywords(query)
+        
+        # 构建查询参数
+        entities = keywords.get("high_level", []) + keywords.get("low_level", [])
+        entities = entities[:3]  # 最多使用3个实体
+        
+        # 准备探索参数
+        explore_query = {
+            "query": query,
+            "entities": entities
+        }
+        
+        # 执行探索
+        result = self.exploration_tool._run(explore_query)
+        
+        # 美化结果
+        if isinstance(result, dict) and "exploration_path" in result:
+            # 记录当前探索会话ID
+            if "session_id" in result:
+                self.session_context[thread_id] = {
+                    "exploration_session_id": result["session_id"]
+                }
+                
+            # 使用LLM生成探索摘要
+            path_desc = []
+            for step in result.get("exploration_path", []):
+                step_num = step.get("step", 0)
+                node_id = step.get("node_id", "")
+                reasoning = step.get("reasoning", "")
+                if step_num > 0:  # 跳过起始实体
+                    path_desc.append(f"步骤{step_num}: 从'{node_id}'发现 - {reasoning}")
+            
+            path_summary = "\n".join(path_desc)
+            
+            # 提取关键内容
+            key_content = []
+            for item in result.get("content", [])[:5]:
+                if "text" in item:
+                    key_content.append(item["text"])
+            
+            content_summary = "\n\n".join(key_content)
+            
+            # 构建摘要提示
+            summary_prompt = f"""
+            基于以下知识图谱探索路径和发现的内容，生成一个关于"{query}"的综合性摘要:
+            
+            探索路径:
+            {path_summary}
+            
+            关键内容:
+            {content_summary}
+            
+            请提供一个全面、有深度的分析，包括关键发现、关联关系和见解。
+            """
+            
+            # 生成探索摘要
+            try:
+                response = self.llm.invoke(summary_prompt)
+                exploration_summary = response.content if hasattr(response, 'content') else str(response)
+            except Exception as e:
+                exploration_summary = f"生成探索摘要时出错: {str(e)}"
+            
+            # 美化返回结果
+            enhanced_result = {
+                "exploration_path": result.get("exploration_path", []),
+                "summary": exploration_summary,
+                "key_entities": entities,
+                "discovered_entities": [step.get("node_id") for step in result.get("exploration_path", []) if step.get("step", 0) > 0],
+                "content_samples": key_content[:3],
+                "path_visualization": path_desc,
+            }
+            
+            return enhanced_result
+        else:
+            # 返回原始结果
+            return result
+    
+    def analyze_reasoning_chain(self, query_id: str = None, thread_id: str = "default"):
+        """
+        分析推理链和证据
+        
+        参数:
+            query_id: 查询ID，如果为None则使用当前会话的查询ID
+            thread_id: 会话ID
+            
+        返回:
+            dict: 包含推理链分析结果的字典
+        """
+        # 需要使用增强版工具
+        if not self.use_deeper_tool or not hasattr(self, 'reasoning_analysis_tool'):
+            return {"error": "推理链分析功能需要使用增强版研究工具"}
+        
+        # 如果未提供查询ID，尝试从会话上下文获取
+        if not query_id:
+            if thread_id in self.session_context and "latest_query_id" in self.session_context[thread_id]:
+                query_id = self.session_context[thread_id]["latest_query_id"]
+            elif hasattr(self.research_tool, 'current_query_context') and self.research_tool.current_query_context.get("query_id"):
+                query_id = self.research_tool.current_query_context.get("query_id")
+            else:
+                return {"error": "未找到有效的查询ID，请先执行一次深度研究查询"}
+        
+        # 执行推理链分析
+        return self.reasoning_analysis_tool._run(query_id)
+    
+    def detect_contradictions(self, query: str, thread_id: str = "default"):
+        """
+        检测和分析信息矛盾
+        
+        参数:
+            query: 用户问题
+            thread_id: 会话ID
+            
+        返回:
+            dict: 包含矛盾分析的字典
+        """
+        # 需要使用增强版工具
+        if not self.use_deeper_tool:
+            return {"error": "矛盾检测功能需要使用增强版研究工具"}
+            
+        # 执行深度思考
+        result = self.ask_with_thinking(query, thread_id)
+        
+        # 提取矛盾信息
+        contradictions = result.get("contradictions", [])
+        
+        # 如果结果中没有矛盾信息但有查询ID，尝试使用矛盾检测方法
+        if not contradictions and hasattr(self.research_tool, '_detect_and_resolve_contradictions'):
+            query_id = None
+            if hasattr(self.research_tool, 'current_query_context'):
+                query_id = self.research_tool.current_query_context.get("query_id")
+                
+            if query_id:
+                contradiction_result = self.research_tool._detect_and_resolve_contradictions(query_id)
+                contradictions = contradiction_result.get("contradictions", [])
+        
+        # 结构化返回矛盾信息
+        if contradictions:
+            result = {
+                "has_contradictions": True,
+                "count": len(contradictions),
+                "contradictions": contradictions,
+                "analysis": "发现信息来源中存在矛盾，请谨慎对待最终结论。"
+            }
+            
+            # 使用LLM分析矛盾影响
+            if len(contradictions) > 0:
+                # 准备提示
+                contradiction_texts = []
+                for i, contradiction in enumerate(contradictions):
+                    if contradiction.get("type") == "numerical":
+                        contradiction_texts.append(
+                            f"{i+1}. 数值矛盾: 在'{contradiction.get('context', '')}'中，" +
+                            f"发现值 {contradiction.get('value1')} 和 {contradiction.get('value2')}"
+                        )
+                    else:
+                        contradiction_texts.append(f"{i+1}. 语义矛盾: {contradiction.get('analysis', '')}")
+                
+                contradictions_text = "\n".join(contradiction_texts)
+                
+                impact_prompt = f"""
+                在回答关于"{query}"的问题时，发现以下信息矛盾:
+                
+                {contradictions_text}
+                
+                请分析这些矛盾对最终答案可能产生的影响，以及如何在存在这些矛盾的情况下给出最准确的回答。
+                """
+                
+                try:
+                    response = self.llm.invoke(impact_prompt)
+                    impact_analysis = response.content if hasattr(response, 'content') else str(response)
+                    result["impact_analysis"] = impact_analysis
+                except Exception as e:
+                    result["impact_analysis"] = f"分析矛盾影响时出错: {str(e)}"
+            
+            return result
+        else:
+            return {
+                "has_contradictions": False,
+                "count": 0,
+                "contradictions": [],
+                "analysis": "未在信息来源中检测到明显矛盾。"
+            }
         
     def is_deeper_tool(self, use_deeper=True):
         """
         切换是否使用增强版研究工具
         
-        Args:
+        参数:
             use_deeper: 是否使用增强版
             
-        Returns:
+        返回:
             str: 状态消息
         """
         # 切换工具
@@ -366,15 +609,35 @@ class DeepResearchAgent(BaseAgent):
             # 切换到增强版
             try:
                 self.research_tool = DeeperResearchTool()
+                
+                # 加载额外工具
+                self.exploration_tool = self.research_tool.get_exploration_tool()
+                self.reasoning_analysis_tool = self.research_tool.get_reasoning_analysis_tool()
+                self.stream_tool = self.research_tool.get_stream_tool()
+                
                 # 重新设置工具
                 self._tools = self._setup_tools()
-                return "已切换到增强版研究工具"
+                return "已切换到增强版研究工具，启用知识图谱探索和推理链分析功能"
             except Exception as e:
                 self.use_deeper_tool = False
+                self.stream_tool = self.research_tool.get_thinking_stream_tool() if hasattr(self.research_tool, 'get_thinking_stream_tool') else None
                 return f"切换到增强版失败: {e}"
         else:
             # 切换回标准版
             self.research_tool = DeepResearchTool()
+            self.stream_tool = self.research_tool.get_thinking_stream_tool() if hasattr(self.research_tool, 'get_thinking_stream_tool') else None
+            # 清除增强工具
+            self.exploration_tool = None
+            self.reasoning_analysis_tool = None
             # 重新设置工具
             self._tools = self._setup_tools()
-            return "已切换到标准版研究工具"
+            return "已切换到标准版研究工具，部分高级功能将不可用"
+            
+    def close(self):
+        """关闭资源"""
+        # 调用父类方法
+        super().close()
+        
+        # 关闭研究工具资源
+        if hasattr(self, 'research_tool') and hasattr(self.research_tool, 'close'):
+            self.research_tool.close()

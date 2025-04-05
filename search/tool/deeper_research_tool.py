@@ -6,6 +6,8 @@ import asyncio
 import re
 import os
 
+from langchain_core.tools import BaseTool
+
 from model.get_models import get_llm_model, get_embeddings_model
 from graph.core import connection_manager
 from config.prompt import (
@@ -21,16 +23,18 @@ from search.tool.reasoning.prompts import kb_prompt
 from graph.extraction.entity_extractor import EntityRelationExtractor
 from search.tool.deep_research_tool import DeepResearchTool
 from search.tool.reasoning.community_enhance import CommunityAwareSearchEnhancer
+from search.tool.reasoning.search import QueryGenerator
 from search.tool.reasoning.kg_builder import DynamicKnowledgeGraphBuilder
 from search.tool.reasoning.evidence import EvidenceChainTracker
 from search.tool.reasoning.chain_of_exploration import ChainOfExplorationSearcher
+from search.tool.reasoning.validator import complexity_estimate
 
 class DeeperResearchTool:
     """
     增强版深度研究工具
     
     整合社区感知、动态知识图谱和Chain of Exploration等功能，
-    提供更全面的深度研究能力
+    提供更全面的深度研究能力，并充分利用所有高级推理功能
     """
     
     def __init__(self, 
@@ -78,6 +82,9 @@ class DeeperResearchTool:
         
         # 5. 继承原有的深度研究工具功能
         self.deep_research = DeepResearchTool()
+
+        # 6. 查询生成器
+        self.query_generator = QueryGenerator(self.llm, "", "")
         
         # 缓存设置
         self.enable_cache = True
@@ -92,6 +99,12 @@ class DeeperResearchTool:
         
         # 添加性能指标跟踪
         self.performance_metrics = {"total_time": 0}
+        
+        # 记录当前查询的上下文信息
+        self.current_query_context = {}
+        
+        # 记录已探索的查询分支
+        self.explored_branches = {}
     
     def _log(self, message):
         """记录执行日志"""
@@ -146,6 +159,212 @@ class DeeperResearchTool:
         
         return community_context
     
+    def _create_multiple_reasoning_branches(self, query_id, hypotheses):
+        """
+        根据多个假设创建多个推理分支
+        
+        Args:
+            query_id: 查询ID
+            hypotheses: 假设列表
+            
+        Returns:
+            Dict: 包含分支结果的字典
+        """
+        branch_results = {}
+        
+        # 为每个假设创建一个推理分支
+        for i, hypothesis in enumerate(hypotheses[:3]):  # 限制最多3个分支
+            branch_name = f"branch_{i+1}"
+            
+            # 在思考引擎中创建推理分支
+            self.deep_research.thinking_engine.branch_reasoning(branch_name)
+            
+            # 记录分支创建
+            self._log(f"\n[分支推理] 创建分支 {branch_name}: {hypothesis}")
+            
+            # 添加推理步骤
+            step_id = self.evidence_tracker.add_reasoning_step(
+                query_id,
+                f"branch_{branch_name}",
+                f"基于假设: {hypothesis} 创建推理分支"
+            )
+            
+            # 记录分支信息
+            self.explored_branches[branch_name] = {
+                "hypothesis": hypothesis,
+                "step_id": step_id,
+                "evidence": []
+            }
+            
+            # 在思考引擎中添加假设作为推理步骤
+            self.deep_research.thinking_engine.add_reasoning_step(
+                f"探索假设: {hypothesis}"
+            )
+            
+            # 应用反事实分析
+            if i == 0:  # 只对第一个分支应用反事实分析
+                counter_analysis = self.deep_research.thinking_engine.counter_factual_analysis(
+                    f"假设 {hypothesis} 不成立"
+                )
+                
+                # 记录反事实分析结果
+                self.evidence_tracker.add_evidence(
+                    step_id,
+                    f"counter_analysis_{i}",
+                    counter_analysis,
+                    "counter_factual_analysis"
+                )
+                
+                # 添加到分支结果
+                branch_results[branch_name] = {
+                    "hypothesis": hypothesis,
+                    "counter_analysis": counter_analysis
+                }
+            else:
+                branch_results[branch_name] = {
+                    "hypothesis": hypothesis
+                }
+        
+        # 返回主分支
+        self.deep_research.thinking_engine.switch_branch("main")
+        
+        return branch_results
+    
+    def _detect_and_resolve_contradictions(self, query_id):
+        """
+        检测并处理信息矛盾
+        
+        Args:
+            query_id: 查询ID
+            
+        Returns:
+            Dict: 矛盾分析结果
+        """
+        # 获取所有已收集的证据
+        all_evidence = []
+        reasoning_chain = self.evidence_tracker.get_reasoning_chain(query_id)
+        
+        for step in reasoning_chain.get("steps", []):
+            step_id = step.get("step_id", "")
+            evidence_ids = step.get("evidence_ids", [])
+            if evidence_ids:
+                all_evidence.extend(evidence_ids)
+        
+        # 检测矛盾
+        contradictions = self.evidence_tracker.detect_contradictions(all_evidence)
+        
+        if contradictions:
+            self._log(f"\n[矛盾检测] 发现 {len(contradictions)} 个矛盾")
+            
+            # 记录矛盾分析
+            contradiction_step_id = self.evidence_tracker.add_reasoning_step(
+                query_id,
+                "contradiction_analysis",
+                f"分析 {len(contradictions)} 个信息矛盾"
+            )
+            
+            # 解析每个矛盾
+            for i, contradiction in enumerate(contradictions):
+                contradiction_type = contradiction.get("type", "unknown")
+                analysis = ""
+                
+                if contradiction_type == "numerical":
+                    analysis = (f"数值矛盾: 在 '{contradiction.get('context', '')}' 中, "
+                               f"发现值 {contradiction.get('value1')} 和 {contradiction.get('value2')}")
+                elif contradiction_type == "semantic":
+                    analysis = f"语义矛盾: {contradiction.get('analysis', '')}"
+                
+                # 记录矛盾证据
+                self.evidence_tracker.add_evidence(
+                    contradiction_step_id,
+                    f"contradiction_{i}",
+                    analysis,
+                    "contradiction_evidence"
+                )
+                
+                self._log(f"\n[矛盾分析] {analysis}")
+            
+            return {"contradictions": contradictions, "step_id": contradiction_step_id}
+        
+        return {"contradictions": [], "step_id": None}
+    
+    def _generate_citations(self, answer, query_id):
+        """
+        为答案生成引用标记
+        
+        Args:
+            answer: 原始答案
+            query_id: 查询ID
+            
+        Returns:
+            str: 带引用的答案
+        """
+        # 使用证据链跟踪器生成引用
+        citation_result = self.evidence_tracker.generate_citations(answer)
+        cited_answer = citation_result.get("cited_answer", answer)
+        
+        # 记录引用信息
+        self._log(f"\n[引用生成] 添加了 {len(citation_result.get('citations', []))} 个引用")
+        
+        return cited_answer
+    
+    def _merge_reasoning_branches(self, query_id):
+        """
+        合并多个推理分支的结果
+        
+        Args:
+            query_id: 查询ID
+            
+        Returns:
+            str: 合并后的推理
+        """
+        merged_reasoning = "## 多分支推理结果\n\n"
+        
+        # 获取所有分支名称
+        branch_names = list(self.explored_branches.keys())
+        
+        if not branch_names:
+            return ""
+            
+        # 合并每个分支的结果
+        for branch_name in branch_names:
+            branch_info = self.explored_branches[branch_name]
+            
+            # 获取分支的证据
+            evidence = self.evidence_tracker.get_step_evidence(branch_info["step_id"])
+            
+            # 添加分支概要
+            merged_reasoning += f"### 分支: {branch_name}\n"
+            merged_reasoning += f"假设: {branch_info['hypothesis']}\n\n"
+            
+            # 添加主要证据（最多3条）
+            if evidence:
+                merged_reasoning += "主要发现:\n"
+                for i, ev in enumerate(evidence[:3]):
+                    content = ev.get("content", "")
+                    if len(content) > 200:
+                        content = content[:200] + "..."
+                    merged_reasoning += f"- {content}\n"
+            
+            # 如果有反事实分析，添加结论
+            if "counter_analysis" in branch_info:
+                counter_analysis = branch_info["counter_analysis"]
+                if len(counter_analysis) > 200:
+                    counter_analysis = counter_analysis[:200] + "..."
+                merged_reasoning += f"\n反事实分析: {counter_analysis}\n\n"
+            
+            merged_reasoning += "\n"
+        
+        # 在思考引擎中合并所有分支到主分支
+        for branch_name in branch_names:
+            self.deep_research.thinking_engine.switch_branch(branch_name)
+            self.deep_research.thinking_engine.merge_branches(branch_name, "main")
+        
+        # 确保回到主分支
+        self.deep_research.thinking_engine.switch_branch("main")
+        
+        return merged_reasoning
+    
     def thinking(self, query: str) -> Dict[str, Any]:
         """
         执行增强版深度研究推理过程
@@ -166,6 +385,10 @@ class DeeperResearchTool:
         
         # 开始新的查询跟踪
         query_id = self.evidence_tracker.start_new_query(query, keywords)
+        self.current_query_context = {"query_id": query_id}
+        
+        # 重置分支信息
+        self.explored_branches = {}
         
         # 步骤1: 社区感知和Chain of Exploration增强
         self._log(f"\n[深度研究] 开始社区感知与Chain of Exploration分析")
@@ -217,7 +440,7 @@ class DeeperResearchTool:
         
         if graph_entities:
             self._log(f"\n[深度研究] 构建知识图谱，关注实体: {graph_entities}")
-            self.knowledge_builder.build_query_graph(query, graph_entities, depth=1)
+            self.knowledge_builder.build_query_graph(query, graph_entities, depth=2)  # 增加探索深度到2
             
             # 获取核心实体
             central_entities = self.knowledge_builder.get_central_entities(limit=5)
@@ -293,6 +516,25 @@ class DeeperResearchTool:
         if context_message:
             self.deep_research.thinking_engine.add_reasoning_step(context_message)
             think += context_message + "\n\n"
+        
+        # 步骤5: 生成多个假设并创建多个推理分支  
+        if complexity_estimate(query) > 0.7:  # 对复杂查询应用多分支推理
+            self._log("\n[深度研究] 生成多个假设进行分支推理")
+            
+            # 生成假设
+            hypotheses = self.query_generator.generate_multiple_hypotheses(query, self.llm)
+            
+            if hypotheses:
+                # 创建多个推理分支
+                branch_results = self._create_multiple_reasoning_branches(query_id, hypotheses)
+                
+                # 添加分支概述
+                branch_overview = "\n## 推理分支假设\n"
+                for branch_name, info in branch_results.items():
+                    branch_overview += f"- {branch_name}: {info['hypothesis']}\n"
+                
+                self.deep_research.thinking_engine.add_reasoning_step(branch_overview)
+                think += branch_overview + "\n\n"
         
         # 迭代思考过程 - 使用原有DeepResearchTool的思考过程框架但加入增强内容
         for iteration in range(self.deep_research.max_iterations):
@@ -377,6 +619,18 @@ class DeeperResearchTool:
                         "没有生成新查询且已有信息，结束迭代",
                         "reasoning_status"
                     )
+                    
+                    # 在结束前进行矛盾检测  
+                    contradiction_result = self._detect_and_resolve_contradictions(query_id)
+                    if contradiction_result["contradictions"]:
+                        think += "\n## 矛盾检测\n"
+                        think += f"发现 {len(contradiction_result['contradictions'])} 个信息矛盾。\n"
+                        for i, contradiction in enumerate(contradiction_result["contradictions"]):
+                            if contradiction["type"] == "numerical":
+                                think += f"{i+1}. 数值矛盾: {contradiction.get('context', '')}\n"
+                            else:
+                                think += f"{i+1}. 语义矛盾: {contradiction.get('analysis', '')}\n"
+                    
                     break
             
             # 处理每个搜索查询
@@ -525,11 +779,13 @@ class DeeperResearchTool:
                     
                     # 记录有用信息作为证据
                     self._log(f"\n[深度研究] 发现有用信息: {useful_info}")
-                    self.evidence_tracker.add_evidence(
+                    self.evidence_tracker.add_evidence_with_confidence(
                         search_step_id,
                         f"useful_info_{search_query}",
                         useful_info,
-                        "extracted_knowledge"
+                        "extracted_knowledge",
+                        confidence=0.85,  # 高可信度
+                        metadata={"query": search_query}
                     )
                 else:
                     self._log(f"\n[深度研究] 未从检索结果中提取到有用信息")
@@ -544,6 +800,32 @@ class DeeperResearchTool:
                 self.deep_research.thinking_engine.add_reasoning_step(summary_think)
                 self.deep_research.thinking_engine.add_human_message(summary_think)
                 think += self.deep_research.thinking_engine.remove_result_tags(summary_think)
+        
+        # 步骤6: 合并推理分支  
+        if self.explored_branches:
+            self._log("\n[深度研究] 合并多个推理分支")
+            merged_results = self._merge_reasoning_branches(query_id)
+            
+            if merged_results:
+                think += f"\n{merged_results}\n"
+                self.deep_research.thinking_engine.add_reasoning_step(merged_results)
+        
+        # 步骤7: 矛盾检测与处理  
+        contradiction_result = self._detect_and_resolve_contradictions(query_id)
+        if contradiction_result["contradictions"]:
+            contradiction_analysis = "\n## 信息矛盾分析\n"
+            contradiction_analysis += f"发现 {len(contradiction_result['contradictions'])} 个信息矛盾：\n"
+            
+            for i, contradiction in enumerate(contradiction_result["contradictions"]):
+                if contradiction["type"] == "numerical":
+                    contradiction_analysis += f"{i+1}. 数值矛盾: 在\"{contradiction.get('context', '')}\"中，"
+                    contradiction_analysis += f"发现值 {contradiction.get('value1')} 和 {contradiction.get('value2')}\n"
+                else:
+                    contradiction_analysis += f"{i+1}. 语义矛盾: {contradiction.get('analysis', '')}\n"
+            
+            # 添加矛盾分析到思考过程
+            think += contradiction_analysis
+            self.deep_research.thinking_engine.add_reasoning_step(contradiction_analysis)
         
         # 生成最终答案
         # 确保至少执行了一次搜索
@@ -605,6 +887,15 @@ class DeeperResearchTool:
             
             enhanced_prompt += "\n".join(path_summary[:3]) + "\n"
         
+        # 添加矛盾分析结果  
+        if contradiction_result["contradictions"]:
+            enhanced_prompt += "\n信息矛盾分析：\n"
+            for i, contradiction in enumerate(contradiction_result["contradictions"][:3]):
+                if contradiction["type"] == "numerical":
+                    enhanced_prompt += f"- 矛盾{i+1}: 在数值上存在不一致，一处显示 {contradiction.get('value1')}，另一处显示 {contradiction.get('value2')}\n"
+                else:
+                    enhanced_prompt += f"- 矛盾{i+1}: {contradiction.get('analysis', '')}\n"
+        
         # 请求生成最终答案
         enhanced_prompt += """
         请基于以上所有信息，生成一个全面深入的回答。回答应该:
@@ -621,6 +912,14 @@ class DeeperResearchTool:
             
             # 将增强答案与思考过程结合
             final_answer = f"<think>{think}</think>\n\n{enhanced_answer}"
+            
+            # 生成引用标记  
+            cited_answer = self._generate_citations(enhanced_answer, query_id)
+            
+            # 如果引用生成成功，使用带引用的答案
+            if len(cited_answer) > len(enhanced_answer):
+                final_answer = f"<think>{think}</think>\n\n{cited_answer}"
+            
         except Exception as e:
             # 如果增强生成失败，回退到原始方法
             self._log(f"\n[深度研究] 增强答案生成失败: {e}，回退到标准方法")
@@ -645,6 +944,12 @@ class DeeperResearchTool:
             "synthesized_knowledge"
         )
         
+        # 获取推理摘要  
+        reasoning_summary = self.evidence_tracker.summarize_reasoning(query_id)
+        
+        # 生成证据来源统计  
+        evidence_stats = self.evidence_tracker.get_evidence_source_stats(query_id)
+        
         # 返回结果
         result = {
             "thinking_process": think,
@@ -652,11 +957,14 @@ class DeeperResearchTool:
             "reference": {"chunks": [], "doc_aggs": []},
             "retrieved_info": self.deep_research.all_retrieved_info,
             "reasoning_chain": self.evidence_tracker.get_reasoning_chain(query_id),
+            "reasoning_summary": reasoning_summary,    
+            "evidence_stats": evidence_stats,    
             "knowledge_graph": {
                 "entity_count": getattr(self.knowledge_builder.knowledge_graph, "number_of_nodes", lambda: 0)(),
                 "relation_count": getattr(self.knowledge_builder.knowledge_graph, "number_of_edges", lambda: 0)(),
                 "central_entities": central_entities
             },
+            "contradictions": contradiction_result["contradictions"],    
             "execution_logs": self.execution_logs,
         }
         
@@ -734,8 +1042,6 @@ class DeeperResearchTool:
     
     def get_tool(self):
         """获取搜索工具"""
-        from langchain_core.tools import BaseTool
-        
         class DeeperResearchRetrievalTool(BaseTool):
             name : str = "deeper_research"
             description : str = "增强版深度研究工具：通过社区感知和知识图谱分析，结合多轮推理和搜索解决复杂问题。"
@@ -750,8 +1056,6 @@ class DeeperResearchTool:
     
     def get_thinking_tool(self):
         """获取思考过程可见的工具版本"""
-        from langchain_core.tools import BaseTool
-        
         class DeepThinkingTool(BaseTool):
             name : str = "deep_thinking"
             description : str = "深度思考工具：显示完整思考过程的深度研究，适用于需要查看推理步骤的情况。"
@@ -770,6 +1074,86 @@ class DeeperResearchTool:
                 raise NotImplementedError("异步执行未实现")
         
         return DeepThinkingTool()
+    
+    def get_stream_tool(self):
+        """获取流式搜索工具"""        
+        class DeeperResearchStreamTool(BaseTool):
+            name : str = "deeper_research_stream"
+            description : str = "增强版流式深度研究工具：通过社区感知和知识图谱分析，结合多轮推理和搜索解决复杂问题，支持流式输出。"
+            
+            def _run(self_tool, query: Any) -> AsyncGenerator:
+                return self.search_stream(query)
+            
+            async def _arun(self_tool, query: Any) -> AsyncGenerator:
+                return await self.search_stream(query)
+        
+        return DeeperResearchStreamTool()
+    
+    def get_exploration_tool(self):
+        """获取专注于知识图谱探索的工具"""
+        class KnowledgeExplorationTool(BaseTool):
+            name : str = "knowledge_exploration"
+            description : str = "知识图谱探索工具：专注于从起始实体出发，探索知识图谱，发现潜在关联。"
+            
+            def _run(self_tool, query: Any) -> Dict:
+                if isinstance(query, dict) and "entities" in query:
+                    entities = query["entities"]
+                    search_query = query.get("query", "")
+                else:
+                    # 提取关键词作为起始实体
+                    search_query = str(query)
+                    keywords = self.extract_keywords(search_query)
+                    entities = keywords.get("high_level", []) + keywords.get("low_level", [])
+                    entities = entities[:3]  # 最多使用3个实体
+                
+                # 执行探索
+                if entities:
+                    return self.chain_explorer.explore(search_query, entities, max_steps=3)
+                else:
+                    return {"status": "error", "message": "未找到起始实体"}
+            
+            async def _arun(self_tool, query: Any) -> Dict:
+                return self._run(query)
+        
+        return KnowledgeExplorationTool()
+    
+    def get_reasoning_analysis_tool(self):
+        """获取推理链分析工具"""        
+        class ReasoningAnalysisTool(BaseTool):
+            name : str = "reasoning_analysis"
+            description : str = "推理链分析工具：分析推理过程中的证据、矛盾和支持度。"
+            
+            def _run(self_tool, query_id: str) -> Dict:
+                # 如果没有提供查询ID，使用当前上下文的
+                if not query_id and hasattr(self, 'current_query_context'):
+                    query_id = self.current_query_context.get("query_id", "")
+                
+                if not query_id:
+                    return {"status": "error", "message": "未找到有效的查询ID"}
+                
+                # 获取完整推理链
+                reasoning_chain = self.evidence_tracker.get_reasoning_chain(query_id)
+                
+                # 检测矛盾
+                contradiction_result = self._detect_and_resolve_contradictions(query_id)
+                
+                # 生成推理摘要
+                reasoning_summary = self.evidence_tracker.summarize_reasoning(query_id)
+                
+                # 获取证据统计
+                evidence_stats = self.evidence_tracker.get_evidence_source_stats(query_id)
+                
+                return {
+                    "reasoning_chain": reasoning_chain,
+                    "contradictions": contradiction_result["contradictions"],
+                    "summary": reasoning_summary,
+                    "evidence_stats": evidence_stats
+                }
+            
+            async def _arun(self_tool, query_id: str) -> Dict:
+                return self._run(query_id)
+        
+        return ReasoningAnalysisTool()
         
     async def _async_enhance_search(self, query, keywords):
         """异步执行社区感知搜索增强"""
@@ -785,6 +1169,136 @@ class DeeperResearchTool:
         
         return await asyncio.get_event_loop().run_in_executor(None, build_wrapper)
     
+    async def _async_detect_contradictions(self, query_id):
+        """异步检测矛盾"""
+        def detect_wrapper():
+            return self._detect_and_resolve_contradictions(query_id)
+        
+        return await asyncio.get_event_loop().run_in_executor(None, detect_wrapper)
+    
+    async def search_stream(self, query_input: Any) -> AsyncGenerator[str, None]:
+        """
+        执行带流式输出的增强深度研究
+        
+        Args:
+            query_input: 查询或包含查询的字典
+                
+        Yields:
+            流式内容
+        """
+        overall_start = time.time()
+        
+        # 记录开始搜索
+        self._log(f"\n[深度搜索] 开始处理查询...")
+        
+        # 解析输入
+        if isinstance(query_input, dict) and "query" in query_input:
+            query = query_input["query"]
+        else:
+            query = str(query_input)
+        
+        self._log(f"\n[深度搜索] 解析后的查询: {query}")
+        
+        # 检查缓存
+        cache_key = f"deeper:{query}"
+        cached_result = self.deep_research.cache_manager.get(cache_key)
+        if cached_result:
+            self._log(f"\n[深度搜索] 缓存命中，分块返回缓存结果")
+            # 分块返回缓存结果 - 更自然的分块
+            chunks = re.split(r'([.!?。！？]\s*)', cached_result)
+            buffer = ""
+            
+            for i in range(0, len(chunks)):
+                buffer += chunks[i]
+                
+                # 当缓冲区包含完整句子或达到合理大小时输出
+                if (i % 2 == 1) or len(buffer) >= 80:
+                    yield buffer
+                    buffer = ""
+                    await asyncio.sleep(0.01)
+            
+            # 输出任何剩余内容
+            if buffer:
+                yield buffer
+            return
+        
+        try:
+            # 执行思考过程流
+            full_response = ""
+            thinking_content = ""
+            last_chunk = None
+            
+            # 提示用户处理开始
+            yield "\n**开始深度分析您的问题**...\n"
+            
+            # 评估查询复杂度以决定是否采用多假设思考
+            complexity = complexity_estimate(query)
+            if complexity > 0.7:
+                yield "\n**检测到复杂查询，激活深度思考模式**...\n"
+            
+            # 使用异步探索器
+            keywords = self.extract_keywords(query)
+            if keywords.get("high_level", []):
+                yield f"\n**使用链式探索方法搜索知识**...\n"
+                
+                # 异步启动探索任务，但不等待它完成
+                # 我们会在后台处理结果
+                asyncio.create_task(self.chain_explorer.explore_async(
+                    query, 
+                    keywords.get("high_level", [])[:3], 
+                    max_steps=3
+                ))
+            
+            async for chunk in self.thinking_stream(query):
+                if isinstance(chunk, dict) and "answer" in chunk:
+                    # 这是最终结果对象
+                    full_response = chunk["answer"]
+                    thinking_content = chunk["thinking"]
+                    last_chunk = chunk
+                    
+                    # 在最终答案之前添加矛盾检测结果
+                    if hasattr(self, 'current_query_context') and self.current_query_context.get("query_id"):
+                        # 检测矛盾
+                        query_id = self.current_query_context.get("query_id")
+                        contradiction_result = await self._async_detect_contradictions(query_id)
+                        
+                        if contradiction_result["contradictions"]:
+                            yield "\n**信息一致性分析**：发现信息中存在一些不一致之处。在综合答案时已考虑这些因素。\n\n"
+                    
+                    # 清理最终答案以移除思考过程部分
+                    clean_answer = re.sub(r'<think>.*?</think>\s*', '', full_response, flags=re.DOTALL)
+                    
+                    # 添加推理摘要统计
+                    if hasattr(self, 'current_query_context') and self.current_query_context.get("query_id"):
+                        query_id = self.current_query_context.get("query_id")
+                        reasoning_summary = self.evidence_tracker.summarize_reasoning(query_id)
+                        
+                        # 在答案末尾添加小字体的推理统计
+                        if reasoning_summary and reasoning_summary.get("steps_count", 0) > 0:
+                            stats = f"\n\n<small>*推理过程包含 {reasoning_summary.get('steps_count', 0)} 个步骤，"
+                            stats += f"使用了 {reasoning_summary.get('evidence_count', 0)} 个证据，"
+                            stats += f"耗时 {reasoning_summary.get('duration_seconds', 0):.1f} 秒*</small>"
+                            clean_answer += stats
+                    
+                    # 缓存结果
+                    self.deep_research.cache_manager.set(cache_key, clean_answer)
+                    
+                    yield clean_answer
+                else:
+                    # 正常返回流式块
+                    yield chunk
+            
+            # 记录总时间
+            total_time = time.time() - overall_start
+            self._log(f"\n[深度搜索] 完成，耗时 {total_time:.2f}秒")
+            self.performance_metrics["total_time"] = total_time
+                
+        except Exception as e:
+            error_msg = f"深度研究过程中出错: {str(e)}"
+            self._log(error_msg)
+            traceback.print_exc()
+            yield error_msg
+            
     async def thinking_stream(self, query: str) -> AsyncGenerator[str, None]:
         """
         执行带流式输出的增强深度研究
@@ -810,6 +1324,7 @@ class DeeperResearchTool:
         
         # 开始新的查询跟踪
         query_id = self.evidence_tracker.start_new_query(query, keywords)
+        self.current_query_context = {"query_id": query_id}
         
         # 步骤1: 社区感知增强
         yield "\n**正在分析相关知识社区**...\n"
@@ -900,7 +1415,28 @@ class DeeperResearchTool:
                 "graph_structure"
             )
         
-        # 步骤4: 使用深度研究工具的流式思考过程
+        # 步骤4: 生成多个假设  
+        complexity = complexity_estimate(query)
+        if complexity > 0.7:  # 对复杂查询应用多假设思考
+            yield "\n**生成多个思考假设**...\n"
+            
+            # 生成假设
+            hypotheses = self.query_generator.generate_multiple_hypotheses(query, self.llm)
+            
+            if hypotheses:
+                hypothesis_msg = f"\n**探索 {len(hypotheses)} 个可能假设**\n"
+                for i, hyp in enumerate(hypotheses[:2]):
+                    hypothesis_msg += f"- 假设 {i+1}: {hyp}\n"
+                yield hypothesis_msg
+                
+                # 创建多个推理分支
+                branch_results = self._create_multiple_reasoning_branches(query_id, hypotheses)
+                
+                # 对第一个分支应用反事实分析
+                if branch_results and "branch_1" in branch_results:
+                    yield "\n**进行反事实分析**...\n"
+        
+        # 步骤5: 使用深度研究工具的流式思考过程
         yield "\n**正在进行深度研究**...\n"
         
         # 调用deep_research工具的流式API，但传递我们增强的上下文
@@ -931,15 +1467,33 @@ class DeeperResearchTool:
             self.deep_research.thinking_engine.add_reasoning_step(context_message)
             yield context_message
                 
+        # 在深度搜索完成后检测矛盾
+        thinking_content = ""
+        full_response = ""
+        
         # 调用原始流式API
         async for chunk in self.deep_research.thinking_stream(query):
             if isinstance(chunk, dict) and "answer" in chunk:
                 # 这是最终答案，我们可以增强它
-                final_answer = chunk["answer"]
-                thinking_process = chunk["thinking"]
+                full_response = chunk["answer"]
+                thinking_content = chunk["thinking"]
+                
+                # 不立即返回，而是检查矛盾和证据
+                yield "\n**分析信息一致性**...\n"
+                
+                # 异步检测矛盾
+                contradiction_result = await self._async_detect_contradictions(query_id)
+                if contradiction_result["contradictions"]:
+                    contradiction_msg = f"\n**发现 {len(contradiction_result['contradictions'])} 个信息矛盾**\n"
+                    yield contradiction_msg
+                
+                # 合并分支结果
+                if self.explored_branches:
+                    yield "\n**整合多分支推理结果**...\n"
+                    merged_results = self._merge_reasoning_branches(query_id)
                 
                 # 提取<think>...</think>部分之外的内容
-                clean_answer = re.sub(r'<think>.*?</think>\s*', '', final_answer, flags=re.DOTALL)
+                clean_answer = re.sub(r'<think>.*?</think>\s*', '', full_response, flags=re.DOTALL)
                 
                 # 尝试增强答案 - 这需要同步执行
                 try:
@@ -947,6 +1501,9 @@ class DeeperResearchTool:
                     central_entities = []
                     if hasattr(self.knowledge_builder, 'knowledge_graph') and self.knowledge_builder.knowledge_graph.nodes:
                         central_entities = self.knowledge_builder.get_central_entities(limit=3)
+                    
+                    # 生成引用
+                    cited_answer = self._generate_citations(clean_answer, query_id)
                     
                     if central_entities or community_summaries:
                         # 构建增强提示
@@ -963,16 +1520,59 @@ class DeeperResearchTool:
                         if community_summaries:
                             enhancement_note += "\n相关知识社区见解:\n"
                             for i, summary in enumerate(community_summaries[:1]):
-                                enhancement_note += f"- {summary[:]}...\n"
+                                enhancement_note += f"- {summary[:200]}...\n"
                         
-                        enhanced_final = clean_answer + enhancement_note
+                        # 如果有引用，使用带引用的答案
+                        if len(cited_answer) > len(clean_answer):
+                            enhanced_final = cited_answer + enhancement_note
+                        else:
+                            enhanced_final = clean_answer + enhancement_note
+                        
+                        # 如果有矛盾，添加矛盾信息
+                        if contradiction_result["contradictions"]:
+                            enhancement_note += "\n\n**信息矛盾提示**:\n"
+                            for i, contradiction in enumerate(contradiction_result["contradictions"][:2]):
+                                if contradiction["type"] == "numerical":
+                                    enhancement_note += f"- 数值矛盾: 在'{contradiction.get('context', '')}'中出现不一致数值\n"
+                                else:
+                                    enhancement_note += f"- 语义矛盾: {contradiction.get('analysis', '')[:100]}...\n"
+                            
+                            enhanced_final += "\n\n**注意**: 在分析过程中发现了信息来源中存在一些不一致之处。以上答案已尝试综合各方观点，提供最准确的信息。"
+                        
+                        # 如果有推理分支结果，添加总结
+                        if self.explored_branches and len(self.explored_branches) > 1:
+                            branch_summary = "\n\n**多角度分析**:\n"
+                            for branch_name, branch_info in list(self.explored_branches.items())[:2]:
+                                branch_summary += f"- {branch_info.get('hypothesis', '')}: "
+                                
+                                # 获取分支的主要证据
+                                evidence = self.evidence_tracker.get_step_evidence(branch_info.get("step_id", ""))
+                                if evidence and len(evidence) > 0:
+                                    evidence_text = evidence[0].get("content", "")
+                                    if len(evidence_text) > 100:
+                                        evidence_text = evidence_text[:100] + "..."
+                                    branch_summary += f"{evidence_text}\n"
+                                else:
+                                    branch_summary += "无足够证据支持\n"
+                            
+                            enhanced_final += branch_summary
+                        
+                        # 添加推理统计
+                        reasoning_summary = self.evidence_tracker.summarize_reasoning(query_id)
+                        if reasoning_summary:
+                            stats = f"\n\n<small>*分析过程包含 {reasoning_summary.get('steps_count', 0)} 个步骤，"
+                            stats += f"使用了 {reasoning_summary.get('evidence_count', 0)} 个证据来源，"
+                            stats += f"处理时间 {reasoning_summary.get('duration_seconds', 0):.1f} 秒*</small>"
+                            enhanced_final += stats
                         
                         # 返回增强版本
-                        yield {"answer": f"<think>{thinking_process}</think>\n\n{enhanced_final}", 
-                               "thinking": thinking_process}
+                        yield {"answer": f"<think>{thinking_content}</think>\n\n{enhanced_final}", 
+                              "thinking": thinking_content}
                         return
                 except Exception as e:
-                    print(f"增强最终答案失败: {e}")
+                    error_details = f"增强最终答案失败: {e}\n{traceback.format_exc()}"
+                    print(error_details)
+                    self._log(error_details)
                 
                 # 如果增强失败或不需要增强，返回原始答案
                 yield chunk
@@ -984,105 +1584,6 @@ class DeeperResearchTool:
         total_time = time.time() - overall_start
         self._log(f"\n[深度搜索] 完成，耗时 {total_time:.2f}秒")
         self.performance_metrics["total_time"] = total_time
-    
-    async def search_stream(self, query_input: Any) -> AsyncGenerator[str, None]:
-        """
-        执行带流式输出的增强深度研究
-        
-        Args:
-            query_input: 查询或包含查询的字典
-                
-        Yields:
-            流式内容
-        """
-        overall_start = time.time()
-        
-        # 记录开始搜索
-        self._log(f"\n[深度搜索] 开始处理查询...")
-        
-        # 解析输入
-        if isinstance(query_input, dict) and "query" in query_input:
-            query = query_input["query"]
-        else:
-            query = str(query_input)
-        
-        self._log(f"\n[深度搜索] 解析后的查询: {query}")
-        
-        # 检查缓存
-        cache_key = f"deeper:{query}"
-        cached_result = self.deep_research.cache_manager.get(cache_key)
-        if cached_result:
-            self._log(f"\n[深度搜索] 缓存命中，分块返回缓存结果")
-            # 分块返回缓存结果 - 更自然的分块
-            chunks = re.split(r'([.!?。！？]\s*)', cached_result)
-            buffer = ""
-            
-            for i in range(0, len(chunks)):
-                buffer += chunks[i]
-                
-                # 当缓冲区包含完整句子或达到合理大小时输出
-                if (i % 2 == 1) or len(buffer) >= 80:
-                    yield buffer
-                    buffer = ""
-                    await asyncio.sleep(0.01)
-            
-            # 输出任何剩余内容
-            if buffer:
-                yield buffer
-            return
-        
-        try:
-            # 执行思考过程流
-            full_response = ""
-            thinking_content = ""
-            last_chunk = None
-            
-            # 提示用户处理开始
-            yield "\n**开始深度分析您的问题**...\n"
-            
-            async for chunk in self.thinking_stream(query):
-                if isinstance(chunk, dict) and "answer" in chunk:
-                    # 这是最终结果对象
-                    full_response = chunk["answer"]
-                    thinking_content = chunk["thinking"]
-                    last_chunk = chunk
-                    
-                    # 清理最终答案以移除思考过程部分
-                    clean_answer = re.sub(r'<think>.*?</think>\s*', '', full_response, flags=re.DOTALL)
-                    
-                    # 缓存结果
-                    self.deep_research.cache_manager.set(cache_key, clean_answer)
-                    
-                    yield clean_answer
-                else:
-                    # 正常返回流式块
-                    yield chunk
-            
-            # 记录总时间
-            total_time = time.time() - overall_start
-            self._log(f"\n[深度搜索] 完成，耗时 {total_time:.2f}秒")
-            self.performance_metrics["total_time"] = total_time
-                
-        except Exception as e:
-            error_msg = f"深度研究过程中出错: {str(e)}"
-            self._log(error_msg)
-            yield error_msg
-    
-    def get_stream_tool(self):
-        """获取流式搜索工具"""
-        from langchain_core.tools import BaseTool
-        
-        class DeeperResearchStreamTool(BaseTool):
-            name : str = "deeper_research_stream"
-            description : str = "增强版流式深度研究工具：通过社区感知和知识图谱分析，结合多轮推理和搜索解决复杂问题，支持流式输出。"
-            
-            def _run(self_tool, query: Any) -> AsyncGenerator:
-                return self.search_stream(query)
-            
-            async def _arun(self_tool, query: Any) -> AsyncGenerator:
-                return await self.search_stream(query)
-        
-        return DeeperResearchStreamTool()
         
     def close(self):
         """关闭资源"""

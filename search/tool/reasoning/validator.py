@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, List
 
 class AnswerValidator:
     """
@@ -95,3 +95,34 @@ class AnswerValidator:
         
         print("[验证] 答案通过关键词相关性检查")
         return True
+
+def complexity_estimate(query: str) -> float:
+        """
+        估计查询复杂度
+        
+        Args:
+            query: 查询字符串
+            
+        Returns:
+            float: 复杂度评分(0.0-1.0)
+        """
+        # 基于查询长度、问号数量和关键词数量的简单启发式方法
+        length_factor = min(1.0, len(query) / 100)
+        question_marks = query.count("?") + query.count("？")
+        question_factor = min(1.0, question_marks * 0.2)
+        
+        # 识别复杂问题的关键词
+        complexity_indicators = [
+            "为什么", "如何", "机制", "原因", "关系", "比较", "区别",
+            "影响", "分析", "评估", "预测", "如果", "假设", "还是",
+            "多少", "怎样", "多大", "是否", "哪些", "优缺点"
+        ]
+        
+        # 检查关键词
+        indicator_count = sum(1 for indicator in complexity_indicators if indicator in query)
+        indicator_factor = min(1.0, indicator_count * 0.15)
+        
+        # 综合评分
+        complexity = (length_factor * 0.3 + question_factor * 0.3 + indicator_factor * 0.4)
+        
+        return min(1.0, complexity)

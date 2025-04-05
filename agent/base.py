@@ -284,6 +284,64 @@ class BaseAgent(ABC):
         
         return result
     
+    def _check_all_caches(self, query: str, thread_id: str = "default"):
+        """整合的缓存检查方法"""
+        cache_check_start = time.time()
+        
+        # 1. 首先尝试全局缓存（跨会话缓存）
+        global_result = self.global_cache_manager.get(query)
+        if global_result:
+            print(f"全局缓存命中: {query[:30]}...")
+            
+            cache_time = time.time() - cache_check_start
+            self._log_performance("cache_check", {
+                "duration": cache_time,
+                "type": "global"
+            })
+            
+            return global_result
+        
+        # 2. 尝试快速路径 - 跳过验证的高质量缓存
+        fast_result = self.check_fast_cache(query, thread_id)
+        if fast_result:
+            print(f"快速路径缓存命中: {query[:30]}...")
+            
+            # 将命中的内容同步到全局缓存
+            self.global_cache_manager.set(query, fast_result)
+            
+            cache_time = time.time() - cache_check_start
+            self._log_performance("cache_check", {
+                "duration": cache_time,
+                "type": "fast"
+            })
+            
+            return fast_result
+        
+        # 3. 尝试常规缓存路径，但优化验证
+        cached_response = self.cache_manager.get(query, skip_validation=True, thread_id=thread_id)
+        if cached_response:
+            print(f"常规缓存命中，跳过验证: {query[:30]}...")
+            
+            # 将命中的内容同步到全局缓存
+            self.global_cache_manager.set(query, cached_response)
+            
+            cache_time = time.time() - cache_check_start
+            self._log_performance("cache_check", {
+                "duration": cache_time,
+                "type": "standard"
+            })
+            
+            return cached_response
+        
+        # 没有命中任何缓存
+        cache_time = time.time() - cache_check_start
+        self._log_performance("cache_check", {
+            "duration": cache_time,
+            "type": "miss"
+        })
+        
+        return None
+    
     def ask_with_trace(self, query: str, thread_id: str = "default", recursion_limit: int = 5) -> Dict:
         """执行查询并获取带执行轨迹的回答"""
         overall_start = time.time()
@@ -395,36 +453,9 @@ class BaseAgent(ABC):
         # 确保查询字符串是干净的
         safe_query = query.strip()
         
-        # 首先尝试全局缓存（跨会话缓存）
-        global_cache_start = time.time()
-        global_result = self.global_cache_manager.get(safe_query)
-        global_cache_time = time.time() - global_cache_start
-        
-        if global_result:
-            print(f"全局缓存命中: {safe_query[:30]}... ({global_cache_time:.4f}s)")
-            return global_result
-        
-        # 接下来尝试快速路径 - 跳过验证的高质量缓存
-        fast_cache_start = time.time()
-        fast_result = self.check_fast_cache(safe_query, thread_id)
-        fast_cache_time = time.time() - fast_cache_start
-        
-        if fast_result:
-            print(f"快速路径缓存命中: {safe_query[:30]}... ({fast_cache_time:.4f}s)")
-            # 将命中的内容同步到全局缓存
-            self.global_cache_manager.set(safe_query, fast_result)
-            return fast_result
-        
-        # 尝试常规缓存路径，但优化验证
-        cache_start = time.time()
-        cached_response = self.cache_manager.get(safe_query, skip_validation=True, thread_id=thread_id)
-        cache_time = time.time() - cache_start
-        
-        if cached_response:
-            print(f"常规缓存命中，跳过验证: {safe_query[:30]}... ({cache_time:.4f}s)")
-            # 将命中的内容同步到全局缓存
-            self.global_cache_manager.set(safe_query, cached_response)
-            return cached_response
+        cached_result = self._check_all_caches(safe_query, thread_id)
+        if cached_result:
+            return cached_result
         
         # 未命中缓存，执行标准流程
         process_start = time.time()
@@ -457,7 +488,7 @@ class BaseAgent(ABC):
             
             self._log_performance("ask", {
                 "total_duration": overall_time,
-                "cache_check": cache_time,
+                "cache_check": 0,  # 由_check_all_caches记录
                 "processing": process_time
             })
             

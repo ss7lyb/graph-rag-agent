@@ -1,119 +1,129 @@
+import time
+from datetime import datetime
+
 from agent.deep_research_agent import DeepResearchAgent
 from agent.naive_rag_agent import NaiveRagAgent
 from agent.graph_agent import GraphAgent
 from agent.hybrid_agent import HybridAgent
 from agent.fusion_agent import FusionGraphRAGAgent
 
-# DeepResearchAgent 非流式示例
-def test_deep_research_agent():
-    print("\n======= DeepResearchAgent 非流式输出 =======")
-    agent = DeepResearchAgent()
-    
-    # 使用ask_with_thinking方法获取带思考过程的结果
-    result = agent.ask_with_thinking("优秀学生要如何申请")
-    print("\n --- 完整结果 ---")
-    print(result)
-    
-    print("\n --- 只有答案 ---")
-    print(result.get('answer'))
-    
-    # 使用标准ask方法
-    standard_answer = agent.ask("优秀学生要如何申请")
-    print("\n --- 标准ask方法结果 ---")
-    print(standard_answer)
-    
-    # 切换到标准版研究工具
-    agent.is_deeper_tool(False)
-    standard_result = agent.ask_with_thinking("优秀学生要如何申请")
-    print("\n --- 标准版研究工具结果 ---")
-    print(standard_result.get('answer'))
+TEST_CONFIG = {
+    "queries": [
+        "优秀学生的申请条件是什么？",
+        "学业奖学金有多少钱？",
+        "大学英语考试的标准是什么？",
+        "小明同学旷课了30学时，又私藏了吹风机，他还殴打了同学，他还能评选国家奖学金吗？",
+    ]
+}
 
-# DeeperResearchTool 非流式示例
-def test_deeper_research_tool():
-    print("\n======= DeeperResearchTool 非流式输出 =======")
-    from search.tool.deeper_research_tool import DeeperResearchTool
+def test_agent(agent, agent_name, query, thread_id, show_thinking=False):
+    """测试特定Agent的响应"""
+    print(f"\n[测试] {agent_name} - 查询: '{query}'")
     
-    deeper_tool = DeeperResearchTool()
+    try:
+        start_time = time.time()
+        
+        if show_thinking and hasattr(agent, 'ask_with_thinking'):
+            result = agent.ask_with_thinking(query, thread_id=thread_id)
+            if isinstance(result, dict) and 'answer' in result:
+                answer = result['answer']
+                # 打印思考过程中的关键信息
+                thinking_keys = [k for k in result.keys() if k != 'answer']
+                print(f"思考过程包含以下信息: {', '.join(thinking_keys)}")
+            else:
+                answer = str(result)
+        else:
+            answer = agent.ask(query, thread_id=thread_id)
+        
+        execution_time = time.time() - start_time
+        
+        # 处理答案预览
+        if len(answer) > 300:
+            answer_preview = answer[:300] + "..."
+        else:
+            answer_preview = answer
+        
+        print(f"[完成] 用时 {execution_time:.2f}秒，结果长度 {len(answer)} 字符")
+        print(f"\n结果:\n{answer}\n") # 过长可以用 answer_preview
+        
+        return {
+            "agent": agent_name,
+            "query": query,
+            "execution_time": execution_time,
+            "result_length": len(answer),
+            "success": True
+        }
     
-    # 使用thinking方法获取带思考过程的结果
-    result = deeper_tool.thinking("优秀学生要如何申请")
-    print("\n --- 完整结果 ---")
-    print(result)
-    
-    print("\n --- 只有答案 ---")
-    print(result.get('answer'))
-    
-    # 使用search方法获取简洁答案
-    search_result = deeper_tool.search("优秀学生要如何申请")
-    print("\n --- search方法结果 ---")
-    print(search_result)
+    except Exception as e:
+        print(f"[错误] {agent_name} 处理查询时出错: {str(e)}")
+        return {
+            "agent": agent_name,
+            "query": query,
+            "error": str(e),
+            "success": False
+        }
 
-# GraphAgent 非流式示例
-def test_graph_agent():
-    print("\n======= GraphAgent 非流式输出 =======")
-    agent = GraphAgent()
+def run_tests():
+    """运行所有非流式测试"""
+    print("\n===== 开始非流式Agent测试 =====\n")
     
-    # 使用ask方法
-    result = agent.ask("优秀学生要如何申请")
-    print("\n --- ask方法结果 ---")
-    print(result)
+    # 创建所有agent实例
+    agents = [
+        # {"name": "DeepResearchAgent", "instance": DeepResearchAgent(use_deeper_tool=True)},
+        # {"name": "NaiveRagAgent", "instance": NaiveRagAgent()},
+        # {"name": "GraphAgent", "instance": GraphAgent()},
+        # {"name": "HybridAgent", "instance": HybridAgent()},
+        {"name": "FusionGraphRAGAgent", "instance": FusionGraphRAGAgent()}
+    ]
     
-    # 使用ask_with_trace获取执行轨迹
-    trace_result = agent.ask_with_trace("优秀学生要如何申请")
-    print("\n --- 带执行轨迹的结果 ---")
-    print(trace_result.get("answer"))
-    print("\n --- 执行轨迹 ---")
-    for log in trace_result.get("execution_log", [])[:3]:  # 只显示前3条日志
-        print(f"节点: {log.get('node')}, 时间: {log.get('timestamp')}")
+    # 测试结果
+    results = []
+    
+    # 遍历所有测试查询
+    for query in TEST_CONFIG["queries"]:
+        print(f"\n===== 测试查询: {query} =====")
+        
+        for agent_info in agents:
+            agent_name = agent_info["name"]
+            agent = agent_info["instance"]
+            
+            # 为每个测试创建唯一的线程ID
+            thread_id = f"test_{agent_name}_{int(time.time())}"
+            
+            # 执行测试
+            result = test_agent(agent, agent_name, query, thread_id)
+            results.append(result)
+            
+            # 只有DeepResearchAgent支持思考过程测试
+            if agent_name == "DeepResearchAgent":
+                print("\n--- 测试思考过程 ---")
+                thinking_result = test_agent(agent, f"{agent_name}(思考模式)", query, f"{thread_id}_thinking", show_thinking=True)
+                results.append(thinking_result)
+    
+    # 打印测试总结
+    successful_tests = sum(1 for r in results if r.get("success", False))
+    total_tests = len(results)
+    
+    print("\n===== 测试总结 =====")
+    print(f"成功测试: {successful_tests}/{total_tests}")
+    
+    # 计算平均执行时间
+    execution_times = [r.get("execution_time", 0) for r in results if "execution_time" in r]
+    if execution_times:
+        avg_time = sum(execution_times) / len(execution_times)
+        print(f"平均执行时间: {avg_time:.2f}秒")
+    
+    # 显示失败的测试
+    failed = [r for r in results if not r.get("success", False)]
+    if failed:
+        print("失败的测试:")
+        for f in failed:
+            agent = f.get("agent", "未知")
+            query = f.get("query", "未知")
+            error = f.get("error", "未知错误")
+            print(f"- {agent} 处理 '{query}' 时失败: {error}")
 
-# HybridAgent 非流式示例
-def test_hybrid_agent():
-    print("\n======= HybridAgent 非流式输出 =======")
-    agent = HybridAgent()
-    
-    # 使用ask方法
-    result = agent.ask("优秀学生要如何申请")
-    print("\n --- ask方法结果 ---")
-    print(result)
-    
-    # 使用ask_with_trace获取执行轨迹
-    trace_result = agent.ask_with_trace("优秀学生要如何申请")
-    print("\n --- 带执行轨迹的结果 ---")
-    print(trace_result.get("answer"))
-
-# NaiveRagAgent 非流式示例
-def test_naive_agent():
-    print("\n======= NaiveRagAgent 非流式输出 =======")
-    agent = NaiveRagAgent()
-    
-    # 使用ask方法
-    result = agent.ask("优秀学生要如何申请")
-    print("\n --- ask方法结果 ---")
-    print(result)
-    
-    # 使用ask_with_trace获取执行轨迹
-    trace_result = agent.ask_with_trace("优秀学生要如何申请")
-    print("\n --- 带执行轨迹的结果 ---")
-    print(trace_result.get("answer"))
-
-def test_fusion_agent():
-    print("\n======= FusinGraphRagAgent 非流式输出 =======")
-    agent = FusionGraphRAGAgent()
-    # 简单问答
-    answer = agent.ask("优秀学生要如何申请？")
-    print("\n --- ask方法结果 ---")
-    print(answer)
-
-    # 使用ask_with_trace获取执行轨迹
-    trace_result = agent.ask_with_trace("优秀学生要如何申请")
-    print("\n --- 带执行轨迹的结果 ---")
-    print(trace_result.get("answer"))
-
-# 运行所有非流式测试
 if __name__ == "__main__":
-    test_deep_research_agent()
-    test_fusion_agent()
-    # test_deeper_research_tool()
-    test_graph_agent()
-    test_hybrid_agent()
-    test_naive_agent()
+    print(f"开始测试: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    run_tests()
+    print(f"测试完成: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

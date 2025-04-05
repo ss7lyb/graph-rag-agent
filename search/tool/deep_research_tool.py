@@ -440,7 +440,21 @@ class DeepResearchTool(BaseSearchTool):
         # 初始化思考引擎
         self.thinking_engine.initialize_with_query(query)
 
+        # 使用QueryGenerator生成初始子查询
+        initial_sub_queries = self.query_generator.generate_sub_queries(query)
+        self._log(f"\n[深度研究] 生成了{len(initial_sub_queries)}个初始子查询")
+        
         think = ""
+        
+        # 将初始思考添加到思考过程
+        initial_thinking = f"我需要回答问题：{query}\n\n"
+        initial_thinking += "为了全面解答这个问题，我将从以下几个方面进行研究：\n"
+        for i, sub_q in enumerate(initial_sub_queries, 1):
+            initial_thinking += f"{i}. {sub_q}\n"
+        initial_thinking += "\n让我逐步进行搜索和分析。"
+        
+        self.thinking_engine.add_reasoning_step(initial_thinking)
+        think += initial_thinking
         
         # 迭代思考过程
         for iteration in range(self.max_iterations):
@@ -457,40 +471,72 @@ class DeepResearchTool(BaseSearchTool):
             # 更新消息历史，请求继续推理
             self.thinking_engine.update_continue_message()
             
-            # 生成下一个查询
-            result = self.thinking_engine.generate_next_query()
+            # 确定当前迭代要处理的查询
+            queries_to_process = []
             
-            # 处理生成结果
-            if result["status"] == "empty":
-                self._log("\n[深度研究] 生成的思考内容为空")
-                continue
-            elif result["status"] == "error":
-                self._log(f"\n[深度研究] 生成查询出错: {result.get('error', '未知错误')}")
-                break
-            elif result["status"] == "answer_ready":
-                self._log("\n[深度研究] AI认为已有足够信息生成答案")
-                break
+            if iteration == 0 and initial_sub_queries:
+                # 第一轮迭代使用预先生成的子查询
+                queries_to_process = initial_sub_queries[:2]  # 限制首轮使用的子查询数量
+                query_think = "开始根据分解的子问题进行搜索"
+            else:
+                # 非首轮，使用思考引擎生成下一步查询
+                result = self.thinking_engine.generate_next_query()
                 
-            # 获取生成的思考内容
-            query_think = result["content"]
-            think += self.thinking_engine.remove_query_tags(query_think)
+                # 处理生成结果
+                if result["status"] == "empty":
+                    self._log("\n[深度研究] 生成的思考内容为空")
+                    # 尝试使用QueryGenerator的多假设生成功能寻找新方向
+                    hypotheses = QueryGenerator.generate_multiple_hypotheses(query, self.llm)
+                    if hypotheses:
+                        self._log(f"\n[深度研究] 生成了{len(hypotheses)}个新假设，尝试从新角度探索")
+                        queries_to_process = hypotheses
+                        query_think = "尝试从新的角度思考这个问题:\n" + "\n".join([f"- {h}" for h in hypotheses])
+                        self.thinking_engine.add_reasoning_step(query_think)
+                        think += query_think
+                    else:
+                        continue
+                elif result["status"] == "error":
+                    self._log(f"\n[深度研究] 生成查询出错: {result.get('error', '未知错误')}")
+                    break
+                elif result["status"] == "answer_ready":
+                    self._log("\n[深度研究] AI认为已有足够信息生成答案")
+                    break
+                else:
+                    # 获取生成的思考内容
+                    query_think = result["content"]
+                    think += self.thinking_engine.remove_query_tags(query_think)
+                    
+                    # 获取搜索查询
+                    queries_to_process = result["queries"]
             
-            # 获取搜索查询
-            queries = result["queries"]
+            # 如果当前迭代没有查询，且我们已经检索到一些信息，尝试生成跟进查询
+            if not queries_to_process and self.all_retrieved_info:
+                followup_queries = self.query_generator.generate_followup_queries(
+                    query, self.all_retrieved_info
+                )
+                
+                if followup_queries:
+                    self._log(f"\n[深度研究] 生成了{len(followup_queries)}个跟进查询")
+                    queries_to_process = followup_queries
+                    followup_think = "\n考虑到已发现的信息，我需要进一步探索以下问题:\n"
+                    for i, fq in enumerate(followup_queries, 1):
+                        followup_think += f"{i}. {fq}\n"
+                    self.thinking_engine.add_reasoning_step(followup_think)
+                    think += followup_think
             
             # 如果没有生成搜索查询但不是第一轮，考虑结束
-            if not queries and iteration > 0:
-                if not self.all_retrieved_info:
-                    # 如果还没有检索到任何信息，强制使用原始查询
-                    queries = [query]
+            if not queries_to_process:
+                if not self.all_retrieved_info and iteration == 0:
+                    # 如果第一轮没检索到任何信息，强制使用原始查询
+                    queries_to_process = [query]
                     self._log("\n[深度研究] 没有检索到信息，使用原始查询")
                 else:
-                    # 已有信息，结束迭代
+                    # 已有信息或已经不是第一轮，结束迭代
                     self._log("\n[深度研究] 没有生成新查询且已有信息，结束迭代")
                     break
             
             # 处理每个搜索查询
-            for search_query in queries:
+            for search_query in queries_to_process:
                 self._log(f"\n[深度研究] 执行查询: {search_query}")
                 
                 # 检查是否已执行过相同查询
@@ -564,6 +610,17 @@ class DeepResearchTool(BaseSearchTool):
                 self.thinking_engine.add_reasoning_step(summary_think)
                 self.thinking_engine.add_human_message(f"\n{BEGIN_SEARCH_RESULT}{summary_think}{END_SEARCH_RESULT}\n")
                 think += self.thinking_engine.remove_result_tags(summary_think)
+            
+            # 在每轮迭代结束后，如果已有足够信息，使用QueryGenerator评估是否需要继续搜索
+            if iteration > 0 and self.all_retrieved_info:
+                # 类似于DeepSearch中的_generate_gap_queries方法
+                gap_needed = len(self.query_generator.generate_followup_queries(query, self.all_retrieved_info)) > 0
+                if not gap_needed:
+                    self._log("\n[深度研究] 已收集足够信息，无需进一步查询")
+                    reflection_think = "\n已收集到足够的信息，可以开始整合分析了。"
+                    self.thinking_engine.add_reasoning_step(reflection_think)
+                    think += reflection_think
+                    break
         
         # 生成最终答案
         # 确保至少执行了一次搜索
@@ -717,17 +774,37 @@ class DeepResearchTool(BaseSearchTool):
         # 初始化思考引擎
         self.thinking_engine.initialize_with_query(query)
 
+        # 使用QueryGenerator生成初始子查询
+        yield "\n**正在分析您的问题，生成研究方向**...\n"
+        
+        # 异步生成子查询
+        def generate_sub_queries():
+            return self.query_generator.generate_sub_queries(query)
+        
+        initial_sub_queries = await asyncio.get_event_loop().run_in_executor(None, generate_sub_queries)
+        self._log(f"\n[深度研究] 生成了{len(initial_sub_queries)}个初始子查询")
+        
         think = ""
         
-        # 向用户发送初始状态提示
-        yield "\n**正在分析您的问题**...\n"
+        # 将初始思考添加到思考过程
+        initial_thinking = f"我需要回答问题：{query}\n\n"
+        initial_thinking += "为了全面解答这个问题，我将从以下几个方面进行研究：\n"
+        for i, sub_q in enumerate(initial_sub_queries, 1):
+            initial_thinking += f"{i}. {sub_q}\n"
+        initial_thinking += "\n让我逐步进行搜索和分析。"
+        
+        self.thinking_engine.add_reasoning_step(initial_thinking)
+        think += initial_thinking
+        
+        # 分组返回初始思考内容
+        yield initial_thinking
         
         # 迭代思考过程
         for iteration in range(self.max_iterations):
             # 发送迭代进度
             if iteration > 0:
                 yield f"\n\n**正在进行第{iteration + 1}轮思考**...\n\n"
-                
+                    
             self._log(f"\n[深度研究] 开始第{iteration + 1}轮迭代")
             
             # 检查是否达到最大迭代次数
@@ -745,53 +822,98 @@ class DeepResearchTool(BaseSearchTool):
             # 让事件循环有机会执行其他任务
             await asyncio.sleep(0)
             
-            # 生成下一个查询
-            result = await self._async_generate_next_query()
+            # 确定当前迭代要处理的查询
+            queries_to_process = []
             
-            # 处理生成结果
-            if result["status"] == "empty":
-                empty_msg = "未能产生新的思考角度，尝试其他方向..."
-                self._log(empty_msg)
-                yield empty_msg
-                continue
-            elif result["status"] == "error":
-                error_msg = f"生成查询时遇到错误: {result.get('error', '未知错误')}"
-                self._log(error_msg)
-                yield error_msg
-                break
-            elif result["status"] == "answer_ready":
-                ready_msg = "已收集足够信息，准备生成答案..."
-                self._log(ready_msg)
-                yield ready_msg
-                break
+            if iteration == 0 and initial_sub_queries:
+                # 第一轮迭代使用预先生成的子查询
+                queries_to_process = initial_sub_queries[:2]  # 限制首轮使用的子查询数量
+                query_think = "开始根据分解的子问题进行搜索"
+                yield "\n**开始根据分解的子问题进行初始搜索**...\n"
+            else:
+                # 非首轮，使用思考引擎生成下一步查询
+                result = await self._async_generate_next_query()
+                
+                # 处理生成结果
+                if result["status"] == "empty":
+                    empty_msg = "未能产生新的思考角度，尝试从新角度探索问题..."
+                    self._log(empty_msg)
+                    yield empty_msg
                     
-            # 获取生成的思考内容
-            query_think = result["content"]
-            think_part = self.thinking_engine.remove_query_tags(query_think)
-            think += think_part
-            
-            # 分组返回思考内容，提高可读性
-            thoughts = re.split(r'(\n\n)', think_part)
-            thought_buffer = ""
-            
-            for part in thoughts:
-                thought_buffer += part
-                if len(thought_buffer) >= 80 or "\n\n" in thought_buffer:
-                    yield thought_buffer
+                    # 异步生成多假设
+                    def generate_hypotheses():
+                        return QueryGenerator.generate_multiple_hypotheses(query, self.llm)
+                    
+                    hypotheses = await asyncio.get_event_loop().run_in_executor(None, generate_hypotheses)
+                    
+                    if hypotheses:
+                        self._log(f"\n[深度研究] 生成了{len(hypotheses)}个新假设，尝试从新角度探索")
+                        queries_to_process = hypotheses
+                        query_think = "尝试从新的角度思考这个问题:\n" + "\n".join([f"- {h}" for h in hypotheses])
+                        self.thinking_engine.add_reasoning_step(query_think)
+                        think += query_think
+                        yield "\n**尝试从新角度思考问题**:\n" + query_think
+                    else:
+                        continue
+                elif result["status"] == "error":
+                    error_msg = f"生成查询时遇到错误: {result.get('error', '未知错误')}"
+                    self._log(error_msg)
+                    yield error_msg
+                    break
+                elif result["status"] == "answer_ready":
+                    ready_msg = "已收集足够信息，准备生成答案..."
+                    self._log(ready_msg)
+                    yield ready_msg
+                    break
+                            
+                else:
+                    # 获取生成的思考内容
+                    query_think = result["content"]
+                    think_part = self.thinking_engine.remove_query_tags(query_think)
+                    think += think_part
+                    
+                    # 分组返回思考内容，提高可读性
+                    thoughts = re.split(r'(\n\n)', think_part)
                     thought_buffer = ""
-                    await asyncio.sleep(0.01)
                     
-            if thought_buffer:
-                yield thought_buffer
-            
-            # 获取搜索查询
-            queries = result["queries"]
+                    for part in thoughts:
+                        thought_buffer += part
+                        if len(thought_buffer) >= 80 or "\n\n" in thought_buffer:
+                            yield thought_buffer
+                            thought_buffer = ""
+                            await asyncio.sleep(0.01)
+                            
+                    if thought_buffer:
+                        yield thought_buffer
+                    
+                    # 获取搜索查询
+                    queries_to_process = result["queries"]
+                
+            # 如果当前迭代没有查询，且我们已经检索到一些信息，尝试生成跟进查询
+            if not queries_to_process and self.all_retrieved_info and iteration > 0:
+                yield "\n**基于已发现的信息生成后续查询**...\n"
+                
+                # 异步生成跟进查询
+                def generate_followup():
+                    return self.query_generator.generate_followup_queries(query, self.all_retrieved_info)
+                
+                followup_queries = await asyncio.get_event_loop().run_in_executor(None, generate_followup)
+                
+                if followup_queries:
+                    self._log(f"\n[深度研究] 生成了{len(followup_queries)}个跟进查询")
+                    queries_to_process = followup_queries
+                    followup_think = "\n考虑到已发现的信息，我需要进一步探索以下问题:\n"
+                    for i, fq in enumerate(followup_queries, 1):
+                        followup_think += f"{i}. {fq}\n"
+                    self.thinking_engine.add_reasoning_step(followup_think)
+                    think += followup_think
+                    yield followup_think
             
             # 如果没有生成搜索查询但不是第一轮，考虑结束
-            if not queries and iteration > 0:
-                if not self.all_retrieved_info:
-                    # 如果还没有检索到任何信息，强制使用原始查询
-                    queries = [query]
+            if not queries_to_process:
+                if not self.all_retrieved_info and iteration == 0:
+                    # 如果第一轮没检索到任何信息，强制使用原始查询
+                    queries_to_process = [query]
                     no_info_msg = "\n\n**没有检索到信息，尝试使用原始问题直接查询**...\n\n"
                     self._log(no_info_msg)
                     yield no_info_msg
@@ -803,7 +925,7 @@ class DeepResearchTool(BaseSearchTool):
                     break
             
             # 处理每个搜索查询
-            for search_query in queries:
+            for search_query in queries_to_process:
                 search_start_msg = f"\n**正在搜索: {search_query}**\n"
                 self._log(search_start_msg)
                 yield search_start_msg
@@ -896,6 +1018,22 @@ class DeepResearchTool(BaseSearchTool):
                 if result_buffer:
                     yield result_buffer
             
+            # 在每轮迭代结束后，评估是否需要继续搜索
+            if iteration > 0 and self.all_retrieved_info:
+                # 异步判断是否需要继续生成查询
+                def check_gap_needed():
+                    return len(self.query_generator.generate_followup_queries(query, self.all_retrieved_info)) > 0
+                
+                gap_needed = await asyncio.get_event_loop().run_in_executor(None, check_gap_needed)
+                
+                if not gap_needed:
+                    reflection_msg = "\n**已收集到足够的信息，可以开始整合分析了**\n"
+                    self._log(reflection_msg)
+                    yield reflection_msg
+                    self.thinking_engine.add_reasoning_step("\n已收集到足够的信息，可以开始整合分析了。")
+                    think += "\n已收集到足够的信息，可以开始整合分析了。"
+                    break
+        
         # 确保至少执行了一次搜索
         if not self.thinking_engine.executed_search_queries:
             no_search_msg = f"\n**无法找到与{query}相关的信息，尝试给出基础回答**...\n"

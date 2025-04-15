@@ -14,6 +14,8 @@ docker run --name one-api -d --restart always \
 
 在 One-API 控制台中配置第三方 API Key。本项目的所有 API 请求将通过 One-API 转发。
 
+该项目的官方地址：https://github.com/songquanpeng/one-api
+
 
 ## Neo4j 启动
 

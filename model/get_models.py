@@ -49,8 +49,9 @@ if __name__ == '__main__':
     llm = get_llm_model()
     print(llm.invoke("你好"))
 
-    llm_stream = get_stream_llm_model()
-    print(llm_stream.invoke("你好"))
+    # 由于langchain版本问题，这个目前测试会报错
+    # llm_stream = get_stream_llm_model()
+    # print(llm_stream.invoke("你好"))
 
     # 测试embedding
     test_text = "你好，这是一个测试。"

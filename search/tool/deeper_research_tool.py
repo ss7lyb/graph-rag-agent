@@ -22,6 +22,7 @@ from config.reasoning_prompts import RELEVANT_EXTRACTION_PROMPT
 from search.tool.reasoning.prompts import kb_prompt
 from graph.extraction.entity_extractor import EntityRelationExtractor
 from search.tool.deep_research_tool import DeepResearchTool
+from search.tool.hybrid_tool import HybridSearchTool
 from search.tool.reasoning.community_enhance import CommunityAwareSearchEnhancer
 from search.tool.reasoning.thinking import ThinkingEngine
 from search.tool.reasoning.kg_builder import DynamicKnowledgeGraphBuilder
@@ -47,10 +48,15 @@ class DeeperResearchTool:
             embeddings: 嵌入模型
             graph: 图数据库连接
         """
+        # 关键词缓存
+        self._keywords_cache = {}
+
         # 初始化基础组件
         self.llm = llm or get_llm_model()
         self.embeddings = embeddings or get_embeddings_model()
         self.graph = graph or connection_manager.get_connection()
+
+        self.hybrid_tool = HybridSearchTool()
         
         # 初始化增强模块
         # 1. 社区感知搜索增强器
@@ -129,7 +135,15 @@ class DeeperResearchTool:
     
     def extract_keywords(self, query: str) -> Dict[str, List[str]]:
         """从查询中提取关键词"""
-        return self.deep_research.extract_keywords(query)
+        # 检查缓存
+        if query in self._keywords_cache:
+            return self._keywords_cache[query]
+
+        keywords = self.hybrid_tool.extract_keywords(query)
+        
+        # 缓存结果
+        self._keywords_cache[query] = keywords
+        return keywords
     
     def _enhance_search_with_coe(self, query: str, keywords: Dict[str, List[str]]):
         """
@@ -461,6 +475,8 @@ class DeeperResearchTool:
         # 清空执行日志
         self.execution_logs = []
         self._log(f"\n[深度研究] 开始处理查询: {query}")
+
+        self._keywords_cache = {}
         
         # 检查思考缓存
         if hasattr(self, '_thinking_cache') and query in self._thinking_cache:

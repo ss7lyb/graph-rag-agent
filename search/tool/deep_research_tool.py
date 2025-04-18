@@ -37,6 +37,9 @@ class DeepResearchTool(BaseSearchTool):
     def __init__(self):
         """初始化深度研究工具"""
         super().__init__(cache_dir="./cache/deep_research")
+
+        # 关键词缓存
+        self._keywords_cache = {}
         
         # 初始化各种工具，用于不同阶段的搜索
         self.hybrid_tool = HybridSearchTool()  # 用于关键词提取和混合搜索
@@ -81,7 +84,15 @@ class DeepResearchTool(BaseSearchTool):
     
     def extract_keywords(self, query: str) -> Dict[str, List[str]]:
         """从查询中提取关键词"""
-        return self.hybrid_tool.extract_keywords(query)
+        # 检查缓存
+        if query in self._keywords_cache:
+            return self._keywords_cache[query]
+
+        keywords = self.hybrid_tool.extract_keywords(query)
+        
+        # 缓存结果
+        self._keywords_cache[query] = keywords
+        return keywords
     
     def _parse_search_result(self, result):
         """
@@ -432,6 +443,8 @@ class DeepResearchTool(BaseSearchTool):
         # 清空执行日志
         self.execution_logs = []
         self._log(f"\n[深度研究] 开始处理查询: {query}")
+
+        self._keywords_cache = {}
         
         # 初始化结果容器
         chunk_info = {"chunks": [], "doc_aggs": []}

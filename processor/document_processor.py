@@ -24,18 +24,19 @@ class DocumentProcessor:
         self.file_reader = FileReader(directory_path)
         self.chunker = ChineseTextChunker(chunk_size, overlap)
         
-    def process_directory(self, file_extensions: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def process_directory(self, file_extensions: Optional[List[str]] = None, recursive: bool = True) -> List[Dict[str, Any]]:
         """
         处理目录中的所有支持文件
         
         Args:
             file_extensions: 指定要处理的文件扩展名，如不指定则处理所有支持的类型
+            recursive: 是否递归处理子目录，默认为True
             
         Returns:
             List[Dict]: 处理结果，每个文件一个字典，包含文件名、内容、分块等信息
         """
         # 读取文件
-        file_contents = self.file_reader.read_files(file_extensions)
+        file_contents = self.file_reader.read_files(file_extensions, recursive=recursive)
         
         # 打印调试信息
         print(f"DocumentProcessor找到的文件数量: {len(file_contents)}")
@@ -44,12 +45,13 @@ class DocumentProcessor:
         
         # 处理每个文件
         results = []
-        for filename, content in file_contents:
-            file_ext = os.path.splitext(filename)[1].lower()
+        for filepath, content in file_contents:
+            file_ext = os.path.splitext(filepath)[1].lower()
             
             # 创建文件处理结果字典
             file_result = {
-                "filename": filename,
+                "filepath": filepath,  # 相对路径
+                "filename": os.path.basename(filepath),  # 仅文件名
                 "extension": file_ext,
                 "content": content,
                 "content_length": len(content),
@@ -69,42 +71,54 @@ class DocumentProcessor:
                 
             except Exception as e:
                 file_result["chunk_error"] = str(e)
-                print(f"分块错误 ({filename}): {str(e)}")
+                print(f"分块错误 ({filepath}): {str(e)}")
                 
             results.append(file_result)
             
         return results
         
-    def get_file_stats(self, file_extensions: Optional[List[str]] = None) -> Dict[str, Any]:
+    def get_file_stats(self, file_extensions: Optional[List[str]] = None, recursive: bool = True) -> Dict[str, Any]:
         """
         获取目录中文件的统计信息
         
         Args:
             file_extensions: 指定要统计的文件扩展名，如不指定则处理所有支持的类型
+            recursive: 是否递归统计子目录，默认为True
             
         Returns:
             Dict: 文件统计信息
         """
         # 读取文件
-        file_contents = self.file_reader.read_files(file_extensions)
+        file_contents = self.file_reader.read_files(file_extensions, recursive=recursive)
         
         # 统计每种扩展名的文件数量
         extension_counts = {}
         total_content_length = 0
         
-        for filename, content in file_contents:
-            ext = os.path.splitext(filename)[1].lower()
+        # 统计子目录数量
+        directories = set()
+        
+        for filepath, content in file_contents:
+            ext = os.path.splitext(filepath)[1].lower()
             extension_counts[ext] = extension_counts.get(ext, 0) + 1
+            
+            # 记录文件所在的子目录
+            dirpath = os.path.dirname(filepath)
+            if dirpath:  # 非空表示在子目录中
+                directories.add(dirpath)
+                
             if content is not None:
                 total_content_length += len(content)
             else:
-                print(f"警告: 文件 {filename} 的内容为None")
+                print(f"警告: 文件 {filepath} 的内容为None")
             
         return {
             "total_files": len(file_contents),
             "extension_counts": extension_counts,
             "total_content_length": total_content_length,
-            "average_file_length": total_content_length / len(file_contents) if file_contents else 0
+            "average_file_length": total_content_length / len(file_contents) if file_contents else 0,
+            "directories": list(directories),
+            "directory_count": len(directories)
         }
         
     def get_extension_type(self, extension: str) -> str:
@@ -137,14 +151,21 @@ if __name__ == "__main__":
     processor = DocumentProcessor(FILES_DIR)
     
     # 列出目录中的所有文件
-    print(f"目录 {FILES_DIR} 中的所有文件:")
-    for filename in os.listdir(FILES_DIR):
-        print(f"  {filename}")
+    print(f"目录 {FILES_DIR} 及其子目录中的所有文件:")
+    all_files = processor.file_reader.list_all_files(recursive=True)
+    for filepath in all_files:
+        print(f"  {filepath}")
     
     # 获取文件统计信息
-    stats = processor.get_file_stats()
+    stats = processor.get_file_stats(recursive=True)
     print("目录文件统计:")
     print(f"总文件数: {stats['total_files']}")
+    print(f"子目录数: {stats['directory_count']}")
+    if stats['directory_count'] > 0:
+        print("子目录列表:")
+        for directory in stats['directories']:
+            print(f"  {directory}")
+    
     print("文件类型分布:")
     for ext, count in stats["extension_counts"].items():
         print(f"  {ext} ({processor.get_extension_type(ext)}): {count}文件")
@@ -153,11 +174,11 @@ if __name__ == "__main__":
     
     # 处理所有文件
     print("\n开始处理所有文件...")
-    results = processor.process_directory()
+    results = processor.process_directory(recursive=True)
     
     # 打印处理结果摘要
     for result in results:
-        print(f"\n文件: {result['filename']}")
+        print(f"\n文件: {result['filepath']}")
         print(f"类型: {processor.get_extension_type(result['extension'])}")
         print(f"内容长度: {result['content_length']}字符")
         

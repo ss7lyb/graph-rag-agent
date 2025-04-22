@@ -33,12 +33,13 @@ class FileReader:
         """
         self.directory_path = directory_path
         
-    def read_files(self, file_extensions: Optional[List[str]] = None) -> List[Tuple[str, str]]:
+    def read_files(self, file_extensions: Optional[List[str]] = None, recursive: bool = True) -> List[Tuple[str, str]]:
         """
         读取指定扩展名的文件
         
         Args:
             file_extensions: 文件扩展名列表，如 ['.txt', '.pdf']，如不指定则读取所有支持的格式
+            recursive: 是否递归读取子目录，默认为True
             
         Returns:
             List[Tuple[str, str]]: 文件名和内容的元组列表
@@ -61,17 +62,92 @@ class FileReader:
             
         results = []
         try:
-            all_filenames = os.listdir(self.directory_path)
-            print(f"目录中共有 {len(all_filenames)} 个文件")
+            if recursive:
+                # 递归读取所有文件
+                results = self._read_files_recursive(self.directory_path, file_extensions, supported_extensions)
+                print(f"递归读取目录完成，总共读取了 {len(results)} 个文件")
+            else:
+                # 仅读取当前目录的文件
+                all_filenames = os.listdir(self.directory_path)
+                print(f"当前目录中共有 {len(all_filenames)} 个文件")
+                
+                results = self._process_files_in_dir(self.directory_path, all_filenames, file_extensions, supported_extensions)
+                print(f"总共读取了 {len(results)} 个文件")
         except Exception as e:
             print(f"列出目录 {self.directory_path} 中的文件时出错: {str(e)}")
-            return []
+            
+        return results
+    
+    def _read_files_recursive(self, root_dir: str, file_extensions: List[str], supported_extensions: Dict) -> List[Tuple[str, str]]:
+        """
+        递归读取目录及其子目录中的文件
         
-        for filename in all_filenames:
+        Args:
+            root_dir: 当前处理的目录路径
+            file_extensions: 要处理的文件扩展名列表
+            supported_extensions: 支持的文件扩展名及对应处理函数
+            
+        Returns:
+            List[Tuple[str, str]]: 文件名和内容的元组列表
+        """
+        results = []
+        
+        try:
+            # 遍历目录内容
+            for item in os.listdir(root_dir):
+                item_path = os.path.join(root_dir, item)
+                
+                # 如果是目录，递归处理
+                if os.path.isdir(item_path):
+                    print(f"递归进入子目录: {item_path}")
+                    sub_results = self._read_files_recursive(item_path, file_extensions, supported_extensions)
+                    results.extend(sub_results)
+                
+                # 如果是文件，处理文件
+                elif os.path.isfile(item_path):
+                    file_ext = os.path.splitext(item)[1].lower()
+                    
+                    if file_ext in file_extensions:
+                        # 获取相对于根目录的路径
+                        rel_path = os.path.relpath(item_path, self.directory_path)
+                        
+                        print(f"处理文件: {rel_path} (类型: {file_ext})")
+                        
+                        # 使用对应的读取方法处理文件
+                        if file_ext in supported_extensions:
+                            try:
+                                content = supported_extensions[file_ext](item_path)
+                                # 存储相对路径而不是仅文件名，以便区分不同目录中的同名文件
+                                results.append((rel_path, content))
+                                print(f"成功读取文件: {rel_path}, 内容长度: {len(content)}")
+                            except Exception as e:
+                                print(f"读取文件 {rel_path} 时出错: {str(e)}")
+        except Exception as e:
+            print(f"列出目录 {root_dir} 中的文件时出错: {str(e)}")
+            
+        return results
+    
+    def _process_files_in_dir(self, directory: str, filenames: List[str], file_extensions: List[str], 
+                              supported_extensions: Dict) -> List[Tuple[str, str]]:
+        """
+        处理指定目录中的文件（不递归）
+        
+        Args:
+            directory: 目录路径
+            filenames: 文件名列表
+            file_extensions: 要处理的文件扩展名列表
+            supported_extensions: 支持的文件扩展名及对应处理函数
+            
+        Returns:
+            List[Tuple[str, str]]: 文件名和内容的元组列表
+        """
+        results = []
+        
+        for filename in filenames:
             file_ext = os.path.splitext(filename)[1].lower()
             
             if file_ext in file_extensions:
-                file_path = os.path.join(self.directory_path, filename)
+                file_path = os.path.join(directory, filename)
                 print(f"处理文件: {filename} (类型: {file_ext})")
                 
                 # 使用对应的读取方法处理文件
@@ -82,8 +158,7 @@ class FileReader:
                         print(f"成功读取文件: {filename}, 内容长度: {len(content)}")
                     except Exception as e:
                         print(f"读取文件 {filename} 时出错: {str(e)}")
-                
-        print(f"总共读取了 {len(results)} 个文件")
+        
         return results
     
     def _read_txt(self, file_path: str) -> str:
@@ -327,13 +402,33 @@ class FileReader:
         """读取所有txt文件"""
         return self.read_files(['.txt'])
     
-    def list_all_files(self) -> List[str]:
-        """列出目录中的所有文件"""
+    def list_all_files(self, recursive: bool = True) -> List[str]:
+        """
+        列出目录中的所有文件
+        
+        Args:
+            recursive: 是否递归列出子目录中的文件，默认为True
+            
+        Returns:
+            List[str]: 文件路径列表（相对于根目录）
+        """
+        files = []
+        
         try:
-            return os.listdir(self.directory_path)
+            if recursive:
+                # 递归遍历所有子目录
+                for root, _, filenames in os.walk(self.directory_path):
+                    for filename in filenames:
+                        # 获取相对于根目录的路径
+                        rel_path = os.path.relpath(os.path.join(root, filename), self.directory_path)
+                        files.append(rel_path)
+            else:
+                # 只列出当前目录下的文件
+                files = os.listdir(self.directory_path)
         except Exception as e:
             print(f"列出目录文件时出错: {str(e)}")
-            return []
+            
+        return files
 
 
 # 测试代码

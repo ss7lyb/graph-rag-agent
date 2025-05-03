@@ -6,6 +6,8 @@
 
 ## 🏠 项目架构图
 
+**注：本项目已于4.28被[deepwiki](https://deepwiki.org/)官方收录，有助于理解整体的项目代码和核心的工作原理，地址：https://deepwiki.com/1517005260/graph-rag-agent**
+
 由Claude生成
 
 ![svg](./assets/structure.svg)

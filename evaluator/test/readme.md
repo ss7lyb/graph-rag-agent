@@ -56,7 +56,7 @@ python evaluate_all_agents.py --questions_file questions.json --eval_type retrie
 python evaluate_all_agents.py --questions_file questions.json --metrics em,f1,retrieval_precision
 ```
 
-某次运行的结果：
+某次运行的结果（学校政务数据集）：
 
 | 指标 | naive | hybrid | graph | deep | fusion |
 | --- | --- | --- | --- | --- | --- |
@@ -76,3 +76,22 @@ python evaluate_all_agents.py --questions_file questions.json --metrics em,f1,re
 | retrieval_latency | 12.4365 | 18.0870 | 9.0602 | 87.8841 | 180.8547 |
 | retrieval_precision | 0.5667 | 0.5333 | 0.3667 | 0.7000 | 0.6000 |
 | retrieval_utilization | 0.5667 | 0.3000 | 0.4000 | 0.4000 | 0.4667 |
+
+[Lihua-World数据集](https://github.com/HKUDS/MiniRAG/tree/main/dataset/LiHua-World)运行结果（仅前三个agent，deepsearch太耗时且贵就没测）：
+
+运行测试前，应该先把数据集放在files/下构建图谱，过程较久。
+
+| 指标 | naive | hybrid | graph |
+| --- | --- | --- | --- |
+| **答案质量指标** |  |  |  |
+| answer_comprehensiveness | 0.3920 | 0.6137 | 0.7488 |
+| em | 0.1038 | 0.1187 | 0.2359 |
+| f1 | 0.1064 | 0.1843 | 0.2813 |
+| factual_consistency | 0.8758 | 0.8357 | 0.8772 |
+| response_coherence | 0.6804 | 0.8622 | 0.8542 |
+| **LLM评估指标** |  |  |  |
+| Comprehensiveness | 0.3242 | 0.5936 | 0.6674 |
+| Directness | 0.6708 | 0.6106 | 0.8501 |
+| Empowerment | 0.2756 | 0.5203 | 0.6133 |
+| Relativeness | 0.5790 | 0.6648 | 0.8442 |
+| Total | 0.4451 | 0.5965 | 0.7346 |

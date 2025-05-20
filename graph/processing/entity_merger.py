@@ -13,6 +13,7 @@ from langchain.prompts import (
 
 from model.get_models import get_llm_model
 from config.prompt import system_template_build_index, user_template_build_index
+from config.settings import ENTITY_BATCH_SIZE, MAX_WORKERS as DEFAULT_MAX_WORKERS
 from graph.core import connection_manager, timer, get_performance_stats, print_performance_stats
 
 class EntityMerger:
@@ -36,8 +37,8 @@ class EntityMerger:
         self.llm = get_llm_model()
         
         # 批处理和并行参数
-        self.batch_size = batch_size
-        self.max_workers = max_workers
+        self.batch_size = batch_size or ENTITY_BATCH_SIZE
+        self.max_workers = max_workers or DEFAULT_MAX_WORKERS
         
         # 设置LLM处理链
         self._setup_llm_chain()

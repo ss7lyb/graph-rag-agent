@@ -6,7 +6,8 @@ from langchain_core.output_parsers import StrOutputParser
 from model.get_models import get_llm_model
 import concurrent.futures
 import time
-import os
+
+from config.settings import MAX_WORKERS
 
 class BaseCommunityDescriber:
     """社区信息格式化工具"""
@@ -136,6 +137,7 @@ class BaseSummarizer(ABC):
     """社区摘要生成器基类"""
     
     def __init__(self, graph: Neo4jGraph):
+        """初始化社区摘要生成器基类"""
         self.graph = graph
         self.llm = get_llm_model()
         self.describer = BaseCommunityDescriber()
@@ -148,8 +150,7 @@ class BaseSummarizer(ABC):
         self.query_time = 0
         self.store_time = 0
         
-        # 并行处理配置
-        self.max_workers = os.cpu_count() or 4
+        self.max_workers = MAX_WORKERS
         print(f"社区摘要生成器初始化，并行线程数: {self.max_workers}")
 
     def _setup_llm_chain(self) -> None:

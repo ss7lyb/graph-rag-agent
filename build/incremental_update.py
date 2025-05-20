@@ -13,7 +13,7 @@ from build.incremental.manual_edit_manager import ManualEditManager
 from graph.indexing.embedding_manager import EmbeddingManager
 from community import CommunityDetectorFactory, CommunitySummarizerFactory
 from config.neo4jdb import get_db_manager
-from config.settings import FILES_DIR, community_algorithm
+from config.settings import FILES_DIR, community_algorithm, MAX_WORKERS, BATCH_SIZE
 from build.incremental.incremental_update_scheduler import IncrementalUpdateScheduler
 
 class IncrementalUpdateManager:
@@ -48,7 +48,7 @@ class IncrementalUpdateManager:
         self.updater = IncrementalGraphUpdater(files_dir)
         self.validator = GraphConsistencyValidator()
         self.edit_manager = ManualEditManager()
-        self.embedding_manager = EmbeddingManager()
+        self.embedding_manager = EmbeddingManager(batch_size=BATCH_SIZE, max_workers=MAX_WORKERS)
         
         # 初始化调度器
         self.scheduler = IncrementalUpdateScheduler(self.config)

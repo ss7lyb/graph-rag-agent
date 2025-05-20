@@ -5,7 +5,7 @@ from typing import Dict, List, Any
 from rich.console import Console
 from rich.table import Table
 from config.neo4jdb import get_db_manager
-from config.settings import conflict_strategy
+from config.settings import conflict_strategy, MAX_WORKERS, BATCH_SIZE
 
 class ManualEditManager:
     """
@@ -21,8 +21,12 @@ class ManualEditManager:
         """初始化手动编辑同步管理器"""
         self.console = Console()
         self.graph = get_db_manager().graph
+        
+        # 设置并行工作线程数和批处理大小
+        self.max_workers = MAX_WORKERS
+        self.batch_size = BATCH_SIZE
 
-       # 初始化实体和关系的必要属性
+        # 初始化实体和关系的必要属性
         self.initialize_entity_properties()
 
         # 性能计时器

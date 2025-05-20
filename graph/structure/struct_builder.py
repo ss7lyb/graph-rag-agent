@@ -4,6 +4,8 @@ from typing import List, Dict
 from langchain_core.documents import Document
 
 from graph.core import connection_manager, generate_hash
+from config.settings import BATCH_SIZE as DEFAULT_BATCH_SIZE
+from config.settings import MAX_WORKERS as DEFAULT_MAX_WORKERS
 
 class GraphStructureBuilder:
     """
@@ -21,7 +23,7 @@ class GraphStructureBuilder:
         self.graph = connection_manager.get_connection()
         self.graph.refresh_schema()
         
-        self.batch_size = batch_size
+        self.batch_size = batch_size or DEFAULT_BATCH_SIZE
             
     def clear_database(self):
         """清空数据库"""
@@ -208,7 +210,7 @@ class GraphStructureBuilder:
             """
             self.graph.query(query_next_chunk, params={"relationships": next_relationships})
     
-    def parallel_process_chunks(self, file_name: str, chunks: List, max_workers=4) -> List[Dict]:
+    def parallel_process_chunks(self, file_name: str, chunks: List, max_workers=None) -> List[Dict]:
         """
         并行处理chunks，提高大量数据的处理速度
         
@@ -220,6 +222,8 @@ class GraphStructureBuilder:
         Returns:
             List[Dict]: 带有ID和文档的块列表
         """
+        max_workers = max_workers or DEFAULT_MAX_WORKERS
+        
         if len(chunks) < 100:  # 对于小数据集，使用标准方法
             return self.create_relation_between_chunks(file_name, chunks)
         

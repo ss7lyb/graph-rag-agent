@@ -2,6 +2,8 @@ from typing import Dict, Any
 from .base import BaseCommunityDetector
 from .projections import GraphProjectionMixin
 
+from config.settings import GDS_CONCURRENCY
+
 class LeidenDetector(GraphProjectionMixin, BaseCommunityDetector):
     """Leiden算法社区检测实现"""
     
@@ -69,21 +71,21 @@ class LeidenDetector(GraphProjectionMixin, BaseCommunityDetector):
                 'gamma': 1.0,
                 'tolerance': 0.0001,
                 'maxLevels': 10,
-                'concurrency': self.max_concurrency
+                'concurrency': GDS_CONCURRENCY
             }
         elif self.memory_mb > 16 * 1024:  # >16GB
             return {
                 'gamma': 1.0,
                 'tolerance': 0.0005,
                 'maxLevels': 5,
-                'concurrency': max(1, self.max_concurrency - 1)
+                'concurrency': max(1, GDS_CONCURRENCY - 1)
             }
         else:  # 小内存系统
             return {
                 'gamma': 0.8,
                 'tolerance': 0.001,
                 'maxLevels': 3,
-                'concurrency': max(1, self.max_concurrency // 2)
+                'concurrency': max(1, GDS_CONCURRENCY // 2)
             }
     
     def save_communities(self) -> Dict[str, int]:

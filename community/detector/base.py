@@ -7,6 +7,8 @@ import os
 import time
 from contextlib import contextmanager
 
+from config.settings import MAX_WORKERS, GDS_CONCURRENCY, GDS_MEMORY_LIMIT
+
 class BaseCommunityDetector(ABC):
     """社区检测基类"""
     
@@ -31,12 +33,14 @@ class BaseCommunityDetector(ABC):
         self._adjust_parameters()
         
     def _adjust_parameters(self):
-        """根据系统资源调整运行参数"""
+        """调整运行参数"""
         # 设置并发度
-        self.max_concurrency = min(4, self.cpu_count)
+        self.max_concurrency = GDS_CONCURRENCY
         
-        # 根据内存大小调整限制
-        memory_gb = self.memory_mb / 1024
+        # 使用配置的内存限制
+        memory_gb = GDS_MEMORY_LIMIT
+        
+        # 根据配置的内存大小调整限制
         if memory_gb > 32:
             self.node_count_limit = 100000
             self.timeout_seconds = 600
@@ -47,8 +51,8 @@ class BaseCommunityDetector(ABC):
             self.node_count_limit = 20000
             self.timeout_seconds = 180
             
-        print(f"社区检测参数: CPU={self.cpu_count}, 内存={memory_gb:.1f}GB, "
-              f"并发度={self.max_concurrency}, 节点限制={self.node_count_limit}")
+        print(f"社区检测参数: CPU={MAX_WORKERS}, 内存={memory_gb:.1f}GB, "
+            f"并发度={self.max_concurrency}, 节点限制={self.node_count_limit}")
 
     @contextmanager
     def _graph_projection_context(self):

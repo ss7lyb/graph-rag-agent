@@ -11,6 +11,7 @@ from langchain.prompts import (
 )
 
 from graph.core import retry, generate_hash
+from config.settings import MAX_WORKERS as DEFAULT_MAX_WORKERS, BATCH_SIZE as DEFAULT_BATCH_SIZE
 
 class EntityRelationExtractor:
     """
@@ -19,8 +20,8 @@ class EntityRelationExtractor:
     """
     
     def __init__(self, llm, system_template, human_template, 
-                 entity_types: List[str], relationship_types: List[str],
-                 cache_dir="./cache/graph", max_workers=4, batch_size=5):
+             entity_types: List[str], relationship_types: List[str],
+             cache_dir="./cache/graph", max_workers=4, batch_size=5):
         """
         初始化实体关系提取器
         
@@ -66,8 +67,8 @@ class EntityRelationExtractor:
             os.makedirs(cache_dir)
         
         # 并行处理配置
-        self.max_workers = max_workers
-        self.batch_size = batch_size
+        self.max_workers = max_workers or DEFAULT_MAX_WORKERS
+        self.batch_size = batch_size or DEFAULT_BATCH_SIZE
         
         # 缓存统计
         self.cache_hits = 0
@@ -280,7 +281,7 @@ class EntityRelationExtractor:
                     # 处理结果数量不匹配的情况
                     if len(batch_results) != len(batch_chunks):
                         # 如果无法正确解析批处理响应，则单独处理每个chunk
-                        print(f"批处理结果数量不匹配 (期望 {len(batch_chunks)}, 实际 {len(batch_results)}), 将单独处理每个chunk")
+                        # print(f"批处理结果数量不匹配 (期望 {len(batch_chunks)}, 实际 {len(batch_results)}), 将单独处理每个chunk")
                         batch_results = []
                         for idx, chunk in enumerate(batch_chunks):
                             # 检查缓存

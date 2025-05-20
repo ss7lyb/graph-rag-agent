@@ -17,6 +17,7 @@ from community import CommunitySummarizerFactory
 from graphdatascience import GraphDataScience
 
 from config.neo4jdb import get_db_manager
+from config.settings import MAX_WORKERS, ENTITY_BATCH_SIZE, GDS_MEMORY_LIMIT
 
 import shutup
 shutup.please()
@@ -80,33 +81,24 @@ class IndexCommunityBuilder:
             self.graph = db_manager.graph
             progress.advance(task)
             
-            # 初始化索引管理器 - 动态调整参数
-            max_workers = os.cpu_count() or 4
-            # 根据系统内存动态调整批处理大小
-            total_memory_gb = psutil.virtual_memory().total / (1024 * 1024 * 1024)
-            optimal_batch_size = min(200, max(50, int(total_memory_gb * 10)))
-            
-            # 配置GDS参数，考虑系统资源
-            memory_limit = min(int(total_memory_gb * 0.7), 16)  # 限制为总内存的70%或16GB
-            
             self.index_manager = EntityIndexManager(
-                batch_size=optimal_batch_size,
-                max_workers=max_workers
+                batch_size=ENTITY_BATCH_SIZE,
+                max_workers=MAX_WORKERS
             )
             self.gds_config = GDSConfig(
-                memory_limit=memory_limit,
-                batch_size=optimal_batch_size
+                memory_limit=GDS_MEMORY_LIMIT,
+                batch_size=ENTITY_BATCH_SIZE
             )
             self.entity_detector = SimilarEntityDetector(self.gds_config)
             self.entity_merger = EntityMerger(
-                batch_size=optimal_batch_size,
-                max_workers=max_workers
+                batch_size=ENTITY_BATCH_SIZE,
+                max_workers=MAX_WORKERS
             )
             
-            # 输出优化参数
-            self.console.print(f"[blue]并行处理线程数: {max_workers}[/blue]")
-            self.console.print(f"[blue]数据库批处理大小: {optimal_batch_size}[/blue]")
-            self.console.print(f"[blue]GDS内存限制: {memory_limit}GB[/blue]")
+            # 输出使用的参数
+            self.console.print(f"[blue]并行处理线程数: {MAX_WORKERS}[/blue]")
+            self.console.print(f"[blue]数据库批处理大小: {ENTITY_BATCH_SIZE}[/blue]")
+            self.console.print(f"[blue]GDS内存限制: {GDS_MEMORY_LIMIT}GB[/blue]")
             
             progress.advance(task)
             

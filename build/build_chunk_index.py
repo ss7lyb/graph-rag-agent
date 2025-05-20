@@ -10,6 +10,7 @@ from rich.text import Text
 
 from graph import ChunkIndexManager
 from config.neo4jdb import get_db_manager
+from config.settings import MAX_WORKERS, CHUNK_BATCH_SIZE
 
 import shutup
 shutup.please()
@@ -62,21 +63,15 @@ class ChunkIndexBuilder:
             db_manager = get_db_manager()
             self.graph = db_manager.graph
             progress.advance(task)
-            
-            # 初始化索引管理器 - 动态调整参数
-            max_workers = os.cpu_count() or 4
-            # 根据系统内存动态调整批处理大小
-            total_memory_gb = psutil.virtual_memory().total / (1024 * 1024 * 1024)
-            optimal_batch_size = min(200, max(50, int(total_memory_gb * 10)))
-            
+             
             self.index_manager = ChunkIndexManager(
-                batch_size=optimal_batch_size,
-                max_workers=max_workers
+                batch_size=CHUNK_BATCH_SIZE,
+                max_workers=MAX_WORKERS
             )
             
-            # 输出优化参数
-            self.console.print(f"[blue]并行处理线程数: {max_workers}[/blue]")
-            self.console.print(f"[blue]数据库批处理大小: {optimal_batch_size}[/blue]")
+            # 输出使用的参数
+            self.console.print(f"[blue]并行处理线程数: {MAX_WORKERS}[/blue]")
+            self.console.print(f"[blue]数据库批处理大小: {CHUNK_BATCH_SIZE}[/blue]")
             
             progress.advance(task)
         

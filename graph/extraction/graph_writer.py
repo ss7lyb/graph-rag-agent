@@ -6,6 +6,7 @@ from langchain_core.documents import Document
 from langchain_community.graphs.graph_document import GraphDocument, Node, Relationship
 
 from graph.core import connection_manager
+from config.settings import BATCH_SIZE as DEFAULT_BATCH_SIZE, MAX_WORKERS as DEFAULT_MAX_WORKERS
 
 class GraphWriter:
     """
@@ -23,8 +24,8 @@ class GraphWriter:
             max_workers: 并行工作线程数
         """
         self.graph = graph or connection_manager.get_connection()
-        self.batch_size = batch_size
-        self.max_workers = max_workers
+        self.batch_size = batch_size or DEFAULT_BATCH_SIZE
+        self.max_workers = max_workers or DEFAULT_MAX_WORKERS
         
         # 节点缓存，用于减少重复节点的创建
         self.node_cache = {}

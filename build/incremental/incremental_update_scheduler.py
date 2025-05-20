@@ -7,6 +7,8 @@ from datetime import datetime
 from rich.console import Console
 from rich.table import Table
 
+from config.settings import MAX_WORKERS
+
 class IncrementalUpdateScheduler:
     """
     增量更新调度器，管理不同组件的更新频率，确保高效的增量更新策略。
@@ -47,6 +49,9 @@ class IncrementalUpdateScheduler:
         
         # 调度锁，防止任务重叠
         self.schedule_lock = threading.Lock()
+        
+        # 设置线程数
+        self.max_workers = MAX_WORKERS
     
     def should_update(self, component: str, force: bool = False) -> bool:
         """

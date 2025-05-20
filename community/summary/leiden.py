@@ -2,6 +2,8 @@ from typing import List, Dict
 from .base import BaseSummarizer
 import time
 
+from config.settings import BATCH_SIZE
+
 class LeidenSummarizer(BaseSummarizer):
     """Leiden算法的社区摘要生成器"""
     
@@ -79,11 +81,14 @@ class LeidenSummarizer(BaseSummarizer):
     
     def _collect_info_in_batches(self, total_count: int) -> List[Dict]:
         """分批收集社区信息"""
-        batch_size = 50
+        batch_size = 50  # 默认批处理大小
+        if BATCH_SIZE:
+            batch_size = min(50, max(10, BATCH_SIZE // 2))  # 调整为适合社区收集的批次大小
+            
         total_batches = (total_count + batch_size - 1) // batch_size
         all_results = []
         
-        print(f"使用批处理收集社区信息，共 {total_batches} 批")
+        print(f"使用批处理收集Leiden社区信息，共 {total_batches} 批")
         
         for batch in range(total_batches):
             if batch > 20:  # 限制批次

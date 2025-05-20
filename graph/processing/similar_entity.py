@@ -4,7 +4,7 @@ from graphdatascience import GraphDataScience
 from typing import Tuple, List, Any, Dict
 from dataclasses import dataclass
 
-from config.settings import similarity_threshold
+from config.settings import similarity_threshold, BATCH_SIZE, GDS_MEMORY_LIMIT
 from graph.core import connection_manager, timer, get_performance_stats, print_performance_stats
 
 @dataclass
@@ -17,6 +17,14 @@ class GDSConfig:
     word_edit_distance: int = 3
     batch_size: int = 500
     memory_limit: int = 6  # 单位：GB
+    
+    def __post_init__(self):
+        # 如果配置文件中有设置则使用配置值
+        if 'BATCH_SIZE' in globals() and BATCH_SIZE:
+            self.batch_size = BATCH_SIZE
+            
+        if 'GDS_MEMORY_LIMIT' in globals() and GDS_MEMORY_LIMIT:
+            self.memory_limit = GDS_MEMORY_LIMIT
 
 class SimilarEntityDetector:
     """

@@ -20,7 +20,8 @@ from config.settings import (
     theme,
     FILES_DIR,
     CHUNK_SIZE,
-    OVERLAP
+    OVERLAP,
+    MAX_WORKERS, BATCH_SIZE,
 )
 from config.neo4jdb import get_db_manager
 from processor.document_processor import DocumentProcessor
@@ -93,30 +94,24 @@ class KnowledgeGraphBuilder:
             self.graph = db_manager.graph
             progress.advance(task)
             
-            # 初始化文档处理器 - 使用DocumentProcessor替代直接使用FileReader和ChineseTextChunker
+            # 初始化文档处理器
             self.document_processor = DocumentProcessor(FILES_DIR, CHUNK_SIZE, OVERLAP)
             progress.advance(task)
             
-            # 初始化图谱构建器 - 动态调整批处理大小和并行度
-            max_workers = os.cpu_count() or 4  # 如果无法确定CPU核心数，默认使用4
-            # 根据系统内存动态调整批处理大小
-            total_memory_gb = psutil.virtual_memory().total / (1024 * 1024 * 1024)
-            optimal_batch_size = min(100, max(20, int(total_memory_gb * 5)))  # 根据可用内存估算
-            
-            self.struct_builder = GraphStructureBuilder(batch_size=optimal_batch_size)
+            self.struct_builder = GraphStructureBuilder(batch_size=BATCH_SIZE)
             self.entity_extractor = EntityRelationExtractor(
                 self.llm,
                 system_template_build_graph,
                 human_template_build_graph,
                 entity_types,
                 relationship_types,
-                max_workers=max_workers,
+                max_workers=MAX_WORKERS,
                 batch_size=5  # LLM批处理大小保持小一些以确保质量
             )
             
-            # 输出优化参数
-            self.console.print(f"[blue]并行处理线程数: {max_workers}[/blue]")
-            self.console.print(f"[blue]数据库批处理大小: {optimal_batch_size}[/blue]")
+            # 输出使用的参数
+            self.console.print(f"[blue]并行处理线程数: {MAX_WORKERS}[/blue]")
+            self.console.print(f"[blue]数据库批处理大小: {BATCH_SIZE}[/blue]")
             
             progress.advance(task)
         

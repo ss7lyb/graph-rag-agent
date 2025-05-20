@@ -6,6 +6,7 @@ from rich.console import Console
 
 from model.get_models import get_embeddings_model
 from config.neo4jdb import get_db_manager
+from config.settings import EMBEDDING_BATCH_SIZE, MAX_WORKERS as DEFAULT_MAX_WORKERS
 
 class EmbeddingManager:
     """
@@ -29,8 +30,8 @@ class EmbeddingManager:
         self.graph = get_db_manager().graph
         self.embeddings_model = get_embeddings_model()
         
-        self.batch_size = batch_size
-        self.max_workers = max_workers
+        self.batch_size = batch_size or EMBEDDING_BATCH_SIZE
+        self.max_workers = max_workers or DEFAULT_MAX_WORKERS
         
         # 性能监控
         self.embedding_time = 0

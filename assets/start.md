@@ -73,12 +73,14 @@ NEO4J_URI='neo4j://localhost:7687'
 NEO4J_USERNAME='neo4j'
 NEO4J_PASSWORD='12345678'
 
-# LangSmith 配置（可选）
+# LangSmith 配置（可选，若不需要此监控，可以直接注释）
 LANGSMITH_TRACING=true
 LANGSMITH_ENDPOINT="https://api.smith.langchain.com"
 LANGSMITH_API_KEY="你的 LangSmith API Key"
 LANGSMITH_PROJECT="项目名称"
 ```
+
+**注意**：全流程测试通过的只有deepseek（20241226版本）以及gpt-4o，剩下的模型，比如deepseek（20250324版本）幻觉问题比较严重，有概率不遵循提示词，导致抽取实体失败；Qwen的模型可以抽取实体，但是好像不支持langchain/langgraph，所以问答的时候有概率报错，他们有自己的agent实现[Qwen-Agent](https://qwen.readthedocs.io/zh-cn/latest/framework/qwen_agent.html)
 
 ## 项目初始化
 
@@ -127,6 +129,24 @@ response_type = "多个段落"
 lc_description = "用于需要具体细节的查询，例如《悟空传》中的对话、场景描写等。"
 gl_description = "用于宏观总结和分析，如人物关系、主题发展等。"
 naive_description = "基础检索工具，返回最相关的原文段落。"
+
+# 性能优化参数
+# 并行处理配置
+MAX_WORKERS = 4                # 并行工作线程数
+BATCH_SIZE = 100               # 批处理大小
+ENTITY_BATCH_SIZE = 50         # 实体处理批次大小
+CHUNK_BATCH_SIZE = 100         # 文本块处理批次大小
+EMBEDDING_BATCH_SIZE = 64      # 嵌入向量计算批次大小
+LLM_BATCH_SIZE = 5             # LLM处理批次大小
+
+# GDS相关配置
+GDS_MEMORY_LIMIT = 6           # GDS内存限制(GB)
+GDS_CONCURRENCY = 4            # GDS并发度
+GDS_NODE_COUNT_LIMIT = 50000   # GDS节点数量限制
+GDS_TIMEOUT_SECONDS = 300      # GDS超时时间(秒)
+
+# 索引和社区检测配置
+COMMUNITY_BATCH_SIZE = 50      # 社区处理批次大小
 ```
 
 ## 构建知识图谱

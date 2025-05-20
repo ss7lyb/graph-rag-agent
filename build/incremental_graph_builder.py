@@ -10,7 +10,7 @@ from rich.table import Table
 
 from model.get_models import get_llm_model
 from config.prompt import system_template_build_graph, human_template_build_graph
-from config.settings import entity_types, relationship_types, CHUNK_SIZE, OVERLAP
+from config.settings import entity_types, relationship_types, CHUNK_SIZE, OVERLAP, MAX_WORKERS, BATCH_SIZE
 from processor.document_processor import DocumentProcessor
 from graph import EntityRelationExtractor, GraphWriter, GraphStructureBuilder
 from config.neo4jdb import get_db_manager
@@ -43,7 +43,7 @@ class IncrementalGraphUpdater:
         self.file_manager = FileChangeManager(files_dir, registry_path)
         
         # 初始化优化的Embedding管理器
-        self.embedding_manager = EmbeddingManager()
+        self.embedding_manager = EmbeddingManager(batch_size=BATCH_SIZE, max_workers=MAX_WORKERS)
         
         # 保存文件目录路径
         self.files_dir = files_dir
@@ -55,7 +55,7 @@ class IncrementalGraphUpdater:
         self.document_processor = DocumentProcessor(files_dir, CHUNK_SIZE, OVERLAP)
         
         # 初始化图结构构建器
-        self.struct_builder = GraphStructureBuilder()
+        self.struct_builder = GraphStructureBuilder(batch_size=BATCH_SIZE)
         
         # 初始化实体关系抽取器
         self.entity_extractor = EntityRelationExtractor(
@@ -63,11 +63,12 @@ class IncrementalGraphUpdater:
             system_template_build_graph,
             human_template_build_graph,
             entity_types,
-            relationship_types
+            relationship_types,
+            max_workers=MAX_WORKERS
         )
         
         # 初始化图写入器
-        self.graph_writer = GraphWriter(self.graph)
+        self.graph_writer = GraphWriter(self.graph, batch_size=BATCH_SIZE, max_workers=MAX_WORKERS)
         
         # 处理统计
         self.stats = {

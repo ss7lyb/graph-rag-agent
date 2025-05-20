@@ -2,6 +2,8 @@ import time
 import concurrent.futures
 from typing import List, Any, Optional
 
+from config.settings import MAX_WORKERS as CONFIG_MAX_WORKERS
+
 class BaseIndexer:
     """
     基础索引器类，为各种索引器提供通用功能。
@@ -29,16 +31,9 @@ class BaseIndexer:
         raise NotImplementedError("子类必须实现此方法")
     
     def get_optimal_batch_size(self, total_items: int) -> int:
-        """
-        计算最优批处理大小
-        
-        Args:
-            total_items: 总项目数量
-            
-        Returns:
-            int: 最优批处理大小
-        """
-        return min(self.batch_size, max(20, total_items // 10))
+        # 使用配置的批处理大小作为上限
+        optimal_size = min(self.batch_size, max(20, total_items // 10))
+        return optimal_size
     
     def batch_process_with_progress(self, 
                                    items: List[Any], 
@@ -105,9 +100,10 @@ class BaseIndexer:
         Returns:
             List[Any]: 处理结果列表
         """
+        max_workers = min(self.max_workers, CONFIG_MAX_WORKERS)
         results = []
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             # 提交所有任务
             future_to_item = {
                 executor.submit(process_func, item): i 

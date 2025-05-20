@@ -5,6 +5,7 @@ from langchain_community.vectorstores import Neo4jVector
 
 from model.get_models import get_embeddings_model, get_llm_model
 from graph.core import BaseIndexer, connection_manager
+from config.settings import ENTITY_BATCH_SIZE, MAX_WORKERS as DEFAULT_MAX_WORKERS
 
 class EntityIndexManager(BaseIndexer):
     """
@@ -20,7 +21,10 @@ class EntityIndexManager(BaseIndexer):
             refresh_schema: 是否刷新Neo4j图数据库的schema
             batch_size: 批处理大小
             max_workers: 并行工作线程数
-        """
+        """        
+        batch_size = batch_size or ENTITY_BATCH_SIZE
+        max_workers = max_workers or DEFAULT_MAX_WORKERS
+        
         super().__init__(batch_size, max_workers)
         
         # 初始化图数据库连接

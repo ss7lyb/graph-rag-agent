@@ -97,15 +97,30 @@ class AnswerValidator:
         return True
 
 def complexity_estimate(query: str) -> float:
-        """
-        估计查询复杂度
+    """
+    估计查询复杂度
+    
+    Args:
+        query: 查询字符串
         
-        Args:
-            query: 查询字符串
-            
-        Returns:
-            float: 复杂度评分(0.0-1.0)
-        """
+    Returns:
+        float: 复杂度评分(0.0-1.0)
+    """
+    # 添加None检查和类型验证
+    if query is None:
+        print(f'complexity_estimate: 返回0，因为query:{query}为空\n')
+        return 0.0
+    
+    # 确保query是字符串
+    if not isinstance(query, str):
+        query = str(query) if query is not None else ""
+    
+    # 如果查询为空，返回0
+    if not query.strip():
+        print(f'complexity_estimate: 返回0，因为query:{query}为空\n')
+        return 0.0
+    
+    try:
         # 基于查询长度、问号数量和关键词数量的简单启发式方法
         length_factor = min(1.0, len(query) / 100)
         question_marks = query.count("?") + query.count("？")
@@ -123,6 +138,12 @@ def complexity_estimate(query: str) -> float:
         indicator_factor = min(1.0, indicator_count * 0.15)
         
         # 综合评分
-        complexity = (length_factor * 0.3 + question_factor * 0.3 + indicator_factor * 0.4)
-        
-        return min(1.0, complexity)
+        if all(factor is not None for factor in [length_factor, question_factor, indicator_factor]):
+            complexity = (length_factor * 0.3 + question_factor * 0.3 + indicator_factor * 0.4)
+            return min(1.0, max(0.0, complexity))  # 确保在0-1范围内
+        else:
+            return 0.5  # 默认中等复杂度
+            
+    except Exception as e:
+        print(f"计算查询复杂度时出错: {e}")
+        return 0.5  # 出错时返回默认值

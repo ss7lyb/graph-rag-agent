@@ -12,8 +12,12 @@ def num_tokens_from_string(text: str) -> int:
     返回:
         int: 估计的token数
     """
-    # 简单的启发式方法：英文文本大约每4个字符为一个token
-    return len(text) // 4
+    try:
+        from model.get_models import count_tokens
+        return count_tokens(text)
+    except:
+        # 简单备用
+        return len(text) // 4
 
 def kb_prompt(kbinfos: Dict[str, List[Dict[str, Any]]], max_tokens: int = 4096) -> List[str]:
     """

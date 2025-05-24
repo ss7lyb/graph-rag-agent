@@ -16,6 +16,8 @@ docker run --name one-api -d --restart always \
 
 该项目的官方地址：https://github.com/songquanpeng/one-api
 
+具体的填写方式可以看[这里](https://github.com/1517005260/graph-rag-agent/issues/7#issuecomment-2906770240)
+
 
 ## Neo4j 启动
 

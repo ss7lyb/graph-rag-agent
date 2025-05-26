@@ -15,6 +15,7 @@ from .backends import (
 
 from .models import CacheItem
 from .manager import CacheManager
+from .vector_similarity import VectorSimilarityMatcher
 
 __all__ = [
     # Key strategies
@@ -34,5 +35,8 @@ __all__ = [
     'CacheItem',
     
     # Main manager
-    'CacheManager'
+    'CacheManager',
+    
+    # Vector similarity
+    'VectorSimilarityMatcher'
 ]

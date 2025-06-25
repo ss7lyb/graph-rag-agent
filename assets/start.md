@@ -18,6 +18,8 @@ docker run --name one-api -d --restart always \
 
 具体的填写方式可以看[这里](https://github.com/1517005260/graph-rag-agent/issues/7#issuecomment-2906770240)
 
+**注意**：默认用管理员账号登录，用户名root，密码123456，进去之后可以改密码
+
 
 ## Neo4j 启动
 

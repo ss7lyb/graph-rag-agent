@@ -125,6 +125,7 @@ community_algorithm = 'leiden'  # 可选：sllpa 或 leiden
 # 文本分块参数
 CHUNK_SIZE = 300
 OVERLAP = 50
+MAX_TEXT_LENGTH = 500000 # 最大处理段长
 
 # 回答方式
 response_type = "多个段落"

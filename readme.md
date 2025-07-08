@@ -596,3 +596,7 @@ DEBUG - LLM关键词结果:
 - [LightRAG](https://github.com/HKUDS/LightRAG) – 轻量级知识增强生成方案  
 - [deep-searcher](https://github.com/zilliztech/deep-searcher) – Zilliz团队开源的私域语义搜索框架  
 - [ragflow](https://github.com/infiniflow/ragflow) – 企业级 RAG 系统
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=1517005260/graph-rag-agent&type=Date)](https://www.star-history.com/#1517005260/graph-rag-agent&Date)

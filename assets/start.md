@@ -18,6 +18,8 @@ docker run --name one-api -d --restart always \
 
 具体的填写方式可以看[这里](https://github.com/1517005260/graph-rag-agent/issues/7#issuecomment-2906770240)
 
+**注意**：默认用管理员账号登录，用户名root，密码123456，进去之后可以改密码
+
 
 ## Neo4j 启动
 
@@ -123,6 +125,7 @@ community_algorithm = 'leiden'  # 可选：sllpa 或 leiden
 # 文本分块参数
 CHUNK_SIZE = 300
 OVERLAP = 50
+MAX_TEXT_LENGTH = 500000 # 最大处理段长
 
 # 回答方式
 response_type = "多个段落"

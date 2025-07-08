@@ -34,6 +34,7 @@ relationship_types = [
 # 文本处理参数
 CHUNK_SIZE = 500
 OVERLAP = 100
+MAX_TEXT_LENGTH = 500000
 similarity_threshold = 0.9
 
 # 冲突解决与更新策略
